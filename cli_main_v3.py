@@ -1,0 +1,80 @@
+from __future__ import annotations
+
+from src.config import load_config
+from src.logger import setup_logger
+from src.codebeamer_client import CodebeamerClient
+from src.excel_processor_v2 import ExcelHierarchyProcessorV2
+from src.mapping_service import MappingService
+from src.wizard_v2 import CodebeamerUploadWizardV2
+from src.cli_helpers import choose_one, choose_many, confirm
+from src.cli_excel_utils import list_sheet_names, read_headers
+
+
+def main():
+    cfg = load_config()
+    logger = setup_logger("cb-cli", level=cfg.log_level)
+
+    client = CodebeamerClient(cfg.base_url, cfg.username, cfg.password, logger)
+
+    wizard = CodebeamerUploadWizardV2(
+        client=client,
+        processor=None,
+        mapper=MappingService(logger=logger),
+        logger=logger,
+    )
+
+    projects = wizard.load_projects()
+    p_idx = choose_one("프로젝트 선택", [p["name"] for p in projects])
+    wizard.select_project(projects[p_idx]["id"])
+
+    trackers = wizard.load_trackers()
+    t_idx = choose_one("트래커 선택", [t["name"] for t in trackers])
+
+    sample_item_id = int(input("Sample item id 입력: ").strip())
+    wizard.select_tracker(trackers[t_idx]["id"], sample_item_id)
+
+    file_path = input("Excel 파일 경로 입력: ").strip()
+
+    sheet_names = list_sheet_names(file_path)
+    s_idx = choose_one("시트 선택", sheet_names)
+    sheet_name = sheet_names[s_idx]
+
+    headers = read_headers(file_path, sheet_name, header_row=cfg.excel_header_row)
+
+    summary_idx = choose_one("요약 컬럼 선택", headers)
+    summary_col = headers[summary_idx]
+
+    list_indices = choose_many("list로 묶을 컬럼 선택", headers)
+    list_cols = [headers[i] for i in list_indices]
+
+    processor = ExcelHierarchyProcessorV2(
+        header_row=cfg.excel_header_row,
+        summary_col=summary_col,
+        logger=logger,
+    )
+    wizard.processor = processor
+
+    wizard.read_excel(file_path=file_path, sheet_name=sheet_name, list_cols=list_cols)
+
+    print("\n[컬럼 목록]")
+    for col in wizard.state.upload_df.columns:
+        print("-", col)
+
+    selected_mapping = {}
+    for col in wizard.state.upload_df.columns:
+        field = input(f"매핑할 schema field 입력 ({col}) (skip=Enter): ").strip()
+        if field:
+            selected_mapping[col] = field
+
+    comp = wizard.load_schema_and_compare(selected_mapping)
+    print(comp[["df_column", "selected_schema_field", "status"]])
+
+    if not confirm("업로드 진행할까요?"):
+        return
+
+    result = wizard.upload(dry_run=False)
+    print(result)
+
+
+if __name__ == "__main__":
+    main()
