@@ -198,24 +198,21 @@ class ExcelHierarchyProcessor:
         work["parent_row_id"] = parent_row_ids
         return work
 
-    def build_upload_df(
-        self,
-        hierarchy_df: pd.DataFrame,
-        method_col: str = "검증방법",
-        expected_col: str = "기대결과",
-        remark_col: str = "비고",
-    ) -> pd.DataFrame:
+    def build_upload_df(self, hierarchy_df: pd.DataFrame, list_cols: list[str] | None = None) -> pd.DataFrame:
         work = hierarchy_df.copy()
+        list_cols = list_cols or []
+
         work["upload_name"] = work[self.summary_col].apply(self.normalize_scalar)
 
         def make_description(row: pd.Series):
             parts = []
-            for title, col in [("검증방법", method_col), ("기대결과", expected_col), ("비고", remark_col)]:
-                if col in row.index:
-                    text = self.list_to_multiline_text(row[col])
-                    if text:
-                        parts.append(f"[{title}]")
-                        parts.append(text)
+            for col in list_cols:
+                if col not in row.index:
+                    continue
+                text = self.list_to_multiline_text(row[col])
+                if text:
+                    parts.append(f"[{col}]")
+                    parts.append(text)
             return "\n\n".join(parts) if parts else None
 
         work["upload_description"] = work.apply(make_description, axis=1)
