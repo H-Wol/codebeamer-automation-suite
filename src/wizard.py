@@ -30,11 +30,9 @@ class CodebeamerUploadWizard:
             raise ValueError("먼저 project_id를 선택해야 합니다.")
         return self.client.get_trackers(self.state.project_id)
 
-    def load_tracker_items(self, tracker_id: int) -> list[dict]:
-        return self.client.get_tracker_children(tracker_id)
-
-    def select_tracker(self, tracker_id: int) -> None:
+    def select_tracker(self, tracker_id: int, sample_item_id: int | None = None) -> None:
         self.state.tracker_id = tracker_id
+        self.state.sample_item_id = sample_item_id
 
     def read_excel(self, file_path: str, sheet_name: str | int = 0, list_cols: list[str] | None = None) -> None:
         if list_cols is None:
@@ -60,118 +58,46 @@ class CodebeamerUploadWizard:
             schema_df=self.state.schema_df,
             selected_mapping=selected_mapping,
         )
-
-        # TableField 매칭 처리
-        self._detect_table_field_columns()
-
         return self.state.comparison_df
 
-    def _detect_table_field_columns(self) -> None:
-        """
-        Excel 헤더에서 "TableField.ColumnName" 형식을 감지하고 TableField 매핑을 자동으로 생성합니다.
-        """
-        if self.state.schema_df is None or self.state.upload_df is None:
-            return
-
-        # 스키마에서 TableField 찾기
-        table_fields = self.state.schema_df[self.state.schema_df.get("is_table_field", False) == True]
-        if table_fields.empty:
-            return
-
-        # 각 TableField에 대해 columns 정보 추출
-        table_field_info = {}  # {table_field_name: {column_name: column_info}}
-
-        for _, tf_row in table_fields.iterrows():
-            tf_name = tf_row["field_name"]
-            tf_columns = tf_row.get("table_columns", [])
-
-            if tf_columns:
-                table_field_info[tf_name] = {}
-                for col_def in tf_columns:
-                    col_name = col_def.get("name")
-                    if col_name:
-                        table_field_info[tf_name][col_name] = col_def
-
-        # Excel 헤더에서 TableField 컬럼 찾기
-        table_field_mapping = {}
-        for df_col in self.state.upload_df.columns:
-            # "." 포함하는 컬럼 확인
-            if "." in df_col:
-                parts = df_col.split(".", 1)
-                if len(parts) == 2:
-                    potential_tf_name = parts[0].strip()
-                    potential_col_name = parts[1].strip()
-
-                    # 실제 TableField인지 확인
-                    if potential_tf_name in table_field_info:
-                        if potential_col_name in table_field_info[potential_tf_name]:
-                            table_field_mapping[df_col] = {
-                                "table_field_name": potential_tf_name,
-                                "column_name": potential_col_name,
-                                "column_info": table_field_info[potential_tf_name][potential_col_name],
-                            }
-
-        self.state.table_field_mapping = table_field_mapping
-
-    def process_option_mapping(self, selected_mapping: dict[str, str], selected_option_mapping: dict[str, str] | None = None) -> tuple[dict[str, str], pd.DataFrame]:
-        """
-        옵션 필드 매핑을 처리하고 옵션 변환을 적용합니다.
-
-        Args:
-            selected_mapping: 엑셀 컬럼 -> 스키마 필드 매핑
-            selected_option_mapping: 옵션 변환할 엑셀 컬럼 -> 스키마 필드 매핑 (None이면 자동 감지)
-
-        Returns:
-            (selected_option_mapping, converted_upload_df) 또는 오류 시 빈 데이터프레임
-        """
+    def check_option_fields(self, selected_option_mapping: dict[str, str]) -> pd.DataFrame:
         if self.state.schema_df is None:
             raise ValueError("먼저 스키마를 불러와야 합니다.")
         if self.state.upload_df is None:
             raise ValueError("먼저 upload_df가 필요합니다.")
+        if self.state.sample_item_id is None:
+            raise ValueError("sample_item_id가 필요합니다.")
 
-        # 옵션 필드 찾기
-        option_fields = self.state.schema_df[self.state.schema_df["has_options"].fillna(False)].copy()
-
-        # selected_option_mapping이 없으면 자동 감지
-        if selected_option_mapping is None:
-            selected_option_mapping = {}
-            # 옵션 필드에 매핑된 엑셀 컬럼 찾기
-            for _, field_row in option_fields.iterrows():
-                field_name = field_row["field_name"]
-                for excel_col, schema_field in selected_mapping.items():
-                    if schema_field == field_name:
-                        selected_option_mapping[excel_col] = field_name
-                        break
-
-        if not selected_option_mapping:
-            # 옵션 변환이 필요 없음
-            self.state.selected_option_mapping = {}
-            self.state.converted_upload_df = None
-            return {}, pd.DataFrame()
-
-        # 옵션 맵 생성
         self.state.selected_option_mapping = selected_option_mapping
-        option_maps = self.mapper.build_option_maps_from_schema(self.state.schema_df)
+        option_maps = {}
+
+        for schema_field in selected_option_mapping.values():
+            matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
+            if matched.empty:
+                continue
+
+            row = matched.iloc[0]
+            field_id = int(row["field_id"])
+            options = self.client.get_field_options(self.state.sample_item_id, field_id)
+            option_maps[schema_field] = {
+                "field_id": field_id,
+                "reference_type": row["reference_type"],
+                "name_map": self.mapper.build_option_name_map(options),
+                "options": options,
+            }
 
         self.state.option_maps = option_maps
-
-        # 옵션 정렬 확인
-        option_check_df = self.mapper.check_option_alignment(
+        self.state.option_check_df = self.mapper.check_option_alignment(
             upload_df=self.state.upload_df,
             option_mapping=selected_option_mapping,
             option_maps=option_maps,
         )
-
-        self.state.option_check_df = option_check_df
-
-        # 옵션 변환 적용
         self.state.converted_upload_df = self.mapper.apply_option_resolution(
             upload_df=self.state.upload_df,
             option_mapping=selected_option_mapping,
             option_maps=option_maps,
         )
-
-        return selected_option_mapping, option_check_df
+        return self.state.option_check_df
 
     def preview_payload(self, row_id: int) -> dict:
         if self.state.converted_upload_df is not None:
@@ -191,129 +117,10 @@ class CodebeamerUploadWizard:
         if "upload_description" in row.index and row["upload_description"] is not None:
             payload["description"] = row["upload_description"]
 
-        # customFields 배열 준비
-        custom_fields = []
-
-        # 모든 selected_mapping에 대해 payload 추가
-        for df_col, schema_field in self.state.selected_mapping.items():
-            # tracker_item_field 찾기
-            matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
-            if matched.empty:
-                continue
-
-            field_row = matched.iloc[0]
-            tracker_field = field_row["tracker_item_field"]
-            field_id = field_row.get("field_id")
-            field_type = field_row.get("field_type")
-
-            if not tracker_field:
-                continue
-
-            # 필드값 결정
-            field_value = None
-            if df_col in self.state.selected_option_mapping:
-                # 옵션 필드: resolved 값 사용
-                resolved_col = f"{df_col}__resolved"
-                if resolved_col in row.index and row[resolved_col] is not None:
-                    field_value = row[resolved_col]
-            else:
-                # 비옵션 필드: 원래 값 사용
-                if df_col in row.index and row[df_col] is not None:
-                    field_value = row[df_col]
-
-            if field_value is None:
-                continue
-
-            # field_id가 1000 이상이면 customFields에 추가
-            if field_id and field_id >= 1000:
-                # customFields 형식으로 변환
-                custom_field = {
-                    "fieldId": field_id,
-                    "type": field_type or "ChoiceFieldValue",
-                }
-
-                # values 배열 생성
-                if isinstance(field_value, list):
-                    # 이미 배열인 경우
-                    custom_field["values"] = field_value if field_value else []
-                else:
-                    # 단일 값인 경우
-                    custom_field["values"] = [field_value] if field_value else []
-
-                custom_fields.append(custom_field)
-            else:
-                # field_id가 1000 미만이면 기존 방식으로 payload에 추가
-                payload[tracker_field] = field_value
-
-        # TableField 처리
-        if self.state.table_field_mapping:
-            table_fields_by_name = {}  # {table_field_name: {table_field_id, columns: [...]}}
-
-            # TableField의 기본 정보 수집
-            for _, tf_row in self.state.schema_df[self.state.schema_df.get("is_table_field", False) == True].iterrows():
-                tf_name = tf_row["field_name"]
-                tf_id = tf_row["field_id"]
-                tf_columns = tf_row.get("table_columns", [])
-
-                table_fields_by_name[tf_name] = {
-                    "field_id": tf_id,
-                    "columns": tf_columns,
-                }
-
-            # 테이블 행 구성
-            tables_data = {}  # {table_field_name: [row1, row2, ...]}
-
-            for df_col, tf_info in self.state.table_field_mapping.items():
-                tf_name = tf_info["table_field_name"]
-                col_name = tf_info["column_name"]
-                col_def = tf_info["column_info"]
-
-                if tf_name not in tables_data:
-                    tables_data[tf_name] = []
-
-                # 현재 행에서 값 가져오기
-                field_value = None
-                if df_col in row.index and row[df_col] is not None:
-                    field_value = row[df_col]
-
-                # 테이블이 비어있으면 첫 번째 행 생성
-                if not tables_data[tf_name]:
-                    tables_data[tf_name].append({})
-
-                # 첫 번째 행(현재 row에 해당)에 값 추가
-                col_id = col_def.get("id")
-                col_value_model = col_def.get("valueModel", "TextFieldValue")
-
-                tables_data[tf_name][0][col_name] = {
-                    "fieldId": col_id,
-                    "name": col_name,
-                    "value": field_value,
-                    "type": col_value_model,
-                }
-
-            # customFields에 TableField 추가
-            for tf_name, table_rows in tables_data.items():
-                if tf_name in table_fields_by_name:
-                    tf_info = table_fields_by_name[tf_name]
-
-                    # 테이블 행을 values 형식으로 변환 (배열의 배열)
-                    values = []
-                    for row_data in table_rows:
-                        row_fields = list(row_data.values())
-                        if any(v["value"] is not None for v in row_fields):
-                            values.append(row_fields)
-
-                    if values:
-                        custom_field = {
-                            "fieldId": tf_info["field_id"],
-                            "type": "TableFieldValue",
-                            "values": values,
-                        }
-                        custom_fields.append(custom_field)
-
-        # customFields가 있으면 payload에 추가
-        if custom_fields:
-            payload["customFields"] = custom_fields
+        for df_col, schema_field in self.state.selected_option_mapping.items():
+            resolved_col = f"{df_col}__resolved"
+            if resolved_col in row.index and row[resolved_col] is not None:
+                payload[schema_field] = row[resolved_col]
 
         return payload
 
@@ -371,7 +178,6 @@ class CodebeamerUploadWizard:
                         "created_item_id": result["id"],
                         "status": "SUCCESS",
                     })
-                    print(f"✓ Row {row['upload_name']} 업로드 성공: 생성된 아이템 ID={result['id']}")
 
                 except Exception as e:
                     failed_logs.append({
