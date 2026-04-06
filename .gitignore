@@ -4,3 +4,5 @@ __pycache__/
 logs/*.log
 output/*
 !output/.gitkeep
+data/*
+*.ipynb

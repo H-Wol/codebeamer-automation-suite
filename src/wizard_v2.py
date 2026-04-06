@@ -7,12 +7,12 @@ import pandas as pd
 
 from .models import WizardState
 from .codebeamer_client import CodebeamerClient
-from .excel_processor_v2 import ExcelHierarchyProcessorV2
+from .excel_processor_v2 import ExcelHierarchyProcessor
 from .mapping_service import MappingService
 
 
-class CodebeamerUploadWizardV2:
-    def __init__(self, client: CodebeamerClient, processor: ExcelHierarchyProcessorV2, mapper: MappingService, logger=None):
+class CodebeamerUploadWizard:
+    def __init__(self, client: CodebeamerClient, processor: ExcelHierarchyProcessor, mapper: MappingService, logger=None):
         self.client = client
         self.processor = processor
         self.mapper = mapper

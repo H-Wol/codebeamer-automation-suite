@@ -9,7 +9,6 @@ import pandas as pd
 class WizardState:
     project_id: int | None = None
     tracker_id: int | None = None
-    sample_item_id: int | None = None
 
     raw_df: pd.DataFrame | None = None
     merged_df: pd.DataFrame | None = None
@@ -26,5 +25,6 @@ class WizardState:
 
     selected_mapping: dict[str, str] = field(default_factory=dict)
     selected_option_mapping: dict[str, str] = field(default_factory=dict)
+    table_field_mapping: dict[str, dict] = field(default_factory=dict)  # {excel_col: {table_field_name, column_name}}
 
     upload_result: dict[str, Any] | None = None

@@ -5,7 +5,7 @@ import pandas as pd
 import xlwings as xw
 
 
-class ExcelHierarchyProcessorV2:
+class ExcelHierarchyProcessor:
     def __init__(self, header_row: int = 1, summary_col: str = "요약", logger=None):
         self.header_row = header_row
         self.summary_col = summary_col
