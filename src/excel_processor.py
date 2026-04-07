@@ -31,7 +31,8 @@ class ExcelHierarchyProcessor:
 
     @classmethod
     def collect_values(cls, values: list[Any], single_to_scalar: bool = False):
-        cleaned = [cls.normalize_scalar(v) for v in values if not cls.is_blank(v)]
+        cleaned = [cls.normalize_scalar(v)
+                   for v in values if not cls.is_blank(v)]
         if not cleaned:
             return None
         if single_to_scalar and len(cleaned) == 1:
@@ -40,7 +41,8 @@ class ExcelHierarchyProcessor:
 
     @classmethod
     def keep_value(cls, values: list[Any], mode: str = "first"):
-        cleaned = [cls.normalize_scalar(v) for v in values if not cls.is_blank(v)]
+        cleaned = [cls.normalize_scalar(v)
+                   for v in values if not cls.is_blank(v)]
         if not cleaned:
             return None
         if mode == "first":
@@ -74,7 +76,8 @@ class ExcelHierarchyProcessor:
             values = used_range.value
 
             headers = values[self.header_row - 1]
-            headers = [str(h).strip() if h is not None else f"Unnamed_{i}" for i, h in enumerate(headers)]
+            headers = [str(h).strip(
+            ) if h is not None else f"Unnamed_{i}" for i, h in enumerate(headers)]
 
             if self.summary_col not in headers:
                 raise ValueError(f"'{self.summary_col}' 컬럼을 찾을 수 없습니다.")
@@ -106,7 +109,8 @@ class ExcelHierarchyProcessor:
                 except Exception:
                     summary_val = row[summary_col_idx_1based - 1]
                     if isinstance(summary_val, str):
-                        leading_spaces = len(summary_val) - len(summary_val.lstrip(" "))
+                        leading_spaces = len(summary_val) - \
+                            len(summary_val.lstrip(" "))
                         indent_level = leading_spaces // 4
 
                 record = dict(zip(headers, row))
@@ -143,7 +147,8 @@ class ExcelHierarchyProcessor:
         work["_group"] = group_ids
         work = work[work["_group"] > 0].copy()
 
-        keep_cols = [c for c in work.columns if c not in [self.summary_col, "_group"] + list_cols]
+        keep_cols = [c for c in work.columns if c not in [
+            self.summary_col, "_group"] + list_cols]
         merged_rows = []
 
         for _, group_df in work.groupby("_group", sort=True):
@@ -155,12 +160,14 @@ class ExcelHierarchyProcessor:
             }
 
             for col in list_cols:
-                row_out[col] = self.collect_values(group_df[col].tolist(), single_to_scalar=single_to_scalar)
+                row_out[col] = self.collect_values(
+                    group_df[col].tolist(), single_to_scalar=single_to_scalar)
 
             for col in keep_cols:
                 if col in ["_summary_indent", "_excel_row"]:
                     continue
-                row_out[col] = self.keep_value(group_df[col].tolist(), mode=keep_mode)
+                row_out[col] = self.keep_value(
+                    group_df[col].tolist(), mode=keep_mode)
 
             merged_rows.append(row_out)
 
@@ -177,7 +184,8 @@ class ExcelHierarchyProcessor:
         prev_indent = None
 
         for idx, row in work.iterrows():
-            current_indent = int(row["_summary_indent"]) if not self.is_blank(row["_summary_indent"]) else 0
+            current_indent = int(row["_summary_indent"]) if not self.is_blank(
+                row["_summary_indent"]) else 0
 
             if prev_indent is not None and current_indent > prev_indent + 1:
                 raise ValueError(
@@ -198,25 +206,10 @@ class ExcelHierarchyProcessor:
         work["parent_row_id"] = parent_row_ids
         return work
 
-    def build_upload_df(
-        self,
-        hierarchy_df: pd.DataFrame,
-        method_col: str = "검증방법",
-        expected_col: str = "기대결과",
-        remark_col: str = "비고",
-    ) -> pd.DataFrame:
+    def build_upload_df(self, hierarchy_df: pd.DataFrame, list_cols: list[str] | None = None) -> pd.DataFrame:
         work = hierarchy_df.copy()
-        work["upload_name"] = work[self.summary_col].apply(self.normalize_scalar)
+        list_cols = list_cols or []
 
-        def make_description(row: pd.Series):
-            parts = []
-            for title, col in [("검증방법", method_col), ("기대결과", expected_col), ("비고", remark_col)]:
-                if col in row.index:
-                    text = self.list_to_multiline_text(row[col])
-                    if text:
-                        parts.append(f"[{title}]")
-                        parts.append(text)
-            return "\n\n".join(parts) if parts else None
-
-        work["upload_description"] = work.apply(make_description, axis=1)
+        work["upload_name"] = work[self.summary_col].apply(
+            self.normalize_scalar)
         return work
