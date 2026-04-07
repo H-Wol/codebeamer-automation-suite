@@ -9,7 +9,7 @@ from .models import WizardState
 from .codebeamer_client import CodebeamerClient
 from .excel_processor import ExcelHierarchyProcessor
 from .mapping_service import MappingService
-from .models import TrackerItemBase,  TextFieldValue, AbstractFieldValue
+from .models import TrackerItemBase, TableFieldValue, TextFieldValue, AbstractFieldValue
 
 
 class CodebeamerUploadWizard:
@@ -242,7 +242,9 @@ class CodebeamerUploadWizard:
                 'field_id': field_id,
                 'field_type': field_type,
                 'field_name': schema_field,
-                'multiple_values': multiple_values
+                'multiple_values': multiple_values,
+                'reference_type': field_row.get('reference_type'),
+                'value_model': field_row.get('value_model'),
             }
             item.set_field_value(tracker_field, field_value, field_info)
 
@@ -307,14 +309,13 @@ class CodebeamerUploadWizard:
                             values.append(row_fields)
 
                     if values:
-                        custom_field = {
-                            "fieldId": tf_info["field_id"],
-                            "type": "TableFieldValue",
-                            "values": values,
-                        }
-                        custom_fields.append(custom_field)
+                        custom_fields.append(TableFieldValue(
+                            field_id=tf_info["field_id"],
+                            field_name=tf_name,
+                            values=values,
+                        ))
 
-         # TrackerItemBase.to_dict()를 사용해서 payload 생성 (TrackerItemCreate처럼 불필요한 필드 제거)
+        # TrackerItemBase.to_dict()를 사용해서 payload 생성 (TrackerItemCreate처럼 불필요한 필드 제거)
         payload = item.create_new_item_payload()
 
         # TableField가 있으면 customFields에 추가

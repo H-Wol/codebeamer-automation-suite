@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from enum import Enum
 import pandas as pd
+import re
 
 # =========================================================
 # Enums
@@ -43,6 +44,13 @@ def _drop_none(data: dict[str, Any]) -> dict[str, Any]:
             continue
         result[k] = v
     return result
+
+
+def _camel_to_snake(name: str) -> str:
+    if not name:
+        return name
+    s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
 
 
 # =========================================================
@@ -137,13 +145,54 @@ class ChoiceFieldValue(AbstractFieldValue):
     def to_dict(self) -> dict[str, Any]:
         base = super().to_dict()
         if self.values:
-            base["values"] = [v.to_dict() for v in self.values]
+            processed_values = []
+            for v in self.values:
+                if isinstance(v, DomainModel):
+                    processed_values.append(v.to_dict())
+                elif isinstance(v, dict):
+                    processed_values.append(v)
+                else:
+                    processed_values.append(v)
+            base["values"] = processed_values
         return base
 
 
 @dataclass
 class TextFieldValue(AbstractFieldValue):
     value: Optional[str] = None
+    type: str = "TextFieldValue"
+
+    def to_dict(self) -> dict[str, Any]:
+        base = super().to_dict()
+        if self.value is not None:
+            base["value"] = self.value
+        return base
+
+
+@dataclass
+class TableFieldValue(AbstractFieldValue):
+    values: list[list[Any]] = field(default_factory=list)
+    type: str = "TableFieldValue"
+
+    def to_dict(self) -> dict[str, Any]:
+        base = super().to_dict()
+        if self.values:
+            processed_rows = []
+            for row in self.values:
+                processed_row = []
+                for item in row:
+                    if isinstance(item, DomainModel):
+                        processed_row.append(item.to_dict())
+                    else:
+                        processed_row.append(item)
+                processed_rows.append(processed_row)
+            base["values"] = processed_rows
+        return base
+
+
+@dataclass
+class ScalarFieldValue(AbstractFieldValue):
+    value: Any = None
     type: str = "TextFieldValue"
 
     def to_dict(self) -> dict[str, Any]:
@@ -213,31 +262,60 @@ class TrackerItemBase(DomainModel):
     def add_field_value(self, field_value: AbstractFieldValue) -> None:
         self.custom_fields.append(field_value)
 
+    @staticmethod
+    def _normalize_tracker_field_name(field_name: str) -> str:
+        if not field_name:
+            return field_name
+        if hasattr(TrackerItemBase, field_name):
+            return field_name
+        normalized = _camel_to_snake(field_name)
+        return normalized if hasattr(TrackerItemBase, normalized) else field_name
+
+    def _to_reference(self, raw_value: Any, reference_type: Optional[str] = None) -> Any:
+        if isinstance(raw_value, DomainModel):
+            return raw_value
+        if not isinstance(raw_value, dict):
+            return raw_value
+
+        ref_type = raw_value.get("type") or reference_type
+        ref_id = raw_value.get("id")
+        ref_name = raw_value.get("name")
+
+        if ref_type == "UserReference":
+            return UserReference(id=ref_id, name=ref_name, email=raw_value.get("email"))
+        if ref_type == "TrackerItemReference":
+            return TrackerItemReference(id=ref_id, name=ref_name)
+        if ref_type == "TrackerReference":
+            return TrackerReference(id=ref_id, name=ref_name)
+        if ref_type == "ChoiceOptionReference":
+            return ChoiceOptionReference(id=ref_id, name=ref_name)
+        if ref_type == "CommentReference":
+            return CommentReference(id=ref_id, name=ref_name)
+        if ref_type == "AbstractReference" or ref_type is None:
+            return AbstractReference(id=ref_id, name=ref_name)
+        return BaseReference(id=ref_id, name=ref_name, type=ref_type)
+
     def set_field_value(self, tracker_field: str, value, field_info: dict = None) -> None:
         """tracker_field에 따라 TrackerItemBase의 속성이나 custom_fields에 값 설정"""
+        tracker_field = self._normalize_tracker_field_name(tracker_field)
+
         if hasattr(self, tracker_field):
-            # built-in 필드: TrackerItemBase 속성으로 설정
-            if tracker_field == "description" and value:
+            if tracker_field == "description" and value is not None:
                 self.description = str(value)
-            elif tracker_field == "status" and value:
-                self.status = AbstractReference(id=value["id"], name=value["name"])
-            elif tracker_field == "priority" and value:
-                self.priority = AbstractReference(id=value["id"], name=value["name"])
+            elif tracker_field in {"status", "priority"} and value:
+                self.__dict__[tracker_field] = self._to_reference(
+                    value, field_info.get("reference_type") if field_info else None)
             elif tracker_field == "assigned_to" and value:
-                if isinstance(value, list):
-                    self.assigned_to = [UserReference(id=v["id"], name=v["name"]) for v in value]
-                else:
-                    self.assigned_to = [UserReference(id=value["id"], name=value["name"])]
-            elif tracker_field == "subjects" and value:
-                if isinstance(value, list):
-                    self.subjects = [TrackerItemReference(id=v["id"], name=v["name"]) for v in value]
-                else:
-                    self.subjects = [TrackerItemReference(id=value["id"], name=value["name"])]
-            elif tracker_field == "children" and value:
-                if isinstance(value, list):
-                    self.children = [TrackerItemReference(id=v["id"], name=v["name"]) for v in value]
-                else:
-                    self.children = [TrackerItemReference(id=value["id"], name=value["name"])]
+                values = value if isinstance(value, list) else [value]
+                self.assigned_to = [self._to_reference(v, field_info.get(
+                    "reference_type") if field_info else None) for v in values]
+            elif tracker_field in {"subjects", "children", "versions", "teams", "platforms", "areas", "resolutions", "severities"} and value:
+                values = value if isinstance(value, list) else [value]
+                self.__dict__[tracker_field] = [self._to_reference(v, field_info.get(
+                    "reference_type") if field_info else None) for v in values]
+            elif tracker_field in {"created_by", "modified_by", "parent"} and value:
+                self.__dict__[tracker_field] = self._to_reference(
+                    value, field_info.get("reference_type") if field_info else None)
             elif tracker_field == "story_points" and value is not None:
                 self.story_points = float(value)
             elif tracker_field == "ordinal" and value is not None:
@@ -246,21 +324,28 @@ class TrackerItemBase(DomainModel):
                 self.version = int(value)
             elif tracker_field == "type_name" and value:
                 self.type_name = str(value)
-            # name과 description은 이미 preview_payload에서 직접 설정됨
-        else:
-            # custom 필드: FieldValue 객체 생성 후 custom_fields에 추가
-            if field_info:
-                field_value_obj = self._create_field_value(field_info, value)
-                if field_value_obj:
-                    self.add_field_value(field_value_obj)
+            elif tracker_field == "description_format" and value:
+                self.description_format = str(value)
+            elif tracker_field in {"assigned_at", "closed_at", "created_at", "modified_at", "start_date", "end_date"} and value is not None:
+                setattr(self, tracker_field, str(value))
+            else:
+                setattr(self, tracker_field, value)
+            return
+
+        if field_info:
+            field_value_obj = self._create_field_value(field_info, value)
+            if field_value_obj:
+                self.add_field_value(field_value_obj)
 
     def _create_field_value(self, field_info: dict, value) -> AbstractFieldValue | None:
         """FieldValue 객체 생성 헬퍼"""
-        field_type = field_info.get('field_type', 'TextField')
+        field_type = field_info.get('field_type')
+        value_model = field_info.get(
+            'value_model') or field_type or 'TextFieldValue'
         field_id = field_info['field_id']
         field_name = field_info.get('field_name')
 
-        if field_type == 'ChoiceField':
+        if isinstance(value_model, str) and 'ChoiceFieldValue' in value_model:
             if isinstance(value, list):
                 values = value
             else:
@@ -268,29 +353,46 @@ class TrackerItemBase(DomainModel):
             return ChoiceFieldValue(
                 field_id=field_id,
                 field_name=field_name,
-                values=values
+                values=[self._to_reference(v, field_info.get(
+                    'reference_type')) for v in values]
             )
-        elif field_type == 'TextField':
-            return TextFieldValue(
+
+        if field_type == 'TableField' or (isinstance(value_model, str) and value_model == 'TableFieldValue'):
+            if isinstance(value, TableFieldValue):
+                return value
+            if isinstance(value, list):
+                return TableFieldValue(
+                    field_id=field_id,
+                    field_name=field_name,
+                    values=value,
+                )
+            return TableFieldValue(
                 field_id=field_id,
                 field_name=field_name,
-                value=str(value) if value is not None else None
+                values=[[value]],
             )
-        else:
-            # 기타 필드 타입은 TextField로 처리
-            return TextFieldValue(
+
+        if isinstance(value_model, str) and value_model.endswith('FieldValue'):
+            return ScalarFieldValue(
                 field_id=field_id,
                 field_name=field_name,
-                value=str(value) if value is not None else None
+                value=value,
+                type=value_model
             )
+
+        return TextFieldValue(
+            field_id=field_id,
+            field_name=field_name,
+            value=str(value) if value is not None else None
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return _drop_none({
             "accruedMillis": self.accrued_millis,
             "angularIcon": self.angular_icon,
             "areas": self.areas,
-            "assignedAt": self.assigned_to,
-            "assignedTo": self.assigned_at,
+            "assignedAt": self.assigned_at,
+            "assignedTo": self.assigned_to,
             "categories": self.categories,
             "children": self.children,
             "closedAt": self.closed_at,
@@ -339,7 +441,7 @@ class TrackerItemBase(DomainModel):
         payload.pop("modifiedAt", None)
         payload.pop("createdBy", None)
         payload.pop("modifiedBy", None)
-        payload.pop("version",None)
+        payload.pop("version", None)
 
         return payload
 
@@ -364,6 +466,7 @@ class WizardState:
 
     selected_mapping: dict[str, str] = field(default_factory=dict)
     selected_option_mapping: dict[str, str] = field(default_factory=dict)
-    table_field_mapping: dict[str, dict] = field(default_factory=dict)  # {excel_col: {table_field_name, column_name}}
+    # {excel_col: {table_field_name, column_name}}
+    table_field_mapping: dict[str, dict] = field(default_factory=dict)
 
     upload_result: dict[str, Any] | None = None
