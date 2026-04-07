@@ -40,7 +40,7 @@ class MappingService:
                 "value_model": field.get("valueModel"),
                 "reference_type": field.get("referenceType"),
                 "has_options": has_options,
-                "multiple_values": field.get("multipleValues", False),
+                "multiple_values": field.get("multipleValues", None),
                 "options": options if has_options else None,
                 "is_table_field": is_table_field,
                 "table_columns": columns,

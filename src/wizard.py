@@ -7,8 +7,9 @@ import pandas as pd
 
 from .models import WizardState
 from .codebeamer_client import CodebeamerClient
-from .excel_processor_v2 import ExcelHierarchyProcessor
+from .excel_processor import ExcelHierarchyProcessor
 from .mapping_service import MappingService
+from .models import TrackerItemBase,  TextFieldValue, AbstractFieldValue
 
 
 class CodebeamerUploadWizard:
@@ -41,10 +42,14 @@ class CodebeamerUploadWizard:
             list_cols = []
 
         self.state.list_cols = list_cols
-        self.state.raw_df = self.processor.read_excel(file_path=file_path, sheet_name=sheet_name)
-        self.state.merged_df = self.processor.merge_multiline_records(self.state.raw_df, list_cols=list_cols)
-        self.state.hierarchy_df = self.processor.add_hierarchy_by_indent(self.state.merged_df)
-        self.state.upload_df = self.processor.build_upload_df(self.state.hierarchy_df, list_cols=list_cols)
+        self.state.raw_df = self.processor.read_excel(
+            file_path=file_path, sheet_name=sheet_name)
+        self.state.merged_df = self.processor.merge_multiline_records(
+            self.state.raw_df, list_cols=list_cols)
+        self.state.hierarchy_df = self.processor.add_hierarchy_by_indent(
+            self.state.merged_df)
+        self.state.upload_df = self.processor.build_upload_df(
+            self.state.hierarchy_df, list_cols=list_cols)
 
     def load_schema_and_compare(self, selected_mapping: dict[str, str]) -> pd.DataFrame:
         if self.state.tracker_id is None:
@@ -53,8 +58,10 @@ class CodebeamerUploadWizard:
             raise ValueError("먼저 엑셀을 읽어야 합니다.")
 
         self.state.selected_mapping = selected_mapping
-        self.state.schema = self.client.get_tracker_schema(self.state.tracker_id)
-        self.state.schema_df = self.mapper.flatten_schema_fields(self.state.schema)
+        self.state.schema = self.client.get_tracker_schema(
+            self.state.tracker_id)
+        self.state.schema_df = self.mapper.flatten_schema_fields(
+            self.state.schema)
         self.state.comparison_df = self.mapper.compare_upload_df_with_schema(
             upload_df=self.state.upload_df,
             schema_df=self.state.schema_df,
@@ -74,7 +81,8 @@ class CodebeamerUploadWizard:
             return
 
         # 스키마에서 TableField 찾기
-        table_fields = self.state.schema_df[self.state.schema_df.get("is_table_field", False) == True]
+        table_fields = self.state.schema_df[self.state.schema_df.get(
+            "is_table_field", False)]
         if table_fields.empty:
             return
 
@@ -130,7 +138,8 @@ class CodebeamerUploadWizard:
             raise ValueError("먼저 upload_df가 필요합니다.")
 
         # 옵션 필드 찾기
-        option_fields = self.state.schema_df[self.state.schema_df["has_options"].fillna(False)].copy()
+        option_fields = self.state.schema_df[self.state.schema_df["has_options"].fillna(
+            False)].copy()
 
         # selected_option_mapping이 없으면 자동 감지
         if selected_option_mapping is None:
@@ -151,7 +160,8 @@ class CodebeamerUploadWizard:
 
         # 옵션 맵 생성
         self.state.selected_option_mapping = selected_option_mapping
-        option_maps = self.mapper.build_option_maps_from_schema(self.state.schema_df)
+        option_maps = self.mapper.build_option_maps_from_schema(
+            self.state.schema_df)
 
         self.state.option_maps = option_maps
 
@@ -173,6 +183,10 @@ class CodebeamerUploadWizard:
 
         return selected_option_mapping, option_check_df
 
+    def _create_field_value(self, field_info: dict, value) -> AbstractFieldValue:
+        """TrackerItemBase의 FieldValue 객체 생성 (deprecated - TrackerItemBase._create_field_value 사용)"""
+        return TrackerItemBase()._create_field_value(field_info, value) or TextFieldValue(field_id=0, field_name="")
+
     def preview_payload(self, row_id: int) -> dict:
         if self.state.converted_upload_df is not None:
             df = self.state.converted_upload_df
@@ -186,18 +200,16 @@ class CodebeamerUploadWizard:
             raise ValueError(f"_row_id={row_id} 행을 찾을 수 없습니다.")
 
         row = row_df.iloc[0]
-        payload = {"name": row["upload_name"]}
 
-        if "upload_description" in row.index and row["upload_description"] is not None:
-            payload["description"] = row["upload_description"]
+        # TrackerItemBase 객체 생성
+        item = TrackerItemBase()
+        item.name = str(row.get("upload_name", ""))
 
-        # customFields 배열 준비
-        custom_fields = []
-
-        # 모든 selected_mapping에 대해 payload 추가
+        # 모든 selected_mapping에 대해 처리
         for df_col, schema_field in self.state.selected_mapping.items():
             # tracker_item_field 찾기
-            matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
+            matched = self.state.schema_df[self.state.schema_df["field_name"]
+                                           == schema_field]
             if matched.empty:
                 continue
 
@@ -205,6 +217,7 @@ class CodebeamerUploadWizard:
             tracker_field = field_row["tracker_item_field"]
             field_id = field_row.get("field_id")
             field_type = field_row.get("field_type")
+            multiple_values = field_row.get("multiple_values", False)
 
             if not tracker_field:
                 continue
@@ -224,33 +237,23 @@ class CodebeamerUploadWizard:
             if field_value is None:
                 continue
 
-            # field_id가 1000 이상이면 customFields에 추가
-            if field_id and field_id >= 1000:
-                # customFields 형식으로 변환
-                custom_field = {
-                    "fieldId": field_id,
-                    "type": field_type or "ChoiceFieldValue",
-                }
+                # TrackerItemBase.set_field_value를 사용해서 값 설정
+            field_info = {
+                'field_id': field_id,
+                'field_type': field_type,
+                'field_name': schema_field,
+                'multiple_values': multiple_values
+            }
+            item.set_field_value(tracker_field, field_value, field_info)
 
-                # values 배열 생성
-                if isinstance(field_value, list):
-                    # 이미 배열인 경우
-                    custom_field["values"] = field_value if field_value else []
-                else:
-                    # 단일 값인 경우
-                    custom_field["values"] = [field_value] if field_value else []
-
-                custom_fields.append(custom_field)
-            else:
-                # field_id가 1000 미만이면 기존 방식으로 payload에 추가
-                payload[tracker_field] = field_value
-
-        # TableField 처리
+        # TableField 처리 (기존 방식 유지)
+        custom_fields = []
         if self.state.table_field_mapping:
-            table_fields_by_name = {}  # {table_field_name: {table_field_id, columns: [...]}}
+            # {table_field_name: {table_field_id, columns: [...]}}
+            table_fields_by_name = {}
 
             # TableField의 기본 정보 수집
-            for _, tf_row in self.state.schema_df[self.state.schema_df.get("is_table_field", False) == True].iterrows():
+            for _, tf_row in self.state.schema_df[self.state.schema_df.get("is_table_field", False).fillna(False)].iterrows():
                 tf_name = tf_row["field_name"]
                 tf_id = tf_row["field_id"]
                 tf_columns = tf_row.get("table_columns", [])
@@ -311,10 +314,13 @@ class CodebeamerUploadWizard:
                         }
                         custom_fields.append(custom_field)
 
-        # customFields가 있으면 payload에 추가
-        if custom_fields:
-            payload["customFields"] = custom_fields
+         # TrackerItemBase.to_dict()를 사용해서 payload 생성 (TrackerItemCreate처럼 불필요한 필드 제거)
+        payload = item.create_new_item_payload()
 
+        # TableField가 있으면 customFields에 추가
+        if custom_fields:
+            existing_custom_fields = payload.get("customFields", [])
+            payload["customFields"] = existing_custom_fields + custom_fields
         return payload
 
     def upload(self, dry_run: bool = False, continue_on_error: bool = True) -> dict:
@@ -371,7 +377,8 @@ class CodebeamerUploadWizard:
                         "created_item_id": result["id"],
                         "status": "SUCCESS",
                     })
-                    print(f"✓ Row {row['upload_name']} 업로드 성공: 생성된 아이템 ID={result['id']}")
+                    print(
+                        f"✓ Row {row['upload_name']} 업로드 성공: 생성된 아이템 ID={result['id']}")
 
                 except Exception as e:
                     failed_logs.append({
@@ -410,14 +417,14 @@ class CodebeamerUploadWizard:
         out.mkdir(parents=True, exist_ok=True)
 
         frames = {
-            "raw_df.xlsx": self.state.raw_df,
-            "merged_df.xlsx": self.state.merged_df,
-            "hierarchy_df.xlsx": self.state.hierarchy_df,
-            "upload_df.xlsx": self.state.upload_df,
-            "converted_upload_df.xlsx": self.state.converted_upload_df,
-            "schema_df.xlsx": self.state.schema_df,
-            "comparison_df.xlsx": self.state.comparison_df,
-            "option_check_df.xlsx": self.state.option_check_df,
+            "raw_df.csv": self.state.raw_df,
+            "merged_df.csv": self.state.merged_df,
+            "hierarchy_df.csv": self.state.hierarchy_df,
+            "upload_df.csv": self.state.upload_df,
+            "converted_upload_df.csv": self.state.converted_upload_df,
+            "schema_df.csv": self.state.schema_df,
+            "comparison_df.csv": self.state.comparison_df,
+            "option_check_df.csv": self.state.option_check_df,
         }
 
         for name, df in frames.items():
@@ -430,13 +437,15 @@ class CodebeamerUploadWizard:
 
         if self.state.option_maps is not None:
             with open(out / "option_maps.json", "w", encoding="utf-8") as f:
-                json.dump(self.state.option_maps, f, ensure_ascii=False, indent=2)
+                json.dump(self.state.option_maps, f,
+                          ensure_ascii=False, indent=2)
 
         if self.state.upload_result is not None:
             for key in ["success_df", "failed_df", "unresolved_df"]:
                 df = self.state.upload_result.get(key)
                 if isinstance(df, pd.DataFrame) and not df.empty:
-                    df.to_excel(out / f"{key}.xlsx", index=False)
+                    df.to_csv(out / f"{key}.csv", index=False)
 
             with open(out / "created_map.json", "w", encoding="utf-8") as f:
-                json.dump(self.state.upload_result.get("created_map", {}), f, ensure_ascii=False, indent=2)
+                json.dump(self.state.upload_result.get(
+                    "created_map", {}), f, ensure_ascii=False, indent=2)
