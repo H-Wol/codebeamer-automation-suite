@@ -5,4 +5,4 @@ logs/*.log
 output/*
 !output/.gitkeep
 data/*
-*.ipynb
+*.ipynb
