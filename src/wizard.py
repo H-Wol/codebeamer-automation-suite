@@ -430,7 +430,7 @@ class CodebeamerUploadWizard:
 
         for name, df in frames.items():
             if isinstance(df, pd.DataFrame) and not df.empty:
-                df.to_excel(out / name, index=False)
+                df.to_csv(out / name, index=False)
 
         if self.state.schema is not None:
             with open(out / "schema.json", "w", encoding="utf-8") as f:
