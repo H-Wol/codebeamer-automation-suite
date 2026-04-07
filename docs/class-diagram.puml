@@ -1,0 +1,107 @@
+﻿@startuml
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+hide empty members
+
+title Codebeamer Automation Suite - 클래스 및 의존 관계
+
+package "엔트리 포인트" {
+  class cli_main_v2
+  class cli_main
+  class main
+}
+
+package "핵심 서비스" {
+  class CodebeamerClient {
+    +get_projects()
+    +get_trackers(project_id)
+    +get_tracker_schema(tracker_id)
+    +get_tracker_children(tracker_id)
+    +create_item(tracker_id, payload, parent_item_id)
+  }
+
+  class ExcelHierarchyProcessor {
+    +read_excel(file_path, sheet_name)
+    +merge_multiline_records(raw_df, list_cols)
+    +add_hierarchy_by_indent(merged_df)
+    +build_upload_df(hierarchy_df, list_cols)
+  }
+
+  class MappingService
+  class MappingServiceV2 {
+    +flatten_schema_fields(schema)
+    +compare_upload_df_with_schema(upload_df, schema_df, selected_mapping)
+    +get_option_field_candidates(schema_df)
+    +build_option_maps_from_schema(schema_df)
+    +check_option_alignment(upload_df, option_mapping, option_maps)
+    +apply_option_resolution(upload_df, option_mapping, option_maps)
+  }
+}
+
+package "오케스트레이션" {
+  class CodebeamerUploadWizard
+  class CodebeamerUploadWizardV2 {
+    +load_projects()
+    +select_project(project_id)
+    +load_trackers()
+    +select_tracker(tracker_id)
+    +read_excel(file_path, sheet_name, list_cols)
+    +load_schema_and_compare(selected_mapping)
+    +process_option_mapping(selected_mapping, selected_option_mapping)
+    +preview_payload(row_id)
+    +upload(dry_run, continue_on_error)
+    +save_state(output_dir)
+  }
+}
+
+package "도메인 모델" {
+  abstract class DomainModel {
+    +to_dict()
+  }
+
+  class TrackerItemBase {
+    +set_field_value(tracker_field, value, field_info)
+    +create_new_item_payload()
+    +to_dict()
+  }
+
+  class AbstractFieldValue
+  class TextFieldValue
+  class ChoiceFieldValue
+  class TableFieldValue
+  class ScalarFieldValue
+  class WizardState
+}
+
+cli_main_v2 --> CodebeamerUploadWizardV2
+cli_main_v2 --> MappingServiceV2
+cli_main_v2 --> ExcelHierarchyProcessor
+cli_main_v2 --> CodebeamerClient
+
+cli_main --> CodebeamerUploadWizard
+cli_main --> MappingService
+main --> CodebeamerUploadWizard
+
+CodebeamerUploadWizardV2 --> CodebeamerClient
+CodebeamerUploadWizardV2 --> ExcelHierarchyProcessor
+CodebeamerUploadWizardV2 --> MappingServiceV2
+CodebeamerUploadWizardV2 --> WizardState
+CodebeamerUploadWizardV2 --> TrackerItemBase
+CodebeamerUploadWizardV2 --> TableFieldValue
+
+CodebeamerUploadWizard --> CodebeamerClient
+CodebeamerUploadWizard --> ExcelHierarchyProcessor
+CodebeamerUploadWizard --> MappingService
+CodebeamerUploadWizard --> WizardState
+CodebeamerUploadWizard --> TrackerItemBase
+
+TrackerItemBase --|> DomainModel
+AbstractFieldValue --|> DomainModel
+TextFieldValue --|> AbstractFieldValue
+ChoiceFieldValue --|> AbstractFieldValue
+TableFieldValue --|> AbstractFieldValue
+ScalarFieldValue --|> AbstractFieldValue
+
+TrackerItemBase o-- AbstractFieldValue : custom_fields
+CodebeamerClient ..> TrackerItemBase : payload 전송
+@enduml

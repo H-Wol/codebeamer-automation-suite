@@ -1,0 +1,86 @@
+﻿@startuml
+autonumber
+
+title Codebeamer Automation Suite - 업로드 시퀀스 (v2)
+
+actor User
+participant "CLI (`cli_main_v2`)" as CLI
+participant "업로드 Wizard (`CodebeamerUploadWizardV2`)" as Wizard
+participant "Excel 처리기 (`ExcelHierarchyProcessor`)" as Processor
+participant "매핑 서비스 (`MappingServiceV2`)" as Mapper
+participant "Codebeamer 클라이언트" as Client
+participant "Codebeamer API" as API
+
+User -> CLI : CLI 실행
+CLI -> Wizard : load_projects()
+Wizard -> Client : get_projects()
+Client -> API : GET /v3/projects
+API --> Client : projects
+Client --> Wizard : projects
+Wizard --> CLI : projects
+CLI -> User : 프로젝트 선택 요청
+
+CLI -> Wizard : select_project(project_id)
+CLI -> Wizard : load_trackers()
+Wizard -> Client : get_trackers(project_id)
+Client -> API : GET /v3/projects/{project_id}/trackers
+API --> Client : trackers
+Client --> Wizard : trackers
+Wizard --> CLI : trackers
+CLI -> User : 트래커 선택 요청
+CLI -> Wizard : select_tracker(tracker_id)
+
+CLI -> Wizard : read_excel(file_path, sheet_name, list_cols)
+Wizard -> Processor : read_excel(...)
+Processor --> Wizard : raw_df
+Wizard -> Processor : merge_multiline_records(raw_df, list_cols)
+Processor --> Wizard : merged_df
+Wizard -> Processor : add_hierarchy_by_indent(merged_df)
+Processor --> Wizard : hierarchy_df
+Wizard -> Processor : build_upload_df(hierarchy_df, list_cols)
+Processor --> Wizard : upload_df
+
+CLI -> Wizard : load_schema_and_compare(selected_mapping)
+Wizard -> Client : get_tracker_schema(tracker_id)
+Client -> API : GET /v3/trackers/{tracker_id}/schema
+API --> Client : schema
+Client --> Wizard : schema
+Wizard -> Mapper : flatten_schema_fields(schema)
+Mapper --> Wizard : schema_df
+Wizard -> Mapper : compare_upload_df_with_schema(upload_df, schema_df, selected_mapping)
+Mapper --> Wizard : comparison_df
+Wizard --> CLI : comparison_df
+
+CLI -> Wizard : process_option_mapping(selected_mapping)
+Wizard -> Mapper : get_option_field_candidates(schema_df)
+Mapper --> Wizard : option_candidates_df
+Wizard -> Mapper : build_option_maps_from_schema(schema_df)
+Mapper --> Wizard : option_maps
+Wizard -> Mapper : check_option_alignment(upload_df, option_mapping, option_maps)
+Mapper --> Wizard : option_check_df
+Wizard -> Mapper : apply_option_resolution(upload_df, option_mapping, option_maps)
+Mapper --> Wizard : converted_upload_df
+Wizard --> CLI : selected_option_mapping, option_check_df
+
+CLI -> Wizard : preview_payload(row_id)
+Wizard -> Wizard : TrackerItemBase 구성
+Wizard -> Wizard : TableFieldValue 및 payload 직렬화
+Wizard --> CLI : payload dict 반환
+
+CLI -> Wizard : upload(dry_run)
+loop Parent 우선 순서로 각 row 처리
+  Wizard -> Wizard : preview_payload(row_id)
+  alt dry run
+    Wizard --> CLI : 가상 result id
+  else 실제 업로드
+    Wizard -> Client : create_item(tracker_id, payload, parent_item_id)
+    Client -> API : POST /v3/trackers/{tracker_id}/items
+    API --> Client : created item
+    Client --> Wizard : created item
+  end
+end
+
+Wizard --> CLI : upload_result
+CLI -> Wizard : save_state(output_dir)
+Wizard --> CLI : 산출물 저장 완료
+@enduml
