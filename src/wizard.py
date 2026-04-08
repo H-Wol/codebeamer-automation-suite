@@ -32,6 +32,9 @@ class CodebeamerUploadWizard:
         return self.client.get_trackers(self.state.project_id)
 
     def load_tracker_items(self, tracker_id: int) -> list[dict]:
+        return self.client.get_tracker_items(tracker_id)
+
+    def load_root_items(self, tracker_id: int) -> list[dict]:
         return self.client.get_tracker_children(tracker_id)
 
     def select_tracker(self, tracker_id: int) -> None:

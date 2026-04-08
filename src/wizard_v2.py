@@ -37,6 +37,9 @@ class CodebeamerUploadWizardV2:
         return self.client.get_trackers(self.state.project_id)
 
     def load_tracker_items(self, tracker_id: int) -> list[dict]:
+        return self.client.get_tracker_items(tracker_id)
+
+    def load_root_items(self, tracker_id: int) -> list[dict]:
         return self.client.get_tracker_children(tracker_id)
 
     def select_tracker(self, tracker_id: int) -> None:
@@ -47,10 +50,14 @@ class CodebeamerUploadWizardV2:
             list_cols = []
 
         self.state.list_cols = list_cols
-        self.state.raw_df = self.processor.read_excel(file_path=file_path, sheet_name=sheet_name)
-        self.state.merged_df = self.processor.merge_multiline_records(self.state.raw_df, list_cols=list_cols)
-        self.state.hierarchy_df = self.processor.add_hierarchy_by_indent(self.state.merged_df)
-        self.state.upload_df = self.processor.build_upload_df(self.state.hierarchy_df, list_cols=list_cols)
+        self.state.raw_df = self.processor.read_excel(
+            file_path=file_path, sheet_name=sheet_name)
+        self.state.merged_df = self.processor.merge_multiline_records(
+            self.state.raw_df, list_cols=list_cols)
+        self.state.hierarchy_df = self.processor.add_hierarchy_by_indent(
+            self.state.merged_df)
+        self.state.upload_df = self.processor.build_upload_df(
+            self.state.hierarchy_df, list_cols=list_cols)
 
     def load_schema_and_compare(self, selected_mapping: dict[str, str]) -> pd.DataFrame:
         if self.state.tracker_id is None:
@@ -59,8 +66,10 @@ class CodebeamerUploadWizardV2:
             raise ValueError("upload_df is not ready. Read Excel first.")
 
         self.state.selected_mapping = selected_mapping
-        self.state.schema = self.client.get_tracker_schema(self.state.tracker_id)
-        self.state.schema_df = self.mapper.flatten_schema_fields(self.state.schema)
+        self.state.schema = self.client.get_tracker_schema(
+            self.state.tracker_id)
+        self.state.schema_df = self.mapper.flatten_schema_fields(
+            self.state.schema)
         self.state.comparison_df = self.mapper.compare_upload_df_with_schema(
             upload_df=self.state.upload_df,
             schema_df=self.state.schema_df,
@@ -74,7 +83,8 @@ class CodebeamerUploadWizardV2:
         if self.state.schema_df is None or self.state.upload_df is None:
             return
 
-        table_fields = self.state.schema_df[self.state.schema_df.get("is_table_field", False)]
+        table_fields = self.state.schema_df[self.state.schema_df.get(
+            "is_table_field", False)]
         if table_fields.empty:
             return
 
@@ -122,12 +132,14 @@ class CodebeamerUploadWizardV2:
         if self.state.upload_df is None:
             raise ValueError("upload_df is required before option processing.")
 
-        option_fields = self.mapper.get_option_field_candidates(self.state.schema_df)
+        option_fields = self.mapper.get_option_field_candidates(
+            self.state.schema_df)
         self.state.option_candidates_df = option_fields
 
         if selected_option_mapping is None:
             selected_option_mapping = {}
-            option_field_names = set(option_fields["field_name"].dropna().astype(str))
+            option_field_names = set(
+                option_fields["field_name"].dropna().astype(str))
             for excel_col, schema_field in selected_mapping.items():
                 if schema_field in option_field_names:
                     selected_option_mapping[excel_col] = schema_field
@@ -140,7 +152,8 @@ class CodebeamerUploadWizardV2:
             return {}, pd.DataFrame()
 
         self.state.selected_option_mapping = selected_option_mapping
-        option_maps = self.mapper.build_option_maps_from_schema(self.state.schema_df)
+        option_maps = self.mapper.build_option_maps_from_schema(
+            self.state.schema_df)
         self.state.option_maps = option_maps
 
         option_check_df = self.mapper.check_option_alignment(
@@ -210,7 +223,8 @@ class CodebeamerUploadWizardV2:
             return custom_fields
 
         table_fields_by_name = {}
-        table_schema_rows = self.state.schema_df[self.state.schema_df.get("is_table_field", False).fillna(False)]
+        table_schema_rows = self.state.schema_df[self.state.schema_df.get(
+            "is_table_field", False).fillna(False)]
 
         for _, tf_row in table_schema_rows.iterrows():
             tf_name = tf_row["field_name"]
@@ -275,7 +289,8 @@ class CodebeamerUploadWizardV2:
         item.name = str(row.get("upload_name", ""))
 
         for df_col, schema_field in self.state.selected_mapping.items():
-            matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
+            matched = self.state.schema_df[self.state.schema_df["field_name"]
+                                           == schema_field]
             if matched.empty:
                 continue
 
@@ -290,7 +305,8 @@ class CodebeamerUploadWizardV2:
 
             field_value = None
             if df_col in self.state.selected_option_mapping:
-                field_value = self._resolve_option_field_value(row, row_id, df_col, schema_field)
+                field_value = self._resolve_option_field_value(
+                    row, row_id, df_col, schema_field)
             elif self._has_row_value(row, df_col):
                 field_value = row[df_col]
 
@@ -371,14 +387,23 @@ class CodebeamerUploadWizardV2:
                         "created_item_id": result["id"],
                         "status": "SUCCESS",
                     })
-                    print(f"Row {row['upload_name']} uploaded successfully: item_id={result['id']}")
+                    print(
+                        f"Row {row['upload_name']} uploaded successfully: item_id={result['id']}")
 
                 except Exception as exc:
+                    error_message = ""
+                    if hasattr(exc, "response") and exc.response is not None:
+                        try:
+                            error_message = str(exc.response.json())
+                        except Exception:
+                            error_message = str(exc)
+                    else:
+                        error_message = str(exc)
                     failed_logs.append({
                         "_row_id": row_id,
                         "parent_row_id": row["parent_row_id"],
                         "upload_name": row["upload_name"],
-                        "error": str(exc),
+                        "error": error_message,
                         "status": "FAILED",
                     })
 
@@ -426,11 +451,13 @@ class CodebeamerUploadWizardV2:
 
         if self.state.schema is not None:
             with open(out / "schema.json", "w", encoding="utf-8") as file:
-                json.dump(self.state.schema, file, ensure_ascii=False, indent=2)
+                json.dump(self.state.schema, file,
+                          ensure_ascii=False, indent=2)
 
         if self.state.option_maps is not None:
             with open(out / "option_maps.json", "w", encoding="utf-8") as file:
-                json.dump(self.state.option_maps, file, ensure_ascii=False, indent=2)
+                json.dump(self.state.option_maps, file,
+                          ensure_ascii=False, indent=2)
 
         if self.state.upload_result is not None:
             for key in ["success_df", "failed_df", "unresolved_df"]:
@@ -439,4 +466,5 @@ class CodebeamerUploadWizardV2:
                     df.to_csv(out / f"{key}.csv", index=False)
 
             with open(out / "created_map.json", "w", encoding="utf-8") as file:
-                json.dump(self.state.upload_result.get("created_map", {}), file, ensure_ascii=False, indent=2)
+                json.dump(self.state.upload_result.get(
+                    "created_map", {}), file, ensure_ascii=False, indent=2)

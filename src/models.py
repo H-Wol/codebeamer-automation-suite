@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 from enum import Enum
 import pandas as pd
 import re
@@ -131,7 +131,7 @@ class AbstractFieldValue(DomainModel):
 
     def to_dict(self) -> dict[str, Any]:
         return _drop_none({
-            "fieldId": self.field_id,
+            "fieldId": int(self.field_id),
             "name": self.field_name,
             "type": self.type,
         })
@@ -191,6 +191,17 @@ class TableFieldValue(AbstractFieldValue):
 
 
 @dataclass
+class BoolFieldValue(AbstractFieldValue):
+    value: bool = False
+    type: str = "BoolFieldValue"
+
+    def to_dict(self) -> dict[str, Any]:
+        base = super().to_dict()
+        base["value"] = self.value
+        return base
+
+
+@dataclass
 class ScalarFieldValue(AbstractFieldValue):
     value: Any = None
     type: str = "TextFieldValue"
@@ -204,6 +215,24 @@ class ScalarFieldValue(AbstractFieldValue):
 
 @dataclass
 class TrackerItemBase(DomainModel):
+    NON_CREATABLE_FIELDS: ClassVar[set[str]] = {
+        "angular_icon",
+        "assigned_at",
+        "children",
+        "comments",
+        "created_at",
+        "created_by",
+        "icon_color",
+        "icon_url",
+        "id",
+        "modified_at",
+        "modified_by",
+        "parent",
+        "tags",
+        "tracker",
+        "version",
+    }
+
     id: Optional[int] = None
     tracker: Optional[TrackerReference] = None
 
@@ -213,7 +242,7 @@ class TrackerItemBase(DomainModel):
 
     status: Optional[AbstractReference] = None
     priority: Optional[AbstractReference] = None
-    categories: Optional[AbstractReference] = None
+    categories: Optional[list[AbstractReference]] = None
 
     subjects: list[TrackerItemReference] = field(default_factory=list)
     children: list[TrackerItemReference] = field(default_factory=list)
@@ -230,7 +259,7 @@ class TrackerItemBase(DomainModel):
 
     owners: Optional[AbstractReference] = None
 
-    parent: Optional[TrackerItemReference] = field(default_factory=list)
+    parent: Optional[TrackerItemReference] = None
 
     # ReadOnly
     angular_icon: Optional[str] = None
@@ -298,26 +327,28 @@ class TrackerItemBase(DomainModel):
     def set_field_value(self, tracker_field: str, value, field_info: dict = None) -> None:
         """tracker_field에 따라 TrackerItemBase의 속성이나 custom_fields에 값 설정"""
         tracker_field = self._normalize_tracker_field_name(tracker_field)
+        if tracker_field in self.NON_CREATABLE_FIELDS:
+            return
 
         if hasattr(self, tracker_field):
             if tracker_field == "description" and value is not None:
                 self.description = str(value)
+            elif tracker_field == "categories" and value:
+                values = value if isinstance(value, list) else [value]
+                self.categories = [self._to_reference(v, field_info.get("reference_type") if field_info else None) for v in values]
             elif tracker_field in {"status", "priority"} and value:
-                self.__dict__[tracker_field] = self._to_reference(
-                    value, field_info.get("reference_type") if field_info else None)
+                self.__dict__[tracker_field] = self._to_reference(value, field_info.get("reference_type") if field_info else None)
             elif tracker_field == "assigned_to" and value:
                 values = value if isinstance(value, list) else [value]
-                self.assigned_to = [self._to_reference(v, field_info.get(
-                    "reference_type") if field_info else None) for v in values]
+                self.assigned_to = [self._to_reference(v, field_info.get("reference_type") if field_info else None) for v in values]
             elif tracker_field in {"subjects", "children", "versions", "teams", "platforms", "areas", "resolutions", "severities"} and value:
                 values = value if isinstance(value, list) else [value]
-                self.__dict__[tracker_field] = [self._to_reference(v, field_info.get(
-                    "reference_type") if field_info else None) for v in values]
+                self.__dict__[tracker_field] = [self._to_reference(v, field_info.get("reference_type") if field_info else None) for v in values]
             elif tracker_field in {"created_by", "modified_by", "parent"} and value:
                 self.__dict__[tracker_field] = self._to_reference(
                     value, field_info.get("reference_type") if field_info else None)
             elif tracker_field == "story_points" and value is not None:
-                self.story_points = float(value)
+                self.story_points = int(value)
             elif tracker_field == "ordinal" and value is not None:
                 self.ordinal = int(value)
             elif tracker_field == "version" and value is not None:
@@ -370,6 +401,20 @@ class TrackerItemBase(DomainModel):
                 field_id=field_id,
                 field_name=field_name,
                 values=[[value]],
+            )
+
+        if field_type == 'BoolField' or (isinstance(value_model, str) and value_model == 'BoolFieldValue'):
+            if isinstance(value, bool):
+                bool_value = value
+            elif isinstance(value, str):
+                bool_value = value.strip().capitalize() == "True"
+            else:
+                raise ValueError(f"Cannot convert value to bool: {value}")
+
+            return BoolFieldValue(
+                field_id=field_id,
+                field_name=field_name,
+                value=bool_value,
             )
 
         if isinstance(value_model, str) and value_model.endswith('FieldValue'):
@@ -436,12 +481,24 @@ class TrackerItemBase(DomainModel):
         payload = self.to_dict()
 
         # 신규 생성시 불필요한 필드들 제거
-        payload.pop("id", None)
-        payload.pop("createdAt", None)
-        payload.pop("modifiedAt", None)
-        payload.pop("createdBy", None)
-        payload.pop("modifiedBy", None)
-        payload.pop("version", None)
+        for field_name in (
+            "angularIcon",
+            "assignedAt",
+            "children",
+            "comments",
+            "createdAt",
+            "createdBy",
+            "iconColor",
+            "iconUrl",
+            "id",
+            "modifiedAt",
+            "modifiedBy",
+            "parent",
+            "tags",
+            "tracker",
+            "version",
+        ):
+            payload.pop(field_name, None)
 
         return payload
 

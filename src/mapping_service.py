@@ -7,6 +7,45 @@ class MappingService:
     def __init__(self, logger=None):
         self.logger = logger
 
+    @staticmethod
+    def _extract_status_option_ids(fields: list[dict]) -> set[int]:
+        for field in fields:
+            tracker_item_field = field.get("trackerItemField")
+            field_name = field.get("name")
+            options = field.get("options") or []
+            if tracker_item_field == "status" or field_name == "Status":
+                return {
+                    option["id"]
+                    for option in options
+                    if isinstance(option, dict) and option.get("id") is not None
+                }
+        return set()
+
+    @staticmethod
+    def _build_mandatory_metadata(field: dict, all_status_option_ids: set[int]) -> dict:
+        mandatory_statuses = field.get("mandatoryInStatuses") or []
+        mandatory_status_ids = {
+            status["id"]
+            for status in mandatory_statuses
+            if isinstance(status, dict) and status.get("id") is not None
+        }
+        is_always_mandatory = bool(field.get("mandatory", False))
+        covers_all_statuses = bool(all_status_option_ids) and mandatory_status_ids == all_status_option_ids
+        mandatory = is_always_mandatory or covers_all_statuses
+
+        return {
+            "mandatory": mandatory,
+            "mandatory_mode": (
+                "always" if mandatory
+                else "conditional" if mandatory_statuses
+                else "never"
+            ),
+            "mandatory_statuses": mandatory_statuses,
+            "mandatory_status_names": [
+                status.get("name") for status in mandatory_statuses if status.get("name")
+            ],
+        }
+
     def flatten_schema_fields(self, schema: dict | list) -> pd.DataFrame:
         candidates = []
 
@@ -20,8 +59,10 @@ class MappingService:
                     candidates = schema[key]
                     break
 
+        all_status_option_ids = self._extract_status_option_ids(candidates)
         rows = []
         for field in candidates:
+            mandatory_meta = self._build_mandatory_metadata(field, all_status_option_ids)
             # Check if field has options (for choice/option fields)
             options = field.get("options", [])
             has_options = len(options) > 0
@@ -29,13 +70,24 @@ class MappingService:
             # Check if field is TableField
             is_table_field = field.get("type") == "TableField"
             columns = field.get("columns", []) if is_table_field else None
+            if columns:
+                columns = [
+                    {
+                        **column,
+                        **self._build_mandatory_metadata(column, all_status_option_ids),
+                    }
+                    for column in columns
+                ]
 
             rows.append({
                 "field_id": field.get("id"),
                 "field_name": field.get("name"),
                 "field_label": field.get("label") or field.get("title"),
                 "field_type": field.get("type"),
-                "mandatory": any(field.get("mandatoryInStatuses", [])) if field.get("mandatoryInStatuses") else field.get("mandatory", False),
+                "mandatory": mandatory_meta["mandatory"],
+                "mandatory_mode": mandatory_meta["mandatory_mode"],
+                "mandatory_statuses": mandatory_meta["mandatory_statuses"],
+                "mandatory_status_names": mandatory_meta["mandatory_status_names"],
                 "tracker_item_field": field.get("trackerItemField", field.get("name", None)),
                 "value_model": field.get("valueModel"),
                 "reference_type": field.get("referenceType"),
@@ -78,6 +130,8 @@ class MappingService:
                     row["field_label"] = m.get("field_label")
                     row["field_type"] = m["field_type"]
                     row["mandatory"] = m["mandatory"]
+                    row["mandatory_mode"] = m.get("mandatory_mode")
+                    row["mandatory_status_names"] = m.get("mandatory_status_names")
                     row["value_model"] = m["value_model"]
                     row["reference_type"] = m.get("reference_type")
                     row["hidden"] = m.get("raw", {}).get("hidden", False)

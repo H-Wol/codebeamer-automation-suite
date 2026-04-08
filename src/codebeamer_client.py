@@ -46,6 +46,9 @@ class CodebeamerClient:
     def get_tracker(self, tracker_id: int) -> dict:
         return self._get(f"/v3/trackers/{tracker_id}")
 
+    def get_tracker_items(self, tracker_id: int) -> list[dict]:
+        return self._get(f"/v3/trackers/{tracker_id}/items").get("itemRefs", [])
+
     def get_tracker_children(self, tracker_id: int) -> list[dict]:
         return self._get(f"/v3/trackers/{tracker_id}/children").get("itemRefs", [])
 
