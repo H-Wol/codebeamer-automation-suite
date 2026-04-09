@@ -61,7 +61,7 @@ v2 개선점:
 
 ### Payload 모델과 상태
 
-`src/models.py`
+`src/models/`
 
 주요 책임:
 - reference 및 field value payload 모델 정의

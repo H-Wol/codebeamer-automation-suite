@@ -31,7 +31,7 @@ py -3 cli_main.py
 - `src/excel_processor.py`: Excel 파싱 및 계층 구조 생성
 - `src/mapping_service.py`: 레거시 스키마/옵션 매핑 서비스
 - `src/mapping_service.py`: 개선된 스키마/옵션 매핑 서비스
-- `src/models.py`: payload 및 상태 도메인 모델
+- `src/models/`: payload 및 상태 도메인 모델 패키지
 - `src/wizard.py`: 레거시 오케스트레이션 계층
 - `src/wizard.py`: 개선된 오케스트레이션 계층
 - `scripts/render_uml.ps1`: UML 일괄 렌더링 스크립트
