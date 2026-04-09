@@ -5,6 +5,8 @@ from typing import Any
 
 import requests
 
+from .models import OPTION_CONTAINER_KEYS
+
 
 class CodebeamerClient:
     def __init__(self, base_url: str, username: str, password: str, logger=None):
@@ -60,13 +62,34 @@ class CodebeamerClient:
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
-            for key in ("items", "options", "references", "values"):
+            for key in OPTION_CONTAINER_KEYS:
                 if key in data and isinstance(data[key], list):
                     return data[key]
         return []
 
     def get_item(self, item_id: int) -> dict:
         return self._get(f"/v3/items/{item_id}")
+
+    def search_users(
+        self,
+        *,
+        name: str | None = None,
+        email: str | None = None,
+        project_id: int | None = None,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> dict:
+        params = {
+            "page": page,
+            "pageSize": min(page_size, 500),
+        }
+        body = {
+            "name": name,
+            "email": email,
+            "projectId": project_id,
+        }
+        body = {key: value for key, value in body.items() if value not in (None, "")}
+        return self._post("/v3/users/search", json_body=body, params=params)
 
     def create_item(self, tracker_id: int, payload: dict, parent_item_id: int | None = None) -> dict:
         params = {}

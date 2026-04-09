@@ -6,6 +6,7 @@ from typing import Any
 from typing import ClassVar
 
 from .common import DomainModel
+from .common import ReferenceType
 from .common import _drop_none
 
 
@@ -52,70 +53,70 @@ class BaseReference(DomainModel):
 
     @classmethod
     def resolve_type(cls, reference_type: str | None) -> type["BaseReference"]:
-        if reference_type in {None, "AbstractReference"}:
+        if reference_type in {None, ReferenceType.ABSTRACT.value}:
             return AbstractReference
         return cls._TYPE_REGISTRY.get(reference_type, BaseReference)
 
 
 @dataclass
 class AbstractReference(BaseReference):
-    TYPE_NAME: ClassVar[str] = "AbstractReference"
-    type: str = "AbstractReference"
+    TYPE_NAME: ClassVar[str] = ReferenceType.ABSTRACT.value
+    type: str = ReferenceType.ABSTRACT.value
 
 
 @dataclass
 class ChoiceOptionReference(BaseReference):
-    TYPE_NAME: ClassVar[str] = "ChoiceOptionReference"
-    type: str = "ChoiceOptionReference"
+    TYPE_NAME: ClassVar[str] = ReferenceType.CHOICE_OPTION.value
+    type: str = ReferenceType.CHOICE_OPTION.value
 
 
 @dataclass
 class CommentReference(BaseReference):
-    TYPE_NAME: ClassVar[str] = "CommentReference"
-    type: str = "CommentReference"
+    TYPE_NAME: ClassVar[str] = ReferenceType.COMMENT.value
+    type: str = ReferenceType.COMMENT.value
 
 
 @dataclass
 class ProjectReference(BaseReference):
-    TYPE_NAME: ClassVar[str] = "ProjectReference"
-    type: str = "ProjectReference"
+    TYPE_NAME: ClassVar[str] = ReferenceType.PROJECT.value
+    type: str = ReferenceType.PROJECT.value
 
 
 @dataclass
 class RepositoryReference(BaseReference):
-    TYPE_NAME: ClassVar[str] = "RepositoryReference"
-    type: str = "RepositoryReference"
+    TYPE_NAME: ClassVar[str] = ReferenceType.REPOSITORY.value
+    type: str = ReferenceType.REPOSITORY.value
 
 
 @dataclass
 class RoleReference(BaseReference):
-    TYPE_NAME: ClassVar[str] = "RoleReference"
-    type: str = "RoleReference"
+    TYPE_NAME: ClassVar[str] = ReferenceType.ROLE.value
+    type: str = ReferenceType.ROLE.value
 
 
 @dataclass
 class TrackerPermissionReference(BaseReference):
-    TYPE_NAME: ClassVar[str] = "TrackerPermissionReference"
-    type: str = "TrackerPermissionReference"
+    TYPE_NAME: ClassVar[str] = ReferenceType.TRACKER_PERMISSION.value
+    type: str = ReferenceType.TRACKER_PERMISSION.value
 
 
 @dataclass
 class UserReference(BaseReference):
-    TYPE_NAME: ClassVar[str] = "UserReference"
-    type: str = "UserReference"
+    TYPE_NAME: ClassVar[str] = ReferenceType.USER.value
+    type: str = ReferenceType.USER.value
     email: str | None = None
 
 
 @dataclass
 class TrackerItemReference(BaseReference):
-    TYPE_NAME: ClassVar[str] = "TrackerItemReference"
-    type: str = "TrackerItemReference"
+    TYPE_NAME: ClassVar[str] = ReferenceType.TRACKER_ITEM.value
+    type: str = ReferenceType.TRACKER_ITEM.value
 
 
 @dataclass
 class TrackerReference(BaseReference):
-    TYPE_NAME: ClassVar[str] = "TrackerReference"
-    type: str = "TrackerReference"
+    TYPE_NAME: ClassVar[str] = ReferenceType.TRACKER.value
+    type: str = ReferenceType.TRACKER.value
 
 
 @dataclass

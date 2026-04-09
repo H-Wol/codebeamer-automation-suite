@@ -11,9 +11,15 @@ from .excel_processor import ExcelHierarchyProcessor
 from .mapping_service import MappingService
 from .models import AbstractFieldValue
 from .models import DomainModel
+from .models import FieldValueType
+from .models import OptionMapKind
+from .models import ReferenceType
 from .models import TableFieldValue
 from .models import TextFieldValue
 from .models import TrackerItemBase
+from .models import UploadStatus
+from .models import USER_SEARCH_RESULT_KEYS
+from .models import UserLookupStatus
 from .models import WizardState
 
 
@@ -120,6 +126,176 @@ class CodebeamerUploadWizard:
 
         self.state.table_field_mapping = table_field_mapping
 
+    @staticmethod
+    def _normalize_lookup_text(value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value).strip()
+
+    @classmethod
+    def _looks_like_email(cls, value: Any) -> bool:
+        text = cls._normalize_lookup_text(value)
+        if "@" not in text:
+            return False
+        local_part, _, domain = text.partition("@")
+        return bool(local_part and domain)
+
+    @staticmethod
+    def _extract_user_candidates(data: Any) -> list[dict[str, Any]]:
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            for key in USER_SEARCH_RESULT_KEYS:
+                value = data.get(key)
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, dict)]
+        return []
+
+    @classmethod
+    def _select_exact_user_matches(
+        cls,
+        candidates: list[dict[str, Any]],
+        lookup_text: str,
+        *,
+        use_email: bool,
+    ) -> list[dict[str, Any]]:
+        normalized_lookup = lookup_text.casefold()
+        exact_matches: list[dict[str, Any]] = []
+
+        for candidate in candidates:
+            if use_email:
+                email = cls._normalize_lookup_text(candidate.get("email", ""))
+                if email.casefold() == normalized_lookup:
+                    exact_matches.append(candidate)
+                continue
+
+            name = cls._normalize_lookup_text(candidate.get("name", ""))
+            full_name = cls._normalize_lookup_text(
+                f"{candidate.get('firstName', '')} {candidate.get('lastName', '')}"
+            )
+            if name.casefold() == normalized_lookup or full_name.casefold() == normalized_lookup:
+                exact_matches.append(candidate)
+
+        return exact_matches
+
+    @staticmethod
+    def _to_user_reference(candidate: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": candidate.get("id"),
+            "name": candidate.get("name"),
+            "type": ReferenceType.USER.value,
+            "email": candidate.get("email"),
+        }
+
+    def _lookup_user_reference(
+        self,
+        raw_value: Any,
+        cache: dict[tuple[int | None, str], tuple[dict[str, Any] | None, str, str | None]],
+    ) -> tuple[dict[str, Any] | None, str, str | None]:
+        lookup_text = self._normalize_lookup_text(raw_value)
+        cache_key = (self.state.project_id, lookup_text.casefold())
+        if cache_key in cache:
+            return cache[cache_key]
+
+        use_email = self._looks_like_email(lookup_text)
+
+        try:
+            result = self.client.search_users(
+                email=lookup_text if use_email else None,
+                name=None if use_email else lookup_text,
+                project_id=self.state.project_id,
+            )
+            candidates = self._extract_user_candidates(result)
+            matches = self._select_exact_user_matches(candidates, lookup_text, use_email=use_email)
+
+            if len(matches) == 1:
+                resolved = self._to_user_reference(matches[0])
+                cache[cache_key] = (resolved, UserLookupStatus.RESOLVED.value, None)
+                return cache[cache_key]
+
+            if not matches:
+                cache[cache_key] = (None, UserLookupStatus.USER_NOT_FOUND.value, None)
+                return cache[cache_key]
+
+            match_names = [self._normalize_lookup_text(item.get("name", "")) for item in matches[:5]]
+            error_message = f"Multiple users matched {lookup_text!r}: {match_names}"
+            cache[cache_key] = (None, UserLookupStatus.USER_LOOKUP_AMBIGUOUS.value, error_message)
+            return cache[cache_key]
+        except Exception as exc:
+            error_message = ""
+            if hasattr(exc, "response") and exc.response is not None:
+                try:
+                    error_message = str(exc.response.json())
+                except Exception:
+                    error_message = str(exc)
+            else:
+                error_message = str(exc)
+            cache[cache_key] = (None, UserLookupStatus.USER_LOOKUP_FAILED.value, error_message)
+            return cache[cache_key]
+
+    def _resolve_user_reference_value(
+        self,
+        raw_value: Any,
+        *,
+        multiple_values: bool,
+        cache: dict[tuple[int | None, str], tuple[dict[str, Any] | None, str, str | None]],
+    ) -> tuple[Any, str | None, str | None]:
+        if multiple_values and isinstance(raw_value, list):
+            resolved_values = []
+            for item in raw_value:
+                if item is None or self._normalize_lookup_text(item) == "":
+                    continue
+                resolved, status, error = self._lookup_user_reference(item, cache)
+                if resolved is None:
+                    return None, status, error
+                resolved_values.append(resolved)
+            return (resolved_values if resolved_values else None), UserLookupStatus.RESOLVED.value, None
+
+        resolved, status, error = self._lookup_user_reference(raw_value, cache)
+        return resolved, status, error
+
+    def _resolve_user_reference_fields(
+        self,
+        upload_df: pd.DataFrame,
+        option_mapping: dict[str, str],
+        option_maps: dict[str, dict],
+    ) -> pd.DataFrame:
+        work = upload_df.copy()
+        cache: dict[tuple[int | None, str], tuple[dict[str, Any] | None, str, str | None]] = {}
+
+        for df_col, schema_field in option_mapping.items():
+            option_info = option_maps.get(schema_field, {})
+            if option_info.get("kind") != OptionMapKind.USER_LOOKUP.value:
+                continue
+
+            resolved_values = []
+            statuses = []
+            errors = []
+            multiple_values = option_info.get("multiple_values", False)
+
+            for _, row in work.iterrows():
+                raw_value = row[df_col]
+                if raw_value is None or (isinstance(raw_value, str) and raw_value.strip() == ""):
+                    resolved_values.append(None)
+                    statuses.append(None)
+                    errors.append(None)
+                    continue
+
+                resolved, status, error = self._resolve_user_reference_value(
+                    raw_value,
+                    multiple_values=multiple_values,
+                    cache=cache,
+                )
+                resolved_values.append(resolved)
+                statuses.append(status)
+                errors.append(error)
+
+            work[f"{df_col}__resolved"] = resolved_values
+            work[f"{df_col}__lookup_status"] = statuses
+            work[f"{df_col}__lookup_error"] = errors
+
+        return work
+
     def process_option_mapping(
         self,
         selected_mapping: dict[str, str],
@@ -151,15 +327,21 @@ class CodebeamerUploadWizard:
         option_maps = self.mapper.build_option_maps_from_schema(self.state.schema_df)
         self.state.option_maps = option_maps
 
-        option_check_df = self.mapper.check_option_alignment(
+        lookup_ready_df = self._resolve_user_reference_fields(
             upload_df=self.state.upload_df,
+            option_mapping=selected_option_mapping,
+            option_maps=option_maps,
+        )
+
+        option_check_df = self.mapper.check_option_alignment(
+            upload_df=lookup_ready_df,
             option_mapping=selected_option_mapping,
             option_maps=option_maps,
         )
         self.state.option_check_df = option_check_df
 
         self.state.converted_upload_df = self.mapper.apply_option_resolution(
-            upload_df=self.state.upload_df,
+            upload_df=lookup_ready_df,
             option_mapping=selected_option_mapping,
             option_maps=option_maps,
         )
@@ -167,7 +349,11 @@ class CodebeamerUploadWizard:
         return selected_option_mapping, option_check_df
 
     def _create_field_value(self, field_info: dict, value) -> AbstractFieldValue:
-        return TrackerItemBase()._create_field_value(field_info, value) or TextFieldValue(field_id=0, field_name="")
+        return TrackerItemBase()._create_field_value(field_info, value) or TextFieldValue(
+            field_id=0,
+            field_name="",
+            type=FieldValueType.TEXT.value,
+        )
 
     def _serialize_payload_value(self, value: Any) -> Any:
         if isinstance(value, DomainModel):
@@ -195,6 +381,8 @@ class CodebeamerUploadWizard:
     def _resolve_option_field_value(self, row: pd.Series, row_id: int, df_col: str, schema_field: str) -> Any:
         option_info = (self.state.option_maps or {}).get(schema_field, {})
         resolved_col = f"{df_col}__resolved"
+        status_col = f"{df_col}__lookup_status"
+        error_col = f"{df_col}__lookup_error"
 
         if resolved_col in row.index and row[resolved_col] is not None:
             return row[resolved_col]
@@ -202,7 +390,22 @@ class CodebeamerUploadWizard:
         if not self._has_row_value(row, df_col):
             return None
 
-        if option_info.get("kind") == "reference_lookup":
+        if option_info.get("kind") == OptionMapKind.USER_LOOKUP.value:
+            lookup_status = (
+                row[status_col]
+                if status_col in row.index
+                else UserLookupStatus.USER_LOOKUP_NOT_RUN.value
+            )
+            lookup_error = row[error_col] if error_col in row.index else None
+            message = (
+                f"User lookup failed for field '{schema_field}' and value {row[df_col]!r} "
+                f"on _row_id={row_id} with status={lookup_status}."
+            )
+            if lookup_error:
+                message = f"{message} details={lookup_error}"
+            raise ValueError(message)
+
+        if option_info.get("kind") == OptionMapKind.REFERENCE_LOOKUP.value:
             raise ValueError(
                 f"Field '{schema_field}' requires reference lookup for type "
                 f"'{option_info.get('reference_type')}' before building payload for _row_id={row_id}."
@@ -242,7 +445,7 @@ class CodebeamerUploadWizard:
                 "fieldId": col_def.get("id"),
                 "name": col_name,
                 "value": field_value,
-                "type": col_def.get("valueModel", "TextFieldValue"),
+                "type": col_def.get("valueModel", FieldValueType.TEXT.value),
             }
 
         for tf_name, table_rows in tables_data.items():
@@ -377,7 +580,7 @@ class CodebeamerUploadWizard:
                         "parent_row_id": row["parent_row_id"],
                         "upload_name": row["upload_name"],
                         "created_item_id": result["id"],
-                        "status": "SUCCESS",
+                        "status": UploadStatus.SUCCESS.value,
                     })
                     print(f"Row {row['upload_name']} uploaded successfully: item_id={result['id']}")
 
@@ -396,7 +599,7 @@ class CodebeamerUploadWizard:
                         "parent_row_id": row["parent_row_id"],
                         "upload_name": row["upload_name"],
                         "error": error_message,
-                        "status": "FAILED",
+                        "status": UploadStatus.FAILED.value,
                     })
 
                     if not continue_on_error:

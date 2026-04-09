@@ -4,6 +4,17 @@ from typing import Any
 
 import pandas as pd
 
+from .models import MappingStatus
+from .models import OptionCheckStatus
+from .models import OptionMapKind
+from .models import OptionSourceKind
+from .models import OptionSourceStatus
+from .models import ReferenceType
+from .models import SchemaFieldType
+from .models import TrackerItemField
+from .models import TrackerSchemaName
+from .models import UserLookupStatus
+
 
 class MappingService:
     def __init__(self, logger=None):
@@ -15,7 +26,10 @@ class MappingService:
             tracker_item_field = field.get("trackerItemField")
             field_name = field.get("name")
             options = field.get("options") or []
-            if tracker_item_field == "status" or field_name == "Status":
+            if (
+                tracker_item_field == TrackerItemField.STATUS.value
+                or field_name == TrackerSchemaName.STATUS.value
+            ):
                 return {
                     option["id"]
                     for option in options
@@ -67,7 +81,7 @@ class MappingService:
             has_options
             or bool(reference_type)
             or cls._is_choice_value_model(value_model)
-            or field_type in {"ReferenceField", "OptionChoiceField"}
+            or field_type in {SchemaFieldType.REFERENCE.value, SchemaFieldType.OPTION_CHOICE.value}
         )
 
     @classmethod
@@ -75,9 +89,9 @@ class MappingService:
         getter = field.get
         has_options = bool(getter("has_options", False) or getter("options", []))
         if has_options:
-            return "schema_options"
+            return OptionSourceKind.SCHEMA_OPTIONS.value
         if cls._is_option_like_field(field):
-            return "reference_lookup"
+            return OptionSourceKind.REFERENCE_LOOKUP.value
         return None
 
     def flatten_schema_fields(self, schema: dict | list) -> pd.DataFrame:
@@ -96,7 +110,7 @@ class MappingService:
         for field in candidates:
             options = field.get("options", [])
             has_options = len(options) > 0
-            is_table_field = field.get("type") == "TableField"
+            is_table_field = field.get("type") == SchemaFieldType.TABLE.value
             columns = field.get("columns", []) if is_table_field else None
             reference_type = field.get("referenceType")
             value_model = field.get("valueModel")
@@ -155,7 +169,15 @@ class MappingService:
                 "selected_schema_field": mapped_schema_field,
                 "df_exists": True,
                 "schema_field_exists": schema_exists,
-                "status": "UNMAPPED" if not mapped_schema_field else ("OK" if schema_exists else "SCHEMA_FIELD_MISSING"),
+                "status": (
+                    MappingStatus.UNMAPPED.value
+                    if not mapped_schema_field
+                    else (
+                        MappingStatus.OK.value
+                        if schema_exists
+                        else MappingStatus.SCHEMA_FIELD_MISSING.value
+                    )
+                ),
             }
 
             if mapped_schema_field and schema_exists:
@@ -221,12 +243,12 @@ class MappingService:
                 try:
                     name_map = self.build_option_name_map(options)
                     option_maps[field_name] = {
-                        "kind": "static_options",
+                        "kind": OptionMapKind.STATIC_OPTIONS.value,
                         "name_map": name_map,
                         "reference_type": row.get("reference_type"),
                         "multiple_values": row.get("multiple_values", False),
                         "options": options,
-                        "source_status": "READY",
+                        "source_status": OptionSourceStatus.READY.value,
                     }
                 except ValueError:
                     if self.logger:
@@ -234,13 +256,24 @@ class MappingService:
                     continue
                 continue
 
+            if row.get("reference_type") == ReferenceType.USER.value:
+                option_maps[field_name] = {
+                    "kind": OptionMapKind.USER_LOOKUP.value,
+                    "name_map": {},
+                    "reference_type": row.get("reference_type"),
+                    "multiple_values": row.get("multiple_values", False),
+                    "options": None,
+                    "source_status": OptionSourceStatus.LOOKUP_REQUIRED.value,
+                }
+                continue
+
             option_maps[field_name] = {
-                "kind": "reference_lookup",
+                "kind": OptionMapKind.REFERENCE_LOOKUP.value,
                 "name_map": {},
                 "reference_type": row.get("reference_type"),
                 "multiple_values": row.get("multiple_values", False),
                 "options": None,
-                "source_status": "LOOKUP_REQUIRED",
+                "source_status": OptionSourceStatus.LOOKUP_REQUIRED.value,
             }
 
         return option_maps
@@ -260,7 +293,7 @@ class MappingService:
                     "schema_field": schema_field,
                     "_row_id": None,
                     "raw_value": None,
-                    "status": "DF_COLUMN_MISSING",
+                    "status": OptionCheckStatus.DF_COLUMN_MISSING.value,
                 })
                 continue
 
@@ -270,19 +303,48 @@ class MappingService:
                     "schema_field": schema_field,
                     "_row_id": None,
                     "raw_value": None,
-                    "status": "OPTION_MAP_MISSING",
+                    "status": OptionCheckStatus.OPTION_MAP_MISSING.value,
                 })
                 continue
 
             option_info = option_maps[schema_field]
-            if option_info.get("kind") != "static_options":
+            if option_info.get("kind") == OptionMapKind.USER_LOOKUP.value:
+                resolved_col = f"{df_col}__resolved"
+                status_col = f"{df_col}__lookup_status"
+                error_col = f"{df_col}__lookup_error"
+
+                for _, row in upload_df.iterrows():
+                    raw_value = row[df_col]
+                    if raw_value is None or str(raw_value).strip() == "":
+                        continue
+
+                    resolved_value = row.get(resolved_col) if resolved_col in row.index else None
+                    if resolved_value is not None:
+                        continue
+
+                    errors.append({
+                        "_row_id": row.get("_row_id"),
+                        "df_column": df_col,
+                        "schema_field": schema_field,
+                        "raw_value": raw_value,
+                        "reference_type": option_info.get("reference_type"),
+                        "status": (
+                            row.get(status_col)
+                            if status_col in row.index
+                            else UserLookupStatus.USER_LOOKUP_NOT_RUN.value
+                        ),
+                        "error": row.get(error_col) if error_col in row.index else None,
+                    })
+                continue
+
+            if option_info.get("kind") != OptionMapKind.STATIC_OPTIONS.value:
                 errors.append({
                     "df_column": df_col,
                     "schema_field": schema_field,
                     "_row_id": None,
                     "raw_value": None,
                     "reference_type": option_info.get("reference_type"),
-                    "status": "OPTION_SOURCE_UNAVAILABLE",
+                    "status": OptionCheckStatus.OPTION_SOURCE_UNAVAILABLE.value,
                 })
                 continue
 
@@ -305,7 +367,7 @@ class MappingService:
                                 "df_column": df_col,
                                 "schema_field": schema_field,
                                 "raw_value": val,
-                                "status": "OPTION_NOT_FOUND",
+                                "status": OptionCheckStatus.OPTION_NOT_FOUND.value,
                             })
                 else:
                     key = str(raw_value).strip()
@@ -315,7 +377,7 @@ class MappingService:
                             "df_column": df_col,
                             "schema_field": schema_field,
                             "raw_value": raw_value,
-                            "status": "OPTION_NOT_FOUND",
+                            "status": OptionCheckStatus.OPTION_NOT_FOUND.value,
                         })
 
         return pd.DataFrame(errors)
@@ -333,7 +395,13 @@ class MappingService:
                 continue
 
             option_info = option_maps[schema_field]
-            if option_info.get("kind") != "static_options":
+            if option_info.get("kind") == OptionMapKind.USER_LOOKUP.value:
+                resolved_col = f"{df_col}__resolved"
+                if resolved_col not in work.columns:
+                    work[resolved_col] = [None] * len(work)
+                continue
+
+            if option_info.get("kind") != OptionMapKind.STATIC_OPTIONS.value:
                 work[f"{df_col}__resolved"] = [None] * len(work)
                 continue
 
@@ -359,7 +427,7 @@ class MappingService:
                             resolved_list.append({
                                 "id": opt.get("id"),
                                 "name": opt.get("name"),
-                                "type": reference_type or "ChoiceOptionReference",
+                                "type": reference_type or ReferenceType.CHOICE_OPTION.value,
                             })
 
                     resolved_values.append(resolved_list if resolved_list else None)
@@ -372,7 +440,7 @@ class MappingService:
                     resolved_values.append({
                         "id": opt.get("id"),
                         "name": opt.get("name"),
-                        "type": reference_type or "ChoiceOptionReference",
+                        "type": reference_type or ReferenceType.CHOICE_OPTION.value,
                     })
 
             work[f"{df_col}__resolved"] = resolved_values

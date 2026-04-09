@@ -6,7 +6,9 @@ from typing import Any
 from typing import ClassVar
 
 from .common import DomainModel
+from .common import FieldValueType
 from .common import FieldInfo
+from .common import SchemaFieldType
 from .common import _as_list
 from .common import _coerce_bool
 from .common import _drop_none
@@ -71,7 +73,7 @@ class AbstractFieldValue(DomainModel):
 @dataclass
 class ChoiceFieldValue(AbstractFieldValue):
     values: list[Any] = field(default_factory=list)
-    type: str = "ChoiceFieldValue"
+    type: str = FieldValueType.CHOICE.value
 
     def to_dict(self) -> dict[str, Any]:
         data = super().to_dict()
@@ -82,7 +84,7 @@ class ChoiceFieldValue(AbstractFieldValue):
     @classmethod
     def matches(cls, field_info: FieldInfo) -> bool:
         value_model = field_info.get("value_model")
-        return isinstance(value_model, str) and "ChoiceFieldValue" in value_model
+        return isinstance(value_model, str) and FieldValueType.CHOICE.value in value_model
 
     @classmethod
     def from_value(cls, field_info: FieldInfo, value: Any) -> "ChoiceFieldValue":
@@ -96,10 +98,10 @@ class ChoiceFieldValue(AbstractFieldValue):
 
 @dataclass
 class TextFieldValue(AbstractFieldValue):
-    VALUE_MODEL_ALIASES: ClassVar[tuple[str, ...]] = ("TextFieldValue",)
+    VALUE_MODEL_ALIASES: ClassVar[tuple[str, ...]] = (FieldValueType.TEXT.value,)
 
     value: str | None = None
-    type: str = "TextFieldValue"
+    type: str = FieldValueType.TEXT.value
 
     def to_dict(self) -> dict[str, Any]:
         data = super().to_dict()
@@ -117,11 +119,11 @@ class TextFieldValue(AbstractFieldValue):
 
 @dataclass
 class TableFieldValue(AbstractFieldValue):
-    VALUE_MODEL_ALIASES: ClassVar[tuple[str, ...]] = ("TableFieldValue",)
-    FIELD_TYPE_ALIASES: ClassVar[tuple[str, ...]] = ("TableField",)
+    VALUE_MODEL_ALIASES: ClassVar[tuple[str, ...]] = (FieldValueType.TABLE.value,)
+    FIELD_TYPE_ALIASES: ClassVar[tuple[str, ...]] = (SchemaFieldType.TABLE.value,)
 
     values: list[list[Any]] = field(default_factory=list)
-    type: str = "TableFieldValue"
+    type: str = FieldValueType.TABLE.value
 
     def to_dict(self) -> dict[str, Any]:
         data = super().to_dict()
@@ -147,11 +149,11 @@ class TableFieldValue(AbstractFieldValue):
 
 @dataclass
 class BoolFieldValue(AbstractFieldValue):
-    VALUE_MODEL_ALIASES: ClassVar[tuple[str, ...]] = ("BoolFieldValue",)
-    FIELD_TYPE_ALIASES: ClassVar[tuple[str, ...]] = ("BoolField",)
+    VALUE_MODEL_ALIASES: ClassVar[tuple[str, ...]] = (FieldValueType.BOOL.value,)
+    FIELD_TYPE_ALIASES: ClassVar[tuple[str, ...]] = (SchemaFieldType.BOOL.value,)
 
     value: bool = False
-    type: str = "BoolFieldValue"
+    type: str = FieldValueType.BOOL.value
 
     def to_dict(self) -> dict[str, Any]:
         data = super().to_dict()
@@ -169,7 +171,7 @@ class BoolFieldValue(AbstractFieldValue):
 @dataclass
 class ScalarFieldValue(AbstractFieldValue):
     value: Any = None
-    type: str = "TextFieldValue"
+    type: str = FieldValueType.TEXT.value
 
     def to_dict(self) -> dict[str, Any]:
         data = super().to_dict()
@@ -179,7 +181,7 @@ class ScalarFieldValue(AbstractFieldValue):
 
     @classmethod
     def from_value(cls, field_info: FieldInfo, value: Any) -> "ScalarFieldValue":
-        value_model = field_info.get("value_model") or "TextFieldValue"
+        value_model = field_info.get("value_model") or FieldValueType.TEXT.value
         return cls(
             **cls._base_kwargs(field_info),
             value=value,

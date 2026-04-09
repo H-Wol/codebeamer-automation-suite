@@ -12,6 +12,7 @@ from src.config import load_config
 from src.excel_processor import ExcelHierarchyProcessor
 from src.logger import setup_logger
 from src.mapping_service import MappingService
+from src.models import OptionCheckStatus
 from src.wizard import CodebeamerUploadWizard
 
 
@@ -133,7 +134,9 @@ def main():
             print("\n[옵션 검증 결과]")
             print(option_check_df)
 
-            unavailable_df = option_check_df[option_check_df["status"] == "OPTION_SOURCE_UNAVAILABLE"]
+            unavailable_df = option_check_df[
+                option_check_df["status"] == OptionCheckStatus.OPTION_SOURCE_UNAVAILABLE.value
+            ]
             if not unavailable_df.empty:
                 print("\n참조 lookup 이 필요한 필드가 있습니다. 값이 있는 행은 payload 생성 또는 업로드 시 실패할 수 있습니다.")
 

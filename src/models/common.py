@@ -14,6 +14,87 @@ class DescriptionFormat(str, Enum):
     Wiki = "Wiki"
 
 
+class ReferenceType(str, Enum):
+    ABSTRACT = "AbstractReference"
+    CHOICE_OPTION = "ChoiceOptionReference"
+    COMMENT = "CommentReference"
+    PROJECT = "ProjectReference"
+    REPOSITORY = "RepositoryReference"
+    ROLE = "RoleReference"
+    TRACKER = "TrackerReference"
+    TRACKER_ITEM = "TrackerItemReference"
+    TRACKER_PERMISSION = "TrackerPermissionReference"
+    USER = "UserReference"
+
+
+class FieldValueType(str, Enum):
+    BOOL = "BoolFieldValue"
+    CHOICE = "ChoiceFieldValue"
+    TABLE = "TableFieldValue"
+    TEXT = "TextFieldValue"
+
+
+class SchemaFieldType(str, Enum):
+    BOOL = "BoolField"
+    OPTION_CHOICE = "OptionChoiceField"
+    REFERENCE = "ReferenceField"
+    TABLE = "TableField"
+
+
+class OptionSourceKind(str, Enum):
+    SCHEMA_OPTIONS = "schema_options"
+    REFERENCE_LOOKUP = "reference_lookup"
+
+
+class OptionMapKind(str, Enum):
+    STATIC_OPTIONS = "static_options"
+    USER_LOOKUP = "user_lookup"
+    REFERENCE_LOOKUP = "reference_lookup"
+
+
+class OptionSourceStatus(str, Enum):
+    READY = "READY"
+    LOOKUP_REQUIRED = "LOOKUP_REQUIRED"
+
+
+class MappingStatus(str, Enum):
+    OK = "OK"
+    SCHEMA_FIELD_MISSING = "SCHEMA_FIELD_MISSING"
+    UNMAPPED = "UNMAPPED"
+
+
+class OptionCheckStatus(str, Enum):
+    DF_COLUMN_MISSING = "DF_COLUMN_MISSING"
+    OPTION_MAP_MISSING = "OPTION_MAP_MISSING"
+    OPTION_NOT_FOUND = "OPTION_NOT_FOUND"
+    OPTION_SOURCE_UNAVAILABLE = "OPTION_SOURCE_UNAVAILABLE"
+
+
+class UserLookupStatus(str, Enum):
+    RESOLVED = "RESOLVED"
+    USER_LOOKUP_AMBIGUOUS = "USER_LOOKUP_AMBIGUOUS"
+    USER_LOOKUP_FAILED = "USER_LOOKUP_FAILED"
+    USER_LOOKUP_NOT_RUN = "USER_LOOKUP_NOT_RUN"
+    USER_NOT_FOUND = "USER_NOT_FOUND"
+
+
+class UploadStatus(str, Enum):
+    FAILED = "FAILED"
+    SUCCESS = "SUCCESS"
+
+
+class TrackerItemField(str, Enum):
+    STATUS = "status"
+
+
+class TrackerSchemaName(str, Enum):
+    STATUS = "Status"
+
+
+OPTION_CONTAINER_KEYS: tuple[str, ...] = ("items", "options", "references", "values")
+USER_SEARCH_RESULT_KEYS: tuple[str, ...] = ("users", "userRefs", "items", "references", "content")
+
+
 class DomainModel:
     def to_dict(self) -> dict[str, Any]:
         raise NotImplementedError
