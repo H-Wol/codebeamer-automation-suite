@@ -11,7 +11,11 @@ from .references import BaseReference
 from .references import ChoiceOptionReference
 from .references import CommentReference
 from .references import Label
+from .references import ProjectReference
+from .references import RepositoryReference
+from .references import RoleReference
 from .references import TrackerItemReference
+from .references import TrackerPermissionReference
 from .references import TrackerReference
 from .references import UserReference
 from .tracker_item import TrackerItemBase
@@ -28,11 +32,15 @@ __all__ = [
     "DescriptionFormat",
     "DomainModel",
     "Label",
+    "ProjectReference",
+    "RepositoryReference",
+    "RoleReference",
     "ScalarFieldValue",
     "TableFieldValue",
     "TextFieldValue",
     "TrackerItemBase",
     "TrackerItemReference",
+    "TrackerPermissionReference",
     "TrackerReference",
     "UserReference",
     "WizardState",
