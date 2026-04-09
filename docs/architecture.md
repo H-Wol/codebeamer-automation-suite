@@ -16,7 +16,7 @@
 
 ### 엔트리 포인트
 
-- `cli_main_v2.py`: 실제 사용을 위한 권장 인터랙티브 CLI
+- `cli_main.py`: 실제 사용을 위한 권장 인터랙티브 CLI
 - `cli_main.py`: 비교 및 참고용 레거시 CLI
 - `main.py`: 과거 프로토타입 성격의 엔트리 포인트, 현재 비권장
 
@@ -44,7 +44,7 @@
 - `src/mapping_service.py`
 
 현재 권장:
-- `src/mapping_service_v2.py`
+- `src/mapping_service.py`
 
 주요 책임:
 - tracker schema를 dataframe 형태로 평탄화
@@ -82,7 +82,7 @@ v2 개선점:
 - `src/wizard.py`
 
 현재 권장:
-- `src/wizard_v2.py`
+- `src/wizard.py`
 
 주요 책임:
 - API client, excel processor, mapping service를 조합해 전체 흐름 제어
@@ -108,7 +108,7 @@ v2 개선점:
 
 ## End-to-End 흐름
 
-1. 사용자가 `cli_main_v2.py`를 실행합니다.
+1. 사용자가 `cli_main.py`를 실행합니다.
 2. CLI가 config, logger, client, processor, mapper, wizard를 초기화합니다.
 3. 사용자가 project와 tracker를 선택합니다.
 4. wizard가 Excel을 읽고 dataframe들을 생성합니다.
@@ -159,9 +159,9 @@ reference lookup 처리:
 ## 권장 조합
 
 현재 가장 권장되는 실행 조합:
-- `cli_main_v2.py`
-- `src/mapping_service_v2.py`
-- `src/wizard_v2.py`
+- `cli_main.py`
+- `src/mapping_service.py`
+- `src/wizard.py`
 
 ## UML 문서
 

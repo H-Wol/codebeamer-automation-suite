@@ -3,7 +3,7 @@
 ## 권장 실행 명령
 
 ```bash
-py -3 cli_main_v2.py
+py -3 cli_main.py
 ```
 
 ## 왜 v2를 권장하나

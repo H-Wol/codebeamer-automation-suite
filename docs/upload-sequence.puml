@@ -4,10 +4,10 @@ autonumber
 title Codebeamer Automation Suite - 업로드 시퀀스 (v2)
 
 actor User
-participant "CLI (`cli_main_v2`)" as CLI
-participant "업로드 Wizard (`CodebeamerUploadWizardV2`)" as Wizard
+participant "CLI (`cli_main`)" as CLI
+participant "업로드 Wizard (`CodebeamerUploadWizard`)" as Wizard
 participant "Excel 처리기 (`ExcelHierarchyProcessor`)" as Processor
-participant "매핑 서비스 (`MappingServiceV2`)" as Mapper
+participant "매핑 서비스 (`MappingService`)" as Mapper
 participant "Codebeamer 클라이언트" as Client
 participant "Codebeamer API" as API
 

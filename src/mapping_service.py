@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pandas as pd
 
 
@@ -8,7 +10,7 @@ class MappingService:
         self.logger = logger
 
     @staticmethod
-    def _extract_status_option_ids(fields: list[dict]) -> set[int]:
+    def _extract_status_option_ids(fields: list[dict[str, Any]]) -> set[int]:
         for field in fields:
             tracker_item_field = field.get("trackerItemField")
             field_name = field.get("name")
@@ -22,7 +24,10 @@ class MappingService:
         return set()
 
     @staticmethod
-    def _build_mandatory_metadata(field: dict, all_status_option_ids: set[int]) -> dict:
+    def _build_mandatory_metadata(
+        field: dict[str, Any],
+        all_status_option_ids: set[int],
+    ) -> dict[str, Any]:
         mandatory_statuses = field.get("mandatoryInStatuses") or []
         mandatory_status_ids = {
             status["id"]
@@ -46,13 +51,40 @@ class MappingService:
             ],
         }
 
+    @staticmethod
+    def _is_choice_value_model(value_model: Any) -> bool:
+        return isinstance(value_model, str) and "Choice" in value_model
+
+    @classmethod
+    def _is_option_like_field(cls, field: pd.Series | dict[str, Any]) -> bool:
+        getter = field.get
+        has_options = bool(getter("has_options", False) or getter("options", []))
+        reference_type = getter("reference_type") or getter("referenceType")
+        value_model = getter("value_model") or getter("valueModel")
+        field_type = getter("field_type") or getter("type")
+
+        return (
+            has_options
+            or bool(reference_type)
+            or cls._is_choice_value_model(value_model)
+            or field_type in {"ReferenceField", "OptionChoiceField"}
+        )
+
+    @classmethod
+    def _detect_option_source_kind(cls, field: pd.Series | dict[str, Any]) -> str | None:
+        getter = field.get
+        has_options = bool(getter("has_options", False) or getter("options", []))
+        if has_options:
+            return "schema_options"
+        if cls._is_option_like_field(field):
+            return "reference_lookup"
+        return None
+
     def flatten_schema_fields(self, schema: dict | list) -> pd.DataFrame:
         candidates = []
 
-        # Handle direct list (schema.json format)
         if isinstance(schema, list):
             candidates = schema
-        # Handle dict with fieldDefinitions or fields key
         elif isinstance(schema, dict):
             for key in ["fieldDefinitions", "fields"]:
                 if key in schema and isinstance(schema[key], list):
@@ -62,14 +94,14 @@ class MappingService:
         all_status_option_ids = self._extract_status_option_ids(candidates)
         rows = []
         for field in candidates:
-            mandatory_meta = self._build_mandatory_metadata(field, all_status_option_ids)
-            # Check if field has options (for choice/option fields)
             options = field.get("options", [])
             has_options = len(options) > 0
-
-            # Check if field is TableField
             is_table_field = field.get("type") == "TableField"
             columns = field.get("columns", []) if is_table_field else None
+            reference_type = field.get("referenceType")
+            value_model = field.get("valueModel")
+            mandatory_meta = self._build_mandatory_metadata(field, all_status_option_ids)
+
             if columns:
                 columns = [
                     {
@@ -79,7 +111,7 @@ class MappingService:
                     for column in columns
                 ]
 
-            rows.append({
+            row = {
                 "field_id": field.get("id"),
                 "field_name": field.get("name"),
                 "field_label": field.get("label") or field.get("title"),
@@ -89,15 +121,19 @@ class MappingService:
                 "mandatory_statuses": mandatory_meta["mandatory_statuses"],
                 "mandatory_status_names": mandatory_meta["mandatory_status_names"],
                 "tracker_item_field": field.get("trackerItemField", field.get("name", None)),
-                "value_model": field.get("valueModel"),
-                "reference_type": field.get("referenceType"),
+                "value_model": value_model,
+                "reference_type": reference_type,
                 "has_options": has_options,
                 "multiple_values": field.get("multipleValues", None),
                 "options": options if has_options else None,
                 "is_table_field": is_table_field,
                 "table_columns": columns,
                 "raw": field,
-            })
+            }
+            row["is_option_like"] = self._is_option_like_field(row)
+            row["option_source_kind"] = self._detect_option_source_kind(row)
+            rows.append(row)
+
         return pd.DataFrame(rows)
 
     def compare_upload_df_with_schema(
@@ -125,35 +161,30 @@ class MappingService:
             if mapped_schema_field and schema_exists:
                 matched = schema_df[schema_df["field_name"] == mapped_schema_field]
                 if not matched.empty:
-                    m = matched.iloc[0]
-                    row["field_id"] = m["field_id"]
-                    row["field_label"] = m.get("field_label")
-                    row["field_type"] = m["field_type"]
-                    row["mandatory"] = m["mandatory"]
-                    row["mandatory_mode"] = m.get("mandatory_mode")
-                    row["mandatory_status_names"] = m.get("mandatory_status_names")
-                    row["value_model"] = m["value_model"]
-                    row["reference_type"] = m.get("reference_type")
-                    row["hidden"] = m.get("raw", {}).get("hidden", False)
-                    row["is_option_field"] = m.get("has_options", False) or (m.get("reference_type") is not None) or (
-                        isinstance(m.get("value_model"), str) and "Choice" in m.get("value_model", "")
-                    )
-                    row["tracker_item_field"] = m.get("tracker_item_field")
+                    match = matched.iloc[0]
+                    row["field_id"] = match["field_id"]
+                    row["field_label"] = match.get("field_label")
+                    row["field_type"] = match["field_type"]
+                    row["mandatory"] = match["mandatory"]
+                    row["mandatory_mode"] = match.get("mandatory_mode")
+                    row["mandatory_status_names"] = match.get("mandatory_status_names")
+                    row["value_model"] = match["value_model"]
+                    row["reference_type"] = match.get("reference_type")
+                    row["hidden"] = match.get("raw", {}).get("hidden", False)
+                    row["is_option_field"] = bool(match.get("is_option_like", False))
+                    row["option_source_kind"] = match.get("option_source_kind")
+                    row["tracker_item_field"] = match.get("tracker_item_field")
 
             rows.append(row)
 
         return pd.DataFrame(rows)
 
     def get_option_field_candidates(self, schema_df: pd.DataFrame) -> pd.DataFrame:
-        # Fields with options are those that have:
-        # - reference_type (UserReference, ChoiceOptionReference, TrackerItemReference)
-        # - or valueModel containing "Choice"
-        # - or actual options in the field definition
-        mask = (
-            schema_df["reference_type"].notna() |
-            schema_df["value_model"].astype(str).str.contains("Choice", case=False, na=False) |
-            schema_df["has_options"].fillna(False)
-        )
+        if "is_option_like" in schema_df.columns:
+            mask = schema_df["is_option_like"].fillna(False)
+            return schema_df[mask].copy()
+
+        mask = schema_df.apply(self._is_option_like_field, axis=1)
         return schema_df[mask].copy()
 
     @staticmethod
@@ -172,37 +203,45 @@ class MappingService:
                 result[key] = opt
 
         if duplicates:
-            raise ValueError(f"중복 옵션명이 있습니다: {sorted(duplicates)}")
+            raise ValueError(f"Duplicate option names found: {sorted(duplicates)}")
 
         return result
 
     def build_option_maps_from_schema(self, schema_df: pd.DataFrame) -> dict[str, dict]:
-        """
-        Schema에 정의된 옵션들로부터 option_maps를 생성합니다.
-        Returns: {field_name: {"name_map": {...}, "reference_type": "...", "multiple_values": bool}}
-        """
         option_maps = {}
+        option_fields = self.get_option_field_candidates(schema_df)
 
-        for _, row in schema_df.iterrows():
+        for _, row in option_fields.iterrows():
             field_name = row["field_name"]
             if not field_name:
                 continue
 
-            # options가 있는 경우 (ChoiceOptionField 등)
             options = row.get("options")
             if options and len(options) > 0:
                 try:
                     name_map = self.build_option_name_map(options)
                     option_maps[field_name] = {
+                        "kind": "static_options",
                         "name_map": name_map,
                         "reference_type": row.get("reference_type"),
                         "multiple_values": row.get("multiple_values", False),
                         "options": options,
+                        "source_status": "READY",
                     }
                 except ValueError:
                     if self.logger:
-                        self.logger.warning(f"중복 옵션이 있습니다: {field_name}")
+                        self.logger.warning(f"Duplicate options found in field: {field_name}")
                     continue
+                continue
+
+            option_maps[field_name] = {
+                "kind": "reference_lookup",
+                "name_map": {},
+                "reference_type": row.get("reference_type"),
+                "multiple_values": row.get("multiple_values", False),
+                "options": None,
+                "source_status": "LOOKUP_REQUIRED",
+            }
 
         return option_maps
 
@@ -235,20 +274,31 @@ class MappingService:
                 })
                 continue
 
-            name_map = option_maps[schema_field]["name_map"]
-            multiple_values = option_maps[schema_field].get("multiple_values", False)
+            option_info = option_maps[schema_field]
+            if option_info.get("kind") != "static_options":
+                errors.append({
+                    "df_column": df_col,
+                    "schema_field": schema_field,
+                    "_row_id": None,
+                    "raw_value": None,
+                    "reference_type": option_info.get("reference_type"),
+                    "status": "OPTION_SOURCE_UNAVAILABLE",
+                })
+                continue
+
+            name_map = option_info["name_map"]
+            multiple_values = option_info.get("multiple_values", False)
 
             for _, row in upload_df.iterrows():
                 raw_value = row[df_col]
                 if raw_value is None or str(raw_value).strip() == "":
                     continue
 
-                # multipleValues가 true면 구분자로 분리해서 확인
                 if multiple_values and isinstance(raw_value, list):
                     for val in raw_value:
                         if not val:
                             continue
-                        key = val
+                        key = str(val).strip()
                         if key not in name_map:
                             errors.append({
                                 "_row_id": row.get("_row_id"),
@@ -282,9 +332,14 @@ class MappingService:
             if df_col not in work.columns or schema_field not in option_maps:
                 continue
 
-            name_map = option_maps[schema_field]["name_map"]
-            reference_type = option_maps[schema_field].get("reference_type")
-            multiple_values = option_maps[schema_field].get("multiple_values", False)
+            option_info = option_maps[schema_field]
+            if option_info.get("kind") != "static_options":
+                work[f"{df_col}__resolved"] = [None] * len(work)
+                continue
+
+            name_map = option_info["name_map"]
+            reference_type = option_info.get("reference_type")
+            multiple_values = option_info.get("multiple_values", False)
 
             resolved_values = []
             for _, row in work.iterrows():
@@ -293,40 +348,32 @@ class MappingService:
                     resolved_values.append(None)
                     continue
 
-                # multipleValues가 true면 구분자로 분리
                 if multiple_values and isinstance(raw_value, list):
-                    # 쉼표, 세미콜론, | 등 다양한 구분자 지원
                     resolved_list = []
                     for val in raw_value:
                         if not val:
                             continue
-                        opt = name_map.get(val)
+                        key = str(val).strip()
+                        opt = name_map.get(key)
                         if opt:
-                            ref = {
+                            resolved_list.append({
                                 "id": opt.get("id"),
                                 "name": opt.get("name"),
-                            }
-                            if reference_type:
-                                ref["type"] = reference_type
-                            resolved_list.append(ref)
+                                "type": reference_type or "ChoiceOptionReference",
+                            })
 
                     resolved_values.append(resolved_list if resolved_list else None)
                 else:
-                    # multipleValues가 false면 단일 옵션
                     key = str(raw_value).strip()
                     opt = name_map.get(key)
                     if not opt:
                         resolved_values.append(None)
                         continue
-
-                    ref = {
+                    resolved_values.append({
                         "id": opt.get("id"),
                         "name": opt.get("name"),
-                    }
-                    if reference_type:
-                        ref["type"] = reference_type
-
-                    resolved_values.append(ref)
+                        "type": reference_type or "ChoiceOptionReference",
+                    })
 
             work[f"{df_col}__resolved"] = resolved_values
 

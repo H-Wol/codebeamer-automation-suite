@@ -28,7 +28,7 @@
   `.env` 설정, 실행 방법, Excel 입력 형식, CLI 흐름을 설명합니다.
 
 - [v2 변경 사항](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/docs/v2-changes.md)
-  `mapping_service_v2`, `wizard_v2`, `cli_main_v2` 추가 배경과 개선 포인트를 설명합니다.
+  `mapping_service`, `wizard`, `cli_main` 추가 배경과 개선 포인트를 설명합니다.
 
 - [트러블슈팅](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/docs/troubleshooting.md)
   자주 발생하는 에러와 대응 방법을 정리합니다.
@@ -45,6 +45,6 @@
 
 문서 기준의 권장 코드 경로는 아래와 같습니다.
 
-- [cli_main_v2.py](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/cli_main_v2.py)
-- [mapping_service_v2.py](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/src/mapping_service_v2.py)
-- [wizard_v2.py](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/src/wizard_v2.py)
+- [cli_main.py](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/cli_main.py)
+- [mapping_service.py](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/src/mapping_service.py)
+- [wizard.py](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/src/wizard.py)

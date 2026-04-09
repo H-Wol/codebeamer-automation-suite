@@ -6,7 +6,7 @@ hide empty members
 title Codebeamer Automation Suite - 클래스 및 의존 관계
 
 package "엔트리 포인트" {
-  class cli_main_v2
+  class cli_main
   class cli_main
   class main
 }
@@ -28,7 +28,7 @@ package "핵심 서비스" {
   }
 
   class MappingService
-  class MappingServiceV2 {
+  class MappingService {
     +flatten_schema_fields(schema)
     +compare_upload_df_with_schema(upload_df, schema_df, selected_mapping)
     +get_option_field_candidates(schema_df)
@@ -40,7 +40,7 @@ package "핵심 서비스" {
 
 package "오케스트레이션" {
   class CodebeamerUploadWizard
-  class CodebeamerUploadWizardV2 {
+  class CodebeamerUploadWizard {
     +load_projects()
     +select_project(project_id)
     +load_trackers()
@@ -73,21 +73,21 @@ package "도메인 모델" {
   class WizardState
 }
 
-cli_main_v2 --> CodebeamerUploadWizardV2
-cli_main_v2 --> MappingServiceV2
-cli_main_v2 --> ExcelHierarchyProcessor
-cli_main_v2 --> CodebeamerClient
+cli_main --> CodebeamerUploadWizard
+cli_main --> MappingService
+cli_main --> ExcelHierarchyProcessor
+cli_main --> CodebeamerClient
 
 cli_main --> CodebeamerUploadWizard
 cli_main --> MappingService
 main --> CodebeamerUploadWizard
 
-CodebeamerUploadWizardV2 --> CodebeamerClient
-CodebeamerUploadWizardV2 --> ExcelHierarchyProcessor
-CodebeamerUploadWizardV2 --> MappingServiceV2
-CodebeamerUploadWizardV2 --> WizardState
-CodebeamerUploadWizardV2 --> TrackerItemBase
-CodebeamerUploadWizardV2 --> TableFieldValue
+CodebeamerUploadWizard --> CodebeamerClient
+CodebeamerUploadWizard --> ExcelHierarchyProcessor
+CodebeamerUploadWizard --> MappingService
+CodebeamerUploadWizard --> WizardState
+CodebeamerUploadWizard --> TrackerItemBase
+CodebeamerUploadWizard --> TableFieldValue
 
 CodebeamerUploadWizard --> CodebeamerClient
 CodebeamerUploadWizard --> ExcelHierarchyProcessor

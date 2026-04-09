@@ -1,13 +1,58 @@
 from __future__ import annotations
 
-from src.config import load_config
-from src.logger import setup_logger
+from pathlib import Path
+
+from src.cli_excel_utils import list_sheet_names
+from src.cli_excel_utils import read_headers
+from src.cli_helpers import choose_many
+from src.cli_helpers import choose_one
+from src.cli_helpers import confirm
 from src.codebeamer_client import CodebeamerClient
+from src.config import load_config
 from src.excel_processor import ExcelHierarchyProcessor
+from src.logger import setup_logger
 from src.mapping_service import MappingService
 from src.wizard import CodebeamerUploadWizard
-from src.cli_helpers import choose_one, choose_many, confirm
-from src.cli_excel_utils import list_sheet_names, read_headers
+
+
+def _suggest_excel_path() -> str | None:
+    candidates = [
+        Path("./data/codebeamer_test_data_en_small.xlsx"),
+        Path("./data.xlsx"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _prompt_excel_path() -> str:
+    suggested = _suggest_excel_path()
+    if suggested:
+        raw = input(f"Excel file path (Enter={suggested}): ").strip()
+        return raw or suggested
+    return input("Excel file path: ").strip()
+
+
+def _auto_match_columns(upload_columns: list[str], schema_field_names: set[str]) -> dict[str, str]:
+    selected_mapping: dict[str, str] = {}
+
+    for col in upload_columns:
+        matched_field = None
+
+        if col in schema_field_names:
+            matched_field = col
+        else:
+            for schema_field in schema_field_names:
+                if col.lower() == schema_field.lower():
+                    matched_field = schema_field
+                    break
+
+        if matched_field and confirm(f"Map '{col}' -> '{matched_field}'?", default=True):
+            selected_mapping[col] = matched_field
+            print(f"  mapped: {col} -> {matched_field}")
+
+    return selected_mapping
 
 
 def main():
@@ -15,7 +60,6 @@ def main():
     logger = setup_logger("cb-cli", level=cfg.log_level)
 
     client = CodebeamerClient(cfg.base_url, cfg.username, cfg.password, logger)
-
     wizard = CodebeamerUploadWizard(
         client=client,
         processor=None,
@@ -24,36 +68,29 @@ def main():
     )
 
     projects = wizard.load_projects()
-    p_idx = choose_one("프로젝트 선택", [p["name"] for p in projects])
-    wizard.select_project(projects[p_idx]["id"])
+    project_index = choose_one("프로젝트 선택", [p["name"] for p in projects])
+    wizard.select_project(projects[project_index]["id"])
 
     trackers = wizard.load_trackers()
-    t_idx = choose_one("트래커 선택", [t["name"] for t in trackers])
+    tracker_index = choose_one("트래커 선택", [t["name"] for t in trackers])
+    tracker_id = trackers[tracker_index]["id"]
+    wizard.select_tracker(tracker_id)
 
-    items = wizard.load_tracker_items(trackers[t_idx]["id"])
-    wizard.select_tracker(trackers[t_idx]["id"])
-
-    file_path = "./data/codebeamer_test_data_en_small.xlsx"
-    # TODO
-    # file_path = input("Excel 파일 경로 입력: ").strip()
-
+    file_path = _prompt_excel_path()
     sheet_names = list_sheet_names(file_path)
-    s_idx = choose_one("시트 선택", sheet_names)
-    sheet_name = sheet_names[s_idx]
+    sheet_index = choose_one("시트 선택", sheet_names)
+    sheet_name = sheet_names[sheet_index]
 
-    headers = read_headers(file_path, sheet_name,
-                           header_row=cfg.excel_header_row)
-
-    summary_col = [col for col in headers if "summary" ==
-                   col.lower() or "요약" == col]
-    if summary_col:
-        summary_col = summary_col[0]
-        print(f"자동으로 '{summary_col}' 컬럼이 요약 컬럼으로 선택되었습니다.")
+    headers = read_headers(file_path, sheet_name, header_row=cfg.excel_header_row)
+    summary_candidates = [col for col in headers if col.lower() == "summary" or col == "요약"]
+    if summary_candidates:
+        summary_col = summary_candidates[0]
+        print(f"자동으로 요약 컬럼을 '{summary_col}' 로 선택했습니다.")
     else:
-        summary_idx = choose_one("요약 컬럼 선택", headers)
-        summary_col = headers[summary_idx]
+        summary_index = choose_one("요약 컬럼 선택", headers)
+        summary_col = headers[summary_index]
 
-    list_indices = choose_many("list로 묶을 컬럼 선택", headers)
+    list_indices = choose_many("list 로 묶을 컬럼 선택", headers)
     list_cols = [headers[i] for i in list_indices]
 
     wizard.processor = ExcelHierarchyProcessor(
@@ -62,86 +99,79 @@ def main():
         logger=logger,
     )
 
-    wizard.read_excel(file_path=file_path,
-                      sheet_name=sheet_name, list_cols=list_cols)
+    wizard.read_excel(file_path=file_path, sheet_name=sheet_name, list_cols=list_cols)
 
-    print("\n[컬럼 목록]")
+    print("\n[업로드 컬럼 목록]")
     for col in wizard.state.upload_df.columns:
         print("-", col)
 
-    # 스키마 로드 및 스캐마 필드명 목록 생성
     tracker_schema = wizard.client.get_tracker_schema(wizard.state.tracker_id)
     schema_df = wizard.mapper.flatten_schema_fields(tracker_schema)
-    schema_field_names = set(
-        schema_df["field_name"].dropna().astype(str).str.strip())
+    schema_field_names = set(schema_df["field_name"].dropna().astype(str).str.strip())
 
-    selected_mapping = {}
-    auto_matched = 0
-    for col in wizard.state.upload_df.columns:
-        matched_field = None
+    print("\n[컬럼 자동 매핑 확인]")
+    selected_mapping = _auto_match_columns(list(wizard.state.upload_df.columns), schema_field_names)
 
-        # 이름이 정확히 일치하는 필드가 있으면 확인
-        if col in schema_field_names:
-            matched_field = col
-        else:
-            # 대소문자 무시하고 매칭 시도
-            for schema_field in schema_field_names:
-                if col.lower() == schema_field.lower():
-                    matched_field = schema_field
-                    break
+    comparison_df = wizard.load_schema_and_compare(selected_mapping)
+    print("\n[Schema Comparison]")
+    print(comparison_df[["df_column", "selected_schema_field", "status"]])
 
-        if matched_field:
-            # 자동 매칭된 필드 확인
-            if confirm(f"{col} -> {matched_field} 로 매칭할까요?"):
-                selected_mapping[col] = matched_field
-                print(f"✓ {col} -> {matched_field} (매칭됨)")
-                auto_matched += 1
-            # 사용자가 거절하면 스킵
-
-    if auto_matched > 0:
-        print(f"\n[총 {auto_matched}개 컬럼 매칭됨]")
-
-    comp = wizard.load_schema_and_compare(selected_mapping)
-    print(comp[["df_column", "selected_schema_field", "status"]])
-
-    # TableField 컬럼 정보 출력
     if wizard.state.table_field_mapping:
         print("\n[자동 감지된 TableField 컬럼]")
         for df_col, tf_info in wizard.state.table_field_mapping.items():
-            print(
-                f"✓ {df_col} -> {tf_info['table_field_name']}.{tf_info['column_name']}"
-            )
+            print(f"- {df_col} -> {tf_info['table_field_name']}.{tf_info['column_name']}")
     else:
-        print("\n[TableField 컬럼이 감지되지 않았습니다]")
+        print("\n[감지된 TableField 컬럼 없음]")
 
-    # 옵션 필드 매핑 처리 (wizard에서 자동 처리 + 확인)
-    print("\n[옵션 필드 처리 중...]")
-    selected_option_mapping, option_check_df = wizard.process_option_mapping(
-        selected_mapping
-    )
+    print("\n[옵션/참조형 필드 처리 중]")
+    selected_option_mapping, option_check_df = wizard.process_option_mapping(selected_mapping)
 
     if selected_option_mapping:
-        print(f"✓ {len(selected_option_mapping)}개 옵션 필드 변환 설정됨")
+        print(f"자동 감지된 옵션/참조형 필드 수: {len(selected_option_mapping)}")
 
         if not option_check_df.empty:
-            print("\n⚠ 옵션 정렬 오류:")
+            print("\n[옵션 검증 결과]")
             print(option_check_df)
 
-            if not confirm("옵션 정렬 오류가 있습니다. 계속 진행할까요?"):
+            unavailable_df = option_check_df[option_check_df["status"] == "OPTION_SOURCE_UNAVAILABLE"]
+            if not unavailable_df.empty:
+                print("\n참조 lookup 이 필요한 필드가 있습니다. 값이 있는 행은 payload 생성 또는 업로드 시 실패할 수 있습니다.")
+
+            if not confirm("검증 결과를 확인했습니다. 계속 진행할까요?", default=False):
                 return
-
-        print("✓ 옵션 변환 완료")
+        else:
+            print("옵션/참조형 필드 검증 통과")
     else:
-        print("ℹ 옵션 변환이 필요 없습니다")
-    is_dry = confirm("Dry run으로 진행할까요? (실제 업로드는 하지 않고 결과만 보여줌)")
-    result = wizard.upload(dry_run=is_dry)
-    print(result)
+        print("옵션/참조형 필드 매핑 대상이 없습니다.")
 
-    save_path = input(
-        "업로드 결과를 저장할 Excel 파일 경로 입력 (skip=저장 안함): "
-    ).strip()
-    if save_path:
-        wizard.save_state(save_path)
+    preview_row_id = int(wizard.state.upload_df["_row_id"].min())
+    print(f"\n[Payload Preview row_id={preview_row_id}]")
+    print(wizard.preview_payload(preview_row_id))
+
+    is_dry = confirm("Dry run으로 진행할까요?", default=True)
+    result = wizard.upload(dry_run=is_dry)
+
+    print("\n[Upload Result]")
+    success_df = result["success_df"]
+    failed_df = result["failed_df"]
+    unresolved_df = result["unresolved_df"]
+    print(f"success={len(success_df)}, failed={len(failed_df)}, unresolved={len(unresolved_df)}")
+
+    if not success_df.empty:
+        print("\n[Success Preview]")
+        print(success_df.head(20))
+
+    if not failed_df.empty:
+        print("\n[Failed Preview]")
+        print(failed_df.head(20))
+
+    if not unresolved_df.empty:
+        print("\n[Unresolved Preview]")
+        print(unresolved_df.head(20))
+
+    if confirm(f"상태를 '{cfg.output_dir}' 디렉터리에 저장할까요?", default=True):
+        wizard.save_state(cfg.output_dir)
+        print(f"저장 완료: {cfg.output_dir}")
 
 
 if __name__ == "__main__":
