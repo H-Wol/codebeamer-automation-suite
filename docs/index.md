@@ -1,50 +1,42 @@
 # 문서 허브
 
-이 문서는 `Codebeamer Automation Suite` 문서의 시작점입니다.
+`Codebeamer Automation Suite` 문서의 시작점입니다.
 
 ## 권장 읽기 순서
 
-1. [README](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/README.md)
-2. [아키텍처](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/docs/architecture.md)
-3. [CLI 사용 가이드](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/docs/cli-guide.md)
-4. [v2 변경 사항](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/docs/v2-changes.md)
-5. [트러블슈팅](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/docs/troubleshooting.md)
-
-## UML 문서
-
-- [클래스/의존 관계 UML](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/docs/class-diagram.puml)
-- [업로드 시퀀스 UML](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/docs/upload-sequence.puml)
-- [UML 렌더링 가이드](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/docs/render-uml.md)
+1. [README](../README.md)
+2. [아키텍처](./architecture.md)
+3. [CLI 사용 가이드](./cli-guide.md)
+4. [트러블슈팅](./troubleshooting.md)
+5. [v2 변경 사항](./v2-changes.md)
 
 ## 문서별 역할
 
-- [README](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/README.md)
-  저장소 소개, 빠른 시작, 권장 실행 경로를 요약합니다.
+- [README](../README.md)
+  저장소 소개, 빠른 시작, 현재 기본 실행 경로를 요약합니다.
 
-- [아키텍처](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/docs/architecture.md)
-  코드 구조, 모듈 책임, 상태 흐름, 주요 처리 방식을 설명합니다.
+- [아키텍처](./architecture.md)
+  코드 구조, 모듈 책임, 상태 모델, 최신 업로드 순서도를 설명합니다.
 
-- [CLI 사용 가이드](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/docs/cli-guide.md)
-  `.env` 설정, 실행 방법, Excel 입력 형식, CLI 흐름을 설명합니다.
+- [CLI 사용 가이드](./cli-guide.md)
+  실행 방법, Excel 입력 형식, 자동 매핑과 자동 list 컬럼 선택 흐름을 설명합니다.
 
-- [v2 변경 사항](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/docs/v2-changes.md)
-  `mapping_service`, `wizard`, `cli_main` 추가 배경과 개선 포인트를 설명합니다.
-
-- [트러블슈팅](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/docs/troubleshooting.md)
+- [트러블슈팅](./troubleshooting.md)
   자주 발생하는 에러와 대응 방법을 정리합니다.
 
-## 권장 기준 문서
+- [v2 변경 사항](./v2-changes.md)
+  예전 `v2` 도입 배경과 이후 원본 경로에 반영된 주요 개선 이력을 기록합니다.
 
-현재 유지보수와 실행 기준으로 가장 먼저 참고하면 좋은 문서는 아래입니다.
+## UML 및 흐름 문서
 
-- [README](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/README.md)
-- [아키텍처](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/docs/architecture.md)
-- [v2 변경 사항](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/docs/v2-changes.md)
+- [클래스/의존 관계 UML](./class-diagram.puml)
+- [업로드 시퀀스 UML](./upload-sequence.puml)
+- [UML 렌더링 가이드](./render-uml.md)
+- 최신 mermaid 업로드 순서도는 [아키텍처 문서](./architecture.md)에 포함되어 있습니다.
 
-## 권장 코드 경로
+## 현재 기준 권장 코드 경로
 
-문서 기준의 권장 코드 경로는 아래와 같습니다.
-
-- [cli_main.py](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/cli_main.py)
-- [mapping_service.py](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/src/mapping_service.py)
-- [wizard.py](/c:/Users/rasen/Desktop/a/codebeamer-automation-suite/src/wizard.py)
+- `cli_main.py`
+- `src/mapping_service.py`
+- `src/wizard.py`
+- `src/models/`

@@ -1,4 +1,4 @@
-﻿# CLI 사용 가이드
+# CLI 사용 가이드
 
 ## 권장 실행 명령
 
@@ -6,12 +6,13 @@
 py -3 cli_main.py
 ```
 
-## 왜 v2를 권장하나
+## 현재 CLI 특징
 
-v2 경로에는 다음 개선이 들어 있습니다.
-- `TableFieldValue` payload 직렬화 안정화
-- option/reference 필드 감지 범위 확장
-- reference lookup 필요 필드에 대한 명시적 경고와 실패 처리
+- tracker schema를 먼저 읽고 Excel 헤더와의 자동 매핑을 확인합니다.
+- schema의 `multipleValues=true` 필드에 매핑된 Excel 컬럼은 자동으로 list 컬럼으로 처리합니다.
+- 정적 option 필드는 reference payload로 자동 변환합니다.
+- `UserReference` 필드는 user info를 조회한 뒤 reference로 바꾸고, 같은 사용자에 대한 lookup 결과는 프로젝트 단위로 캐시합니다.
+- payload preview를 확인한 뒤 dry-run 또는 실제 업로드를 수행할 수 있습니다.
 
 ## 요구 사항
 
@@ -56,10 +57,11 @@ OUTPUT_DIR=output
 ## 기대하는 Excel 형식
 
 CLI는 다음 구조를 전제로 합니다.
+
 - 하나의 summary 컬럼이 논리 레코드의 제목 역할을 함
 - summary 셀의 들여쓰기로 계층 표현
 - 여러 물리적 행이 하나의 논리 레코드를 표현할 수 있음
-- list처럼 취급할 컬럼은 실행 중 선택 가능
+- list처럼 취급할 컬럼은 수동 선택이 아니라 schema의 `multipleValues=true` 여부와 컬럼 매핑 결과로 자동 결정됨
 - `TableField` 는 `TableFieldName.ColumnName` 형식 헤더 사용
 
 ## 인터랙티브 흐름
@@ -68,23 +70,34 @@ CLI는 다음 구조를 전제로 합니다.
 2. tracker 선택
 3. Excel 파일 및 sheet 선택
 4. summary 컬럼 자동 감지 또는 수동 선택
-5. list 컬럼 선택
-6. Excel과 schema의 자동 매핑 확인
-7. option/reference 필드 검증 결과 확인
-8. payload preview 확인
-9. dry-run 또는 실제 업로드 수행
-10. 실행 결과 저장 여부 선택
+5. tracker schema 조회
+6. Excel 헤더와 schema의 자동 매핑 확인
+7. `multipleValues=true` 필드에 대응하는 list 컬럼 자동 선택
+8. Excel 읽기, 멀티라인 병합, 계층 생성
+9. schema 비교 결과 확인
+10. option/reference 필드 검증 결과 확인
+11. `UserReference` 가 있으면 user info 조회 및 캐시 반영
+12. payload preview 확인
+13. dry-run 또는 실제 업로드 수행
+14. 실행 결과 저장 여부 선택
 
 ## 산출물
 
 wizard는 다음 결과를 저장할 수 있습니다.
-- upload dataframe 스냅샷
-- schema dataframe 스냅샷
-- option 검증 결과
-- success, failure, unresolved row 목록
-- 생성된 item id 매핑
+
+- `raw_df`, `merged_df`, `hierarchy_df`, `upload_df`
+- `converted_upload_df`
+- `schema_df`, `comparison_df`
+- `option_check_df`
+- `success_df`, `failed_df`, `unresolved_df`
+- `schema.json`, `option_maps.json`, `created_map.json`
+
+## lookup 관련 참고
+
+- `UserReference` lookup 결과는 `__resolved`, `__user_info`, `__lookup_status`, `__lookup_error` 컬럼에 반영됩니다.
+- 같은 프로젝트 안에서 동일한 이름, 이메일, 풀네임 조합은 재사용 캐시로 처리됩니다.
+- 정적 option이 없는 일반 reference field는 아직 자동 lookup을 모두 지원하지 않습니다.
 
 ## 레거시 엔트리 포인트
 
-- `cli_main.py`: 레거시 CLI, 참고용
 - `main.py`: 과거 엔트리 포인트, 현재 비권장
