@@ -21,6 +21,16 @@ class MappingService:
         self.logger = logger
 
     @staticmethod
+    def _is_truthy_flag(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return value.strip().lower() == "true"
+        return bool(value)
+
+    @staticmethod
     def _extract_status_option_ids(fields: list[dict[str, Any]]) -> set[int]:
         for field in fields:
             tracker_item_field = field.get("trackerItemField")
@@ -208,6 +218,26 @@ class MappingService:
 
         mask = schema_df.apply(self._is_option_like_field, axis=1)
         return schema_df[mask].copy()
+
+    def get_list_columns_for_mapping(
+        self,
+        selected_mapping: dict[str, str],
+        schema_df: pd.DataFrame,
+    ) -> list[str]:
+        if schema_df.empty or not selected_mapping:
+            return []
+
+        multiple_value_fields = {
+            row["field_name"]
+            for _, row in schema_df.iterrows()
+            if row.get("field_name") and self._is_truthy_flag(row.get("multiple_values"))
+        }
+
+        return [
+            df_col
+            for df_col, schema_field in selected_mapping.items()
+            if schema_field in multiple_value_fields
+        ]
 
     @staticmethod
     def build_option_name_map(options: list[dict]) -> dict:

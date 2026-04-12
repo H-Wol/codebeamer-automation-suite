@@ -28,5 +28,6 @@ class WizardState:
     selected_mapping: dict[str, str] = field(default_factory=dict)
     selected_option_mapping: dict[str, str] = field(default_factory=dict)
     table_field_mapping: dict[str, dict[str, Any]] = field(default_factory=dict)
+    list_cols: list[str] = field(default_factory=list)
 
     upload_result: dict[str, Any] | None = None

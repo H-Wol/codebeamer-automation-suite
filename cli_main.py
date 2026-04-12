@@ -4,7 +4,6 @@ from pathlib import Path
 
 from src.cli_excel_utils import list_sheet_names
 from src.cli_excel_utils import read_headers
-from src.cli_helpers import choose_many
 from src.cli_helpers import choose_one
 from src.cli_helpers import confirm
 from src.codebeamer_client import CodebeamerClient
@@ -91,8 +90,20 @@ def main():
         summary_index = choose_one("요약 컬럼 선택", headers)
         summary_col = headers[summary_index]
 
-    list_indices = choose_many("list 로 묶을 컬럼 선택", headers)
-    list_cols = [headers[i] for i in list_indices]
+    tracker_schema = wizard.client.get_tracker_schema(wizard.state.tracker_id)
+    schema_df = wizard.mapper.flatten_schema_fields(tracker_schema)
+    schema_field_names = set(schema_df["field_name"].dropna().astype(str).str.strip())
+
+    print("\n[컬럼 자동 매핑 확인]")
+    selected_mapping = _auto_match_columns(headers, schema_field_names)
+
+    list_cols = wizard.mapper.get_list_columns_for_mapping(selected_mapping, schema_df)
+    if list_cols:
+        print("\n[multipleValues 기준 자동 선택된 list 컬럼]")
+        for col in list_cols:
+            print("-", col)
+    else:
+        print("\n[multipleValues 기준 자동 선택된 list 컬럼 없음]")
 
     wizard.processor = ExcelHierarchyProcessor(
         header_row=cfg.excel_header_row,
@@ -105,13 +116,6 @@ def main():
     print("\n[업로드 컬럼 목록]")
     for col in wizard.state.upload_df.columns:
         print("-", col)
-
-    tracker_schema = wizard.client.get_tracker_schema(wizard.state.tracker_id)
-    schema_df = wizard.mapper.flatten_schema_fields(tracker_schema)
-    schema_field_names = set(schema_df["field_name"].dropna().astype(str).str.strip())
-
-    print("\n[컬럼 자동 매핑 확인]")
-    selected_mapping = _auto_match_columns(list(wizard.state.upload_df.columns), schema_field_names)
 
     comparison_df = wizard.load_schema_and_compare(selected_mapping)
     print("\n[Schema Comparison]")
