@@ -33,6 +33,7 @@ from .references import TrackerPermissionReference
 from .references import TrackerReference
 from .references import UserReference
 from .tracker_item import TrackerItemBase
+from .user_info import UserInfo
 from .wizard_state import WizardState
 
 __all__ = [
@@ -69,6 +70,7 @@ __all__ = [
     "TrackerReference",
     "UploadStatus",
     "USER_SEARCH_RESULT_KEYS",
+    "UserInfo",
     "UserReference",
     "UserLookupStatus",
     "WizardState",

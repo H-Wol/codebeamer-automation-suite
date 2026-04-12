@@ -18,9 +18,12 @@ from .models import TableFieldValue
 from .models import TextFieldValue
 from .models import TrackerItemBase
 from .models import UploadStatus
-from .models import USER_SEARCH_RESULT_KEYS
+from .models import UserInfo
 from .models import UserLookupStatus
 from .models import WizardState
+
+
+UserLookupCacheEntry = tuple[dict[str, Any] | None, dict[str, Any] | None, str, str | None]
 
 
 class CodebeamerUploadWizard:
@@ -41,6 +44,8 @@ class CodebeamerUploadWizard:
         return self.client.get_projects()
 
     def select_project(self, project_id: int) -> None:
+        if self.state.project_id != project_id:
+            self.state.user_lookup_cache.clear()
         self.state.project_id = project_id
 
     def load_trackers(self) -> list[dict]:
@@ -141,37 +146,65 @@ class CodebeamerUploadWizard:
         return bool(local_part and domain)
 
     @staticmethod
-    def _extract_user_candidates(data: Any) -> list[dict[str, Any]]:
-        if isinstance(data, list):
-            return [item for item in data if isinstance(item, dict)]
-        if isinstance(data, dict):
-            for key in USER_SEARCH_RESULT_KEYS:
-                value = data.get(key)
-                if isinstance(value, list):
-                    return [item for item in value if isinstance(item, dict)]
-        return []
+    def _http_status_code(exc: Exception) -> int | None:
+        response = getattr(exc, "response", None)
+        return getattr(response, "status_code", None)
+
+    def _user_lookup_cache_key(self, value: Any) -> tuple[int | None, str]:
+        return (self.state.project_id, self._normalize_lookup_text(value).casefold())
+
+    @classmethod
+    def _user_lookup_aliases(cls, user_info: dict[str, Any] | None) -> set[str]:
+        if not user_info:
+            return set()
+
+        alias_candidates = [
+            user_info.get("name"),
+            user_info.get("email"),
+            f"{user_info.get('firstName') or ''} {user_info.get('lastName') or ''}",
+        ]
+        return {
+            normalized.casefold()
+            for value in alias_candidates
+            if (normalized := cls._normalize_lookup_text(value))
+        }
+
+    def _cache_user_lookup_entry(
+        self,
+        lookup_text: str,
+        entry: UserLookupCacheEntry,
+    ) -> UserLookupCacheEntry:
+        cache_key = self._user_lookup_cache_key(lookup_text)
+        self.state.user_lookup_cache[cache_key] = entry
+
+        resolved, user_info, _, _ = entry
+        if resolved is not None and user_info is not None:
+            for alias in self._user_lookup_aliases(user_info):
+                self.state.user_lookup_cache[(self.state.project_id, alias)] = entry
+
+        return entry
 
     @classmethod
     def _select_exact_user_matches(
         cls,
-        candidates: list[dict[str, Any]],
+        candidates: list[UserInfo],
         lookup_text: str,
         *,
         use_email: bool,
-    ) -> list[dict[str, Any]]:
+    ) -> list[UserInfo]:
         normalized_lookup = lookup_text.casefold()
-        exact_matches: list[dict[str, Any]] = []
+        exact_matches: list[UserInfo] = []
 
         for candidate in candidates:
             if use_email:
-                email = cls._normalize_lookup_text(candidate.get("email", ""))
+                email = cls._normalize_lookup_text(candidate.email)
                 if email.casefold() == normalized_lookup:
                     exact_matches.append(candidate)
                 continue
 
-            name = cls._normalize_lookup_text(candidate.get("name", ""))
+            name = cls._normalize_lookup_text(candidate.name)
             full_name = cls._normalize_lookup_text(
-                f"{candidate.get('firstName', '')} {candidate.get('lastName', '')}"
+                f"{candidate.firstName or ''} {candidate.lastName or ''}"
             )
             if name.casefold() == normalized_lookup or full_name.casefold() == normalized_lookup:
                 exact_matches.append(candidate)
@@ -179,48 +212,70 @@ class CodebeamerUploadWizard:
         return exact_matches
 
     @staticmethod
-    def _to_user_reference(candidate: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "id": candidate.get("id"),
-            "name": candidate.get("name"),
-            "type": ReferenceType.USER.value,
-            "email": candidate.get("email"),
-        }
+    def _to_user_reference(candidate: UserInfo) -> dict[str, Any]:
+        reference = candidate.to_reference()
+        reference.type = ReferenceType.USER.value
+        return reference.to_dict()
 
     def _lookup_user_reference(
         self,
         raw_value: Any,
-        cache: dict[tuple[int | None, str], tuple[dict[str, Any] | None, str, str | None]],
-    ) -> tuple[dict[str, Any] | None, str, str | None]:
+    ) -> UserLookupCacheEntry:
         lookup_text = self._normalize_lookup_text(raw_value)
-        cache_key = (self.state.project_id, lookup_text.casefold())
-        if cache_key in cache:
-            return cache[cache_key]
+        cache_key = self._user_lookup_cache_key(lookup_text)
+        if cache_key in self.state.user_lookup_cache:
+            return self.state.user_lookup_cache[cache_key]
 
         use_email = self._looks_like_email(lookup_text)
 
         try:
-            result = self.client.search_users(
+            direct_match: UserInfo | None = None
+
+            try:
+                direct_match = (
+                    self.client.get_user_by_email(lookup_text)
+                    if use_email
+                    else self.client.get_user_by_name(lookup_text)
+                )
+            except Exception as exc:
+                if self._http_status_code(exc) not in {404, None}:
+                    raise
+
+            if direct_match is not None:
+                resolved = self._to_user_reference(direct_match)
+                user_info = direct_match.to_dict()
+                return self._cache_user_lookup_entry(
+                    lookup_text,
+                    (resolved, user_info, UserLookupStatus.RESOLVED.value, None),
+                )
+
+            candidates = self.client.search_user_infos(
                 email=lookup_text if use_email else None,
                 name=None if use_email else lookup_text,
                 project_id=self.state.project_id,
             )
-            candidates = self._extract_user_candidates(result)
             matches = self._select_exact_user_matches(candidates, lookup_text, use_email=use_email)
 
             if len(matches) == 1:
                 resolved = self._to_user_reference(matches[0])
-                cache[cache_key] = (resolved, UserLookupStatus.RESOLVED.value, None)
-                return cache[cache_key]
+                user_info = matches[0].to_dict()
+                return self._cache_user_lookup_entry(
+                    lookup_text,
+                    (resolved, user_info, UserLookupStatus.RESOLVED.value, None),
+                )
 
             if not matches:
-                cache[cache_key] = (None, UserLookupStatus.USER_NOT_FOUND.value, None)
-                return cache[cache_key]
+                return self._cache_user_lookup_entry(
+                    lookup_text,
+                    (None, None, UserLookupStatus.USER_NOT_FOUND.value, None),
+                )
 
-            match_names = [self._normalize_lookup_text(item.get("name", "")) for item in matches[:5]]
+            match_names = [self._normalize_lookup_text(item.name) for item in matches[:5]]
             error_message = f"Multiple users matched {lookup_text!r}: {match_names}"
-            cache[cache_key] = (None, UserLookupStatus.USER_LOOKUP_AMBIGUOUS.value, error_message)
-            return cache[cache_key]
+            return self._cache_user_lookup_entry(
+                lookup_text,
+                (None, None, UserLookupStatus.USER_LOOKUP_AMBIGUOUS.value, error_message),
+            )
         except Exception as exc:
             error_message = ""
             if hasattr(exc, "response") and exc.response is not None:
@@ -230,29 +285,37 @@ class CodebeamerUploadWizard:
                     error_message = str(exc)
             else:
                 error_message = str(exc)
-            cache[cache_key] = (None, UserLookupStatus.USER_LOOKUP_FAILED.value, error_message)
-            return cache[cache_key]
+            return self._cache_user_lookup_entry(
+                lookup_text,
+                (None, None, UserLookupStatus.USER_LOOKUP_FAILED.value, error_message),
+            )
 
     def _resolve_user_reference_value(
         self,
         raw_value: Any,
         *,
         multiple_values: bool,
-        cache: dict[tuple[int | None, str], tuple[dict[str, Any] | None, str, str | None]],
-    ) -> tuple[Any, str | None, str | None]:
+    ) -> tuple[Any, Any, str | None, str | None]:
         if multiple_values and isinstance(raw_value, list):
             resolved_values = []
+            user_infos = []
             for item in raw_value:
                 if item is None or self._normalize_lookup_text(item) == "":
                     continue
-                resolved, status, error = self._lookup_user_reference(item, cache)
+                resolved, user_info, status, error = self._lookup_user_reference(item)
                 if resolved is None:
-                    return None, status, error
+                    return None, None, status, error
                 resolved_values.append(resolved)
-            return (resolved_values if resolved_values else None), UserLookupStatus.RESOLVED.value, None
+                user_infos.append(user_info)
+            return (
+                resolved_values if resolved_values else None,
+                user_infos if user_infos else None,
+                UserLookupStatus.RESOLVED.value,
+                None,
+            )
 
-        resolved, status, error = self._lookup_user_reference(raw_value, cache)
-        return resolved, status, error
+        resolved, user_info, status, error = self._lookup_user_reference(raw_value)
+        return resolved, user_info, status, error
 
     def _resolve_user_reference_fields(
         self,
@@ -261,7 +324,6 @@ class CodebeamerUploadWizard:
         option_maps: dict[str, dict],
     ) -> pd.DataFrame:
         work = upload_df.copy()
-        cache: dict[tuple[int | None, str], tuple[dict[str, Any] | None, str, str | None]] = {}
 
         for df_col, schema_field in option_mapping.items():
             option_info = option_maps.get(schema_field, {})
@@ -269,6 +331,7 @@ class CodebeamerUploadWizard:
                 continue
 
             resolved_values = []
+            user_infos = []
             statuses = []
             errors = []
             multiple_values = option_info.get("multiple_values", False)
@@ -277,20 +340,22 @@ class CodebeamerUploadWizard:
                 raw_value = row[df_col]
                 if raw_value is None or (isinstance(raw_value, str) and raw_value.strip() == ""):
                     resolved_values.append(None)
+                    user_infos.append(None)
                     statuses.append(None)
                     errors.append(None)
                     continue
 
-                resolved, status, error = self._resolve_user_reference_value(
+                resolved, user_info, status, error = self._resolve_user_reference_value(
                     raw_value,
                     multiple_values=multiple_values,
-                    cache=cache,
                 )
                 resolved_values.append(resolved)
+                user_infos.append(user_info)
                 statuses.append(status)
                 errors.append(error)
 
             work[f"{df_col}__resolved"] = resolved_values
+            work[f"{df_col}__user_info"] = user_infos
             work[f"{df_col}__lookup_status"] = statuses
             work[f"{df_col}__lookup_error"] = errors
 
