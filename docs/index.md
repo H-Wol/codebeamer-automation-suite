@@ -7,8 +7,9 @@
 1. [README](../README.md)
 2. [아키텍처](./architecture.md)
 3. [CLI 사용 가이드](./cli-guide.md)
-4. [트러블슈팅](./troubleshooting.md)
-5. [v2 변경 사항](./v2-changes.md)
+4. [필드 지원 추가 가이드](./field-support-guide.md)
+5. [트러블슈팅](./troubleshooting.md)
+6. [v2 변경 사항](./v2-changes.md)
 
 ## 문서별 역할
 
@@ -20,6 +21,9 @@
 
 - [CLI 사용 가이드](./cli-guide.md)
   실행 방법, Excel 입력 형식, 자동 매핑과 자동 list 컬럼 선택 흐름을 설명합니다.
+
+- [필드 지원 추가 가이드](./field-support-guide.md)
+  새로운 schema field type 또는 reference field를 지원할 때 수정해야 하는 코드 경로와 구현 순서를 설명합니다.
 
 - [트러블슈팅](./troubleshooting.md)
   자주 발생하는 에러와 대응 방법을 정리합니다.

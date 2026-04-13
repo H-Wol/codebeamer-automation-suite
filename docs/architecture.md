@@ -56,6 +56,9 @@
 - `UserReference` 는 별도 lookup 대상으로 분류
 - 정적 option이 없는 일반 reference field는 `OPTION_SOURCE_UNAVAILABLE` 로 명시적으로 드러냄
 
+확장 참고:
+- 새로운 field type 지원 절차는 [필드 지원 추가 가이드](./field-support-guide.md)에 정리되어 있습니다.
+
 ### payload 모델과 상태
 
 `src/models/`
