@@ -14,6 +14,7 @@ from src.wizard import CodebeamerUploadWizard
 
 class TrackerItemPreconstructionTest(unittest.TestCase):
     def test_set_field_value_sets_builtin_direct_scalar(self) -> None:
+        """builtin direct 필드는 값이 바로 기본 속성에 들어가야 한다."""
         item = TrackerItemBase()
 
         item.set_field_value(
@@ -31,6 +32,7 @@ class TrackerItemPreconstructionTest(unittest.TestCase):
         self.assertEqual(item.name, "REQ-001")
 
     def test_set_field_value_builds_custom_field_value(self) -> None:
+        """custom field는 알맞은 FieldValue 객체로 감싸져야 한다."""
         item = TrackerItemBase()
 
         item.set_field_value(
@@ -53,6 +55,7 @@ class TrackerItemPreconstructionTest(unittest.TestCase):
         self.assertTrue(payload["customFields"][0]["value"])
 
     def test_set_field_value_builds_builtin_reference_list(self) -> None:
+        """builtin 다중 reference 필드는 reference 목록으로 저장돼야 한다."""
         item = TrackerItemBase()
 
         item.set_field_value(
@@ -74,6 +77,7 @@ class TrackerItemPreconstructionTest(unittest.TestCase):
         self.assertEqual(payload["assignedTo"][0]["type"], ReferenceType.USER.value)
 
     def test_set_field_value_rejects_unsupported_field(self) -> None:
+        """지원하지 않는 필드는 payload 생성 전에 바로 거부해야 한다."""
         item = TrackerItemBase()
 
         with self.assertRaisesRegex(ValueError, "unsupported"):
@@ -93,6 +97,7 @@ class TrackerItemPreconstructionTest(unittest.TestCase):
 
 class WizardPayloadResolutionTest(unittest.TestCase):
     def setUp(self) -> None:
+        """payload preview 테스트에 쓸 wizard를 준비한다."""
         self.mapper = MappingService()
         self.wizard = CodebeamerUploadWizard(
             client=None,
@@ -101,6 +106,7 @@ class WizardPayloadResolutionTest(unittest.TestCase):
         )
 
     def test_preview_payload_fails_early_for_generic_reference_without_resolver(self) -> None:
+        """resolver가 없는 generic reference는 preview 단계에서 즉시 실패해야 한다."""
         self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
             {
                 "id": 3,
@@ -121,6 +127,7 @@ class WizardPayloadResolutionTest(unittest.TestCase):
             self.wizard.preview_payload(1)
 
     def test_preview_payload_fails_early_for_unsupported_field(self) -> None:
+        """미지원 필드는 preview 단계에서 즉시 `FIELD_UNSUPPORTED`를 내야 한다."""
         self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
             {
                 "id": 4,

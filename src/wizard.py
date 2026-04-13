@@ -32,6 +32,7 @@ class CodebeamerUploadWizard:
         mapper: MappingService,
         logger=None,
     ):
+        """업로드 전체 흐름을 묶어 실행하는 조정 객체를 만든다."""
         self.client = client
         self.processor = processor
         self.mapper = mapper
@@ -39,28 +40,35 @@ class CodebeamerUploadWizard:
         self.state = WizardState()
 
     def load_projects(self) -> list[dict]:
+        """사용자가 선택할 프로젝트 목록을 가져온다."""
         return self.client.get_projects()
 
     def select_project(self, project_id: int) -> None:
+        """작업 대상을 프로젝트 단위로 바꾸고 관련 캐시를 초기화한다."""
         if self.state.project_id != project_id:
             self.state.user_lookup_cache.clear()
         self.state.project_id = project_id
 
     def load_trackers(self) -> list[dict]:
+        """현재 프로젝트 안에서 선택 가능한 트래커 목록을 가져온다."""
         if self.state.project_id is None:
             raise ValueError("project_id must be selected first.")
         return self.client.get_trackers(self.state.project_id)
 
     def load_tracker_items(self, tracker_id: int) -> list[dict]:
+        """트래커 안의 아이템 목록을 가져온다."""
         return self.client.get_tracker_items(tracker_id)
 
     def load_root_items(self, tracker_id: int) -> list[dict]:
+        """트래커 루트 바로 아래의 아이템만 가져온다."""
         return self.client.get_tracker_children(tracker_id)
 
     def select_tracker(self, tracker_id: int) -> None:
+        """업로드 대상 트래커를 저장한다."""
         self.state.tracker_id = tracker_id
 
     def read_excel(self, file_path: str, sheet_name: str | int = 0, list_cols: list[str] | None = None) -> None:
+        """Excel 파일을 읽어 업로드에 필요한 중간 DataFrame들을 모두 만든다."""
         if list_cols is None:
             list_cols = []
 
@@ -71,6 +79,7 @@ class CodebeamerUploadWizard:
         self.state.upload_df = self.processor.build_upload_df(self.state.hierarchy_df, list_cols=list_cols)
 
     def load_schema_and_compare(self, selected_mapping: dict[str, str]) -> pd.DataFrame:
+        """트래커 schema를 읽고 업로드 컬럼과 비교 결과를 만든다."""
         if self.state.tracker_id is None:
             raise ValueError("tracker_id must be selected first.")
         if self.state.upload_df is None:
@@ -89,6 +98,7 @@ class CodebeamerUploadWizard:
         return self.state.comparison_df
 
     def _detect_table_field_columns(self) -> None:
+        """`TableFieldName.ColumnName` 형태의 Excel 컬럼을 자동으로 감지한다."""
         if self.state.schema_df is None or self.state.upload_df is None:
             return
 
@@ -131,12 +141,14 @@ class CodebeamerUploadWizard:
 
     @staticmethod
     def _normalize_lookup_text(value: Any) -> str:
+        """lookup에 쓸 값을 공백 없는 문자열로 정리한다."""
         if value is None:
             return ""
         return str(value).strip()
 
     @classmethod
     def _looks_like_email(cls, value: Any) -> bool:
+        """입력값이 이메일 주소처럼 보이는지 단순 판정한다."""
         text = cls._normalize_lookup_text(value)
         if "@" not in text:
             return False
@@ -145,14 +157,17 @@ class CodebeamerUploadWizard:
 
     @staticmethod
     def _http_status_code(exc: Exception) -> int | None:
+        """예외 안에 담긴 HTTP 상태 코드를 안전하게 꺼낸다."""
         response = getattr(exc, "response", None)
         return getattr(response, "status_code", None)
 
     def _user_lookup_cache_key(self, value: Any) -> tuple[int | None, str]:
+        """현재 프로젝트 기준으로 사용자 lookup 캐시 키를 만든다."""
         return (self.state.project_id, self._normalize_lookup_text(value).casefold())
 
     @classmethod
     def _user_lookup_aliases(cls, user_info: dict[str, Any] | None) -> set[str]:
+        """한 사용자를 다시 찾기 쉬우도록 이름과 이메일 별칭을 만든다."""
         if not user_info:
             return set()
 
@@ -172,6 +187,7 @@ class CodebeamerUploadWizard:
         lookup_text: str,
         entry: UserLookupCacheEntry,
     ) -> UserLookupCacheEntry:
+        """사용자 lookup 결과를 원래 입력값과 별칭 키 모두에 저장한다."""
         cache_key = self._user_lookup_cache_key(lookup_text)
         self.state.user_lookup_cache[cache_key] = entry
 
@@ -190,6 +206,7 @@ class CodebeamerUploadWizard:
         *,
         use_email: bool,
     ) -> list[UserInfo]:
+        """검색 결과 중에서 입력값과 정확히 일치하는 사용자만 추린다."""
         normalized_lookup = lookup_text.casefold()
         exact_matches: list[UserInfo] = []
 
@@ -211,6 +228,7 @@ class CodebeamerUploadWizard:
 
     @staticmethod
     def _to_user_reference(candidate: UserInfo) -> dict[str, Any]:
+        """사용자 상세 객체를 업로드용 사용자 참조 dict로 바꾼다."""
         reference = candidate.to_reference()
         reference.type = ReferenceType.USER.value
         return reference.to_dict()
@@ -219,6 +237,7 @@ class CodebeamerUploadWizard:
         self,
         raw_value: Any,
     ) -> UserLookupCacheEntry:
+        """이름이나 이메일로 사용자를 찾아 reference와 상세 정보를 함께 돌려준다."""
         lookup_text = self._normalize_lookup_text(raw_value)
         cache_key = self._user_lookup_cache_key(lookup_text)
         if cache_key in self.state.user_lookup_cache:
@@ -294,6 +313,7 @@ class CodebeamerUploadWizard:
         *,
         multiple_values: bool,
     ) -> tuple[Any, Any, str | None, str | None]:
+        """단일 값 또는 목록 값을 사용자 reference 형태로 해석한다."""
         if multiple_values and isinstance(raw_value, list):
             resolved_values = []
             user_infos = []
@@ -321,6 +341,7 @@ class CodebeamerUploadWizard:
         option_mapping: dict[str, str],
         option_maps: dict[str, dict],
     ) -> pd.DataFrame:
+        """UserReference 필드의 각 행 값을 미리 찾아 `__resolved` 컬럼에 넣는다."""
         work = upload_df.copy()
 
         for df_col, schema_field in option_mapping.items():
@@ -364,6 +385,7 @@ class CodebeamerUploadWizard:
         selected_mapping: dict[str, str],
         selected_option_mapping: dict[str, str] | None = None,
     ) -> tuple[dict[str, str], pd.DataFrame]:
+        """옵션/참조형 필드를 찾아 lookup과 검증을 한 번에 수행한다."""
         if self.state.schema_df is None:
             raise ValueError("Schema must be loaded before option processing.")
         if self.state.upload_df is None:
@@ -412,6 +434,7 @@ class CodebeamerUploadWizard:
         return selected_option_mapping, option_check_df
 
     def _serialize_payload_value(self, value: Any) -> Any:
+        """payload 안의 모델 객체를 재귀적으로 일반 자료형으로 바꾼다."""
         if isinstance(value, DomainModel):
             return value.to_dict()
         if isinstance(value, list):
@@ -422,6 +445,7 @@ class CodebeamerUploadWizard:
 
     @staticmethod
     def _has_row_value(row: pd.Series, column_name: str) -> bool:
+        """행 안에 실제로 업로드할 값이 들어 있는지 확인한다."""
         if column_name not in row.index:
             return False
 
@@ -436,6 +460,7 @@ class CodebeamerUploadWizard:
 
     @staticmethod
     def _schema_field_info(field_row: pd.Series, schema_field: str) -> dict[str, Any]:
+        """schema 비교 행에서 payload 생성에 필요한 정보만 골라낸다."""
         return {
             "field_id": field_row.get("field_id"),
             "field_type": field_row.get("field_type"),
@@ -464,6 +489,7 @@ class CodebeamerUploadWizard:
         df_col: str,
         detail: str,
     ) -> None:
+        """payload 생성 중 발생한 구조화된 오류를 같은 형식으로 만든다."""
         raise ValueError(
             f"[{code}] field='{schema_field}' df_column='{df_col}' _row_id={row_id} {detail}"
         )
@@ -476,6 +502,7 @@ class CodebeamerUploadWizard:
         df_col: str,
         row_id: int,
     ) -> None:
+        """현재 field가 업로드 가능한 상태인지 payload 생성 전에 점검한다."""
         if not field_row.get("is_supported", True):
             self._raise_payload_error(
                 "FIELD_UNSUPPORTED",
@@ -504,6 +531,7 @@ class CodebeamerUploadWizard:
             )
 
     def _resolve_option_field_value(self, row: pd.Series, row_id: int, df_col: str, schema_field: str) -> Any:
+        """옵션 또는 참조형 필드의 실제 업로드 값을 `__resolved` 기준으로 꺼낸다."""
         option_info = (self.state.option_maps or {}).get(schema_field, {})
         resolved_col = f"{df_col}__resolved"
         status_col = f"{df_col}__lookup_status"
@@ -573,6 +601,7 @@ class CodebeamerUploadWizard:
         )
 
     def _build_table_custom_fields(self, row: pd.Series) -> list[TableFieldValue]:
+        """현재 행에서 TableField 값들을 모아 custom field payload로 만든다."""
         custom_fields: list[TableFieldValue] = []
         if not self.state.table_field_mapping or self.state.schema_df is None:
             return custom_fields
@@ -627,6 +656,7 @@ class CodebeamerUploadWizard:
         return custom_fields
 
     def preview_payload(self, row_id: int) -> dict:
+        """한 행이 실제로 어떤 payload로 업로드되는지 미리 만들어 보여준다."""
         if self.state.converted_upload_df is not None:
             df = self.state.converted_upload_df
         elif self.state.upload_df is not None:
@@ -690,6 +720,7 @@ class CodebeamerUploadWizard:
         return self._serialize_payload_value(payload)
 
     def upload(self, dry_run: bool = False, continue_on_error: bool = True) -> dict:
+        """부모-자식 순서를 지키며 업로드를 실행하고 결과를 모아 돌려준다."""
         if self.state.tracker_id is None:
             raise ValueError("tracker_id is not set.")
         if self.state.upload_df is None and self.state.converted_upload_df is None:
@@ -787,6 +818,7 @@ class CodebeamerUploadWizard:
         return self.state.upload_result
 
     def save_state(self, output_dir: str) -> None:
+        """현재 세션의 DataFrame, schema, 결과를 파일로 저장한다."""
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
 

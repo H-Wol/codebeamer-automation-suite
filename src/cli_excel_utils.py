@@ -4,6 +4,7 @@ import xlwings as xw
 
 
 def list_sheet_names(file_path: str) -> list[str]:
+    """Excel 파일 안에 있는 시트 이름 목록을 읽어온다."""
     app = xw.App(visible=False, add_book=False)
     app.display_alerts = False
     app.screen_updating = False
@@ -22,6 +23,7 @@ def list_sheet_names(file_path: str) -> list[str]:
 
 
 def read_headers(file_path: str, sheet_name: str | int, header_row: int = 1) -> list[str]:
+    """지정한 시트의 헤더 행을 읽어 컬럼 이름 목록으로 돌려준다."""
     app = xw.App(visible=False, add_book=False)
     app.display_alerts = False
     app.screen_updating = False

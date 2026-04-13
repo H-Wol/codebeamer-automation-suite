@@ -28,6 +28,7 @@ from .references import _build_reference
 
 @dataclass
 class TrackerItemBase(DomainModel):
+    """Tracker Item payload를 파이썬 객체로 조립하는 기본 모델이다."""
     NON_CREATABLE_FIELDS: ClassVar[set[str]] = {
         "angular_icon",
         "assigned_at",
@@ -193,6 +194,7 @@ class TrackerItemBase(DomainModel):
 
     @staticmethod
     def _normalize_tracker_field_name(field_name: str) -> str:
+        """schema 필드 이름을 현재 모델 속성 이름과 맞는 표기로 정리한다."""
         if not field_name:
             return field_name
         if hasattr(TrackerItemBase, field_name):
@@ -202,6 +204,7 @@ class TrackerItemBase(DomainModel):
 
     @classmethod
     def has_builtin_field(cls, field_name: str | None) -> bool:
+        """주어진 필드가 TrackerItem의 기본 속성인지 확인한다."""
         if not field_name:
             return False
         normalized = cls._normalize_tracker_field_name(field_name)
@@ -209,18 +212,22 @@ class TrackerItemBase(DomainModel):
 
     @staticmethod
     def _reference_type(field_info: FieldInfo | None) -> str | None:
+        """field 정보에서 기대하는 reference 타입 이름만 꺼낸다."""
         if not field_info:
             return None
         return field_info.get("reference_type")
 
     def _to_reference(self, raw_value: Any, reference_type: str | None = None) -> Any:
+        """원본 값을 단일 reference 객체로 바꾼다."""
         return _build_reference(raw_value, reference_type)
 
     def _to_reference_list(self, value: Any, field_info: FieldInfo | None = None) -> list[Any]:
+        """원본 값을 reference 객체 목록으로 바꾼다."""
         reference_type = self._reference_type(field_info)
         return [self._to_reference(item, reference_type) for item in _as_list(value)]
 
     def _create_field_value(self, field_info: FieldInfo, value: Any) -> AbstractFieldValue | None:
+        """schema 규칙이 요구할 때만 custom field value 객체를 만든다."""
         preconstruction_kind = field_info.get("preconstruction_kind")
         if preconstruction_kind not in {
             PreconstructionKind.FIELD_VALUE.value,
@@ -230,9 +237,11 @@ class TrackerItemBase(DomainModel):
         return _build_field_value(field_info, value)
 
     def add_field_value(self, field_value: AbstractFieldValue) -> None:
+        """만들어진 custom field value를 payload 목록에 추가한다."""
         self.custom_fields.append(field_value)
 
     def _set_builtin_field(self, tracker_field: str, value: Any, field_info: FieldInfo | None = None) -> bool:
+        """기본 필드라면 타입 규칙에 맞춰 값을 넣고 성공 여부를 돌려준다."""
         if not hasattr(self, tracker_field):
             return False
 
@@ -269,6 +278,7 @@ class TrackerItemBase(DomainModel):
         return True
 
     def set_field_value(self, tracker_field: str, value: Any, field_info: FieldInfo | None = None) -> None:
+        """field 분류 결과를 바탕으로 builtin 또는 custom payload에 값을 반영한다."""
         normalized_field = self._normalize_tracker_field_name(tracker_field)
         payload_target_kind = field_info.get("payload_target_kind") if field_info else None
         unsupported_reason = field_info.get("unsupported_reason") if field_info else None
@@ -313,16 +323,19 @@ class TrackerItemBase(DomainModel):
         raise ValueError(f"Field '{tracker_field}' could not be mapped to a builtin or custom payload field.")
 
     def to_dict(self) -> dict[str, Any]:
+        """현재 객체를 API 호출에 쓸 수 있는 dict로 직렬화한다."""
         return _drop_none({
             payload_key: getattr(self, attr_name)
             for attr_name, payload_key in self.PAYLOAD_FIELD_MAP.items()
         })
 
     def to_create_payload(self) -> dict[str, Any]:
+        """생성 요청에서 허용되지 않는 읽기 전용 필드를 제거한다."""
         payload = self.to_dict()
         for key in self.CREATE_EXCLUDED_KEYS:
             payload.pop(key, None)
         return payload
 
     def create_new_item_payload(self) -> dict[str, Any]:
+        """새 아이템 생성용 payload를 외부에서 바로 받을 수 있게 돌려준다."""
         return self.to_create_payload()

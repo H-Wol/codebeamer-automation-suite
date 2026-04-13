@@ -25,10 +25,12 @@ from .models import UserLookupStatus
 
 class MappingService:
     def __init__(self, logger=None):
+        """schema 해석과 업로드 데이터 매핑을 담당하는 서비스 객체를 만든다."""
         self.logger = logger
 
     @staticmethod
     def _is_truthy_flag(value: Any) -> bool:
+        """문자열이나 숫자로 들어온 참/거짓 값을 불린으로 단순화한다."""
         if isinstance(value, bool):
             return value
         if value is None:
@@ -39,6 +41,7 @@ class MappingService:
 
     @staticmethod
     def _extract_status_option_ids(fields: list[dict[str, Any]]) -> set[int]:
+        """상태 필드가 가진 모든 option ID를 모아 mandatory 계산에 사용한다."""
         for field in fields:
             tracker_item_field = field.get("trackerItemField")
             field_name = field.get("name")
@@ -59,6 +62,7 @@ class MappingService:
         field: dict[str, Any],
         all_status_option_ids: set[int],
     ) -> dict[str, Any]:
+        """필드가 항상 필수인지, 특정 상태에서만 필수인지 정리한다."""
         mandatory_statuses = field.get("mandatoryInStatuses") or []
         mandatory_status_ids = {
             status["id"]
@@ -84,10 +88,12 @@ class MappingService:
 
     @staticmethod
     def _is_choice_value_model(value_model: Any) -> bool:
+        """valueModel 문자열이 choice 계열인지 빠르게 판정한다."""
         return isinstance(value_model, str) and "Choice" in value_model
 
     @classmethod
     def _resolve_payload_target_kind(cls, field: dict[str, Any]) -> str:
+        """이 필드가 builtin field인지 custom field인지 먼저 판정한다."""
         tracker_item_field = field.get("trackerItemField")
         if TrackerItemBase.has_builtin_field(tracker_item_field):
             return PayloadTargetKind.BUILTIN_FIELD.value
@@ -97,6 +103,7 @@ class MappingService:
 
     @classmethod
     def _reference_detail(cls, resolved_field_kind: str, field: dict[str, Any]) -> str:
+        """reference 계열 필드가 실제로 어떤 참조 객체를 요구하는지 설명 문자열로 만든다."""
         if resolved_field_kind == ResolvedFieldKind.STATIC_OPTION.value:
             return field.get("referenceType") or ReferenceType.CHOICE_OPTION.value
         if resolved_field_kind == ResolvedFieldKind.USER_REFERENCE.value:
@@ -107,6 +114,7 @@ class MappingService:
 
     @classmethod
     def _field_value_detail(cls, resolved_field_kind: str, field: dict[str, Any]) -> str:
+        """custom field가 필요로 하는 FieldValue 종류를 사람이 읽기 쉬운 문자열로 만든다."""
         if resolved_field_kind == ResolvedFieldKind.SCALAR_BOOL.value:
             return FieldValueType.BOOL.value
         if resolved_field_kind == ResolvedFieldKind.TABLE.value:
@@ -125,6 +133,7 @@ class MappingService:
 
     @classmethod
     def _resolve_field_kind(cls, field: dict[str, Any]) -> dict[str, Any]:
+        """raw schema field를 내부 분류 체계로 해석한다."""
         field_type = field.get("type")
         reference_type = field.get("referenceType")
         has_options = bool(field.get("options"))
@@ -218,6 +227,7 @@ class MappingService:
 
     @classmethod
     def _resolve_preconstruction(cls, field_resolution: dict[str, Any]) -> dict[str, Any]:
+        """payload를 만들기 전에 무엇을 먼저 준비해야 하는지 규칙을 정한다."""
         resolved_field_kind = field_resolution["resolved_field_kind"]
         payload_target_kind = field_resolution["payload_target_kind"]
         multiple_values = cls._is_truthy_flag(field_resolution.get("multiple_values"))
@@ -327,6 +337,7 @@ class MappingService:
 
     @classmethod
     def _is_option_like_field(cls, field: pd.Series | dict[str, Any]) -> bool:
+        """이 필드가 옵션 또는 참조 해석 과정을 거쳐야 하는지 판정한다."""
         getter = field.get
         resolved_field_kind = getter("resolved_field_kind")
         if resolved_field_kind in {
@@ -349,6 +360,7 @@ class MappingService:
 
     @classmethod
     def _detect_option_source_kind(cls, field: pd.Series | dict[str, Any]) -> str | None:
+        """옵션 값을 어디서 해결해야 하는지 출처 종류를 정한다."""
         getter = field.get
         resolved_field_kind = getter("resolved_field_kind")
         if resolved_field_kind == ResolvedFieldKind.STATIC_OPTION.value:
@@ -363,6 +375,7 @@ class MappingService:
         return None
 
     def flatten_schema_fields(self, schema: dict | list) -> pd.DataFrame:
+        """복잡한 schema JSON을 분석하기 쉬운 표 형태로 펼친다."""
         candidates = []
 
         if isinstance(schema, list):
@@ -428,6 +441,7 @@ class MappingService:
         schema_df: pd.DataFrame,
         selected_mapping: dict[str, str],
     ) -> pd.DataFrame:
+        """업로드 컬럼과 schema 필드를 비교해 위험 요소를 한 표로 정리한다."""
         schema_field_names = set(schema_df["field_name"].dropna().astype(str).str.strip())
         upload_columns = set(upload_df.columns)
 
@@ -483,6 +497,7 @@ class MappingService:
         return pd.DataFrame(rows)
 
     def get_option_field_candidates(self, schema_df: pd.DataFrame) -> pd.DataFrame:
+        """옵션 또는 참조 해석이 필요한 schema 필드만 골라낸다."""
         if "is_option_like" in schema_df.columns:
             mask = schema_df["is_option_like"].fillna(False)
             return schema_df[mask].copy()
@@ -495,6 +510,7 @@ class MappingService:
         selected_mapping: dict[str, str],
         schema_df: pd.DataFrame,
     ) -> list[str]:
+        """`multipleValues=true` 필드에 연결된 Excel 컬럼만 추려낸다."""
         if schema_df.empty or not selected_mapping:
             return []
 
@@ -512,6 +528,7 @@ class MappingService:
 
     @staticmethod
     def build_option_name_map(options: list[dict]) -> dict:
+        """option 이름으로 빠르게 찾을 수 있는 사전을 만든다."""
         result = {}
         duplicates = set()
 
@@ -532,6 +549,7 @@ class MappingService:
 
     @staticmethod
     def _option_map_metadata(row: pd.Series | dict[str, Any]) -> dict[str, Any]:
+        """option map에도 공통 분류 정보를 함께 담기 위한 묶음을 만든다."""
         getter = row.get
         return {
             "resolved_field_kind": getter("resolved_field_kind"),
@@ -546,6 +564,7 @@ class MappingService:
         }
 
     def build_option_maps_from_schema(self, schema_df: pd.DataFrame) -> dict[str, dict]:
+        """schema를 바탕으로 옵션 해결 전략 표를 만든다."""
         option_maps = {}
         option_fields = self.get_option_field_candidates(schema_df)
 
@@ -649,6 +668,7 @@ class MappingService:
         raw_value: Any = None,
         error: str | None = None,
     ) -> dict[str, Any]:
+        """검증 결과 한 행에 공통으로 넣을 설명 정보를 만든다."""
         return {
             "df_column": df_col,
             "schema_field": schema_field,
@@ -673,6 +693,7 @@ class MappingService:
         option_mapping: dict[str, str],
         option_maps: dict[str, dict],
     ) -> pd.DataFrame:
+        """업로드 데이터가 schema 규칙에 맞는지 조기에 검사한다."""
         errors = []
 
         for df_col, schema_field in option_mapping.items():
@@ -813,6 +834,7 @@ class MappingService:
         option_mapping: dict[str, str],
         option_maps: dict[str, dict],
     ) -> pd.DataFrame:
+        """정적으로 해결 가능한 옵션 값을 실제 reference payload 값으로 바꾼다."""
         work = upload_df.copy()
 
         for df_col, schema_field in option_mapping.items():

@@ -7,12 +7,14 @@ import xlwings as xw
 
 class ExcelHierarchyProcessor:
     def __init__(self, header_row: int = 1, summary_col: str = "요약", logger=None):
+        """Excel 파일을 계층형 업로드 데이터로 바꾸기 위한 기본 설정을 저장한다."""
         self.header_row = header_row
         self.summary_col = summary_col
         self.logger = logger
 
     @staticmethod
     def is_blank(value: Any) -> bool:
+        """값이 비어 있는 셀인지 판정한다."""
         if value is None:
             return True
         if isinstance(value, float) and pd.isna(value):
@@ -23,6 +25,7 @@ class ExcelHierarchyProcessor:
 
     @classmethod
     def normalize_scalar(cls, value: Any) -> Any:
+        """셀 값을 비교하기 쉬운 형태로 정리한다."""
         if cls.is_blank(value):
             return None
         if isinstance(value, str):
@@ -31,6 +34,7 @@ class ExcelHierarchyProcessor:
 
     @classmethod
     def collect_values(cls, values: list[Any], single_to_scalar: bool = False):
+        """여러 행에 흩어진 값을 모아 하나의 값 또는 목록으로 만든다."""
         cleaned = [cls.normalize_scalar(v)
                    for v in values if not cls.is_blank(v)]
         if not cleaned:
@@ -41,6 +45,7 @@ class ExcelHierarchyProcessor:
 
     @classmethod
     def keep_value(cls, values: list[Any], mode: str = "first"):
+        """여러 값 중 첫 값, 마지막 값, 전체 목록 중 하나를 선택한다."""
         cleaned = [cls.normalize_scalar(v)
                    for v in values if not cls.is_blank(v)]
         if not cleaned:
@@ -55,6 +60,7 @@ class ExcelHierarchyProcessor:
 
     @classmethod
     def list_to_multiline_text(cls, value: Any) -> str | None:
+        """목록 값을 줄바꿈 문자열로 바꿔 사람이 읽기 쉽게 만든다."""
         if value is None:
             return None
         if isinstance(value, list):
@@ -64,6 +70,7 @@ class ExcelHierarchyProcessor:
         return text or None
 
     def read_excel(self, file_path: str, sheet_name: str | int = 0, visible: bool = False) -> pd.DataFrame:
+        """Excel 시트를 읽어 각 행의 들여쓰기 정보까지 포함한 DataFrame을 만든다."""
         app = xw.App(visible=visible, add_book=False)
         app.display_alerts = False
         app.screen_updating = False
@@ -135,6 +142,7 @@ class ExcelHierarchyProcessor:
         keep_mode: str = "first",
         single_to_scalar: bool = False,
     ) -> pd.DataFrame:
+        """여러 물리적 행으로 나뉜 한 레코드를 하나의 논리적 행으로 합친다."""
         work = raw_df.copy().reset_index(drop=True)
 
         group_ids = []
@@ -176,6 +184,7 @@ class ExcelHierarchyProcessor:
         return merged_df
 
     def add_hierarchy_by_indent(self, merged_df: pd.DataFrame) -> pd.DataFrame:
+        """들여쓰기 수준을 보고 부모-자식 관계를 계산한다."""
         work = merged_df.copy().reset_index(drop=True)
 
         parent_row_ids = []
@@ -207,6 +216,7 @@ class ExcelHierarchyProcessor:
         return work
 
     def build_upload_df(self, hierarchy_df: pd.DataFrame, list_cols: list[str] | None = None) -> pd.DataFrame:
+        """업로드에 바로 쓸 수 있는 최소 형태의 DataFrame을 만든다."""
         work = hierarchy_df.copy()
         list_cols = list_cols or []
 

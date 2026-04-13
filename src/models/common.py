@@ -149,10 +149,12 @@ USER_SEARCH_RESULT_KEYS: tuple[str, ...] = ("users", "userRefs", "items", "refer
 
 class DomainModel:
     def to_dict(self) -> dict[str, Any]:
+        """각 모델이 스스로를 dict로 바꾸도록 강제하는 공통 규약이다."""
         raise NotImplementedError
 
 
 def _serialize_value(value: Any) -> Any:
+    """중첩된 모델 객체를 재귀적으로 일반 dict/list 값으로 바꾼다."""
     if isinstance(value, DomainModel):
         return value.to_dict()
     if isinstance(value, list):
@@ -163,6 +165,7 @@ def _serialize_value(value: Any) -> Any:
 
 
 def _drop_none(data: dict[str, Any]) -> dict[str, Any]:
+    """값이 비어 있는 항목을 빼서 API payload를 간단하게 만든다."""
     result: dict[str, Any] = {}
     for key, value in data.items():
         if value is None:
@@ -174,6 +177,7 @@ def _drop_none(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _camel_to_snake(name: str) -> str:
+    """카멜 표기 이름을 파이썬에서 쓰기 쉬운 스네이크 표기로 바꾼다."""
     if not name:
         return name
     s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
@@ -181,12 +185,14 @@ def _camel_to_snake(name: str) -> str:
 
 
 def _as_list(value: Any) -> list[Any]:
+    """단일 값도 항상 목록처럼 다룰 수 있게 감싼다."""
     if value is None:
         return []
     return value if isinstance(value, list) else [value]
 
 
 def _coerce_bool(value: Any) -> bool:
+    """문자열이나 불린 값을 실제 True/False로 통일한다."""
     if isinstance(value, bool):
         return value
     if isinstance(value, str):

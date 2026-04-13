@@ -26,12 +26,14 @@ class AppConfig:
 
 
 def _to_optional_int(value: str | None) -> int | None:
+    """비어 있는 문자열은 None으로, 값이 있으면 정수로 바꾼다."""
     if value is None or str(value).strip() == "":
         return None
     return int(value)
 
 
 def _to_sheet_name(value: str | None) -> str | int:
+    """시트 설정값을 숫자 인덱스 또는 시트 이름으로 정리한다."""
     if value is None or str(value).strip() == "":
         return 0
     text = str(value).strip()
@@ -39,6 +41,7 @@ def _to_sheet_name(value: str | None) -> str | int:
 
 
 def load_config() -> AppConfig:
+    """환경 변수와 기본값을 읽어 프로그램 실행 설정을 만든다."""
     base_url = os.getenv("CODEBEAMER_BASE_URL", "").strip()
     username = os.getenv("CODEBEAMER_USERNAME", "").strip()
     password = os.getenv("CODEBEAMER_PASSWORD", "").strip()

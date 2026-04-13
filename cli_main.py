@@ -35,6 +35,7 @@ USER_LOOKUP_FAILURE_SUFFIXES = (
 
 
 def _suggest_excel_path() -> str | None:
+    """자주 쓰는 위치에서 기본 Excel 파일 경로를 찾아 제안한다."""
     candidates = [
         Path("./data/codebeamer_test_data_en_small.xlsx"),
         Path("./data.xlsx"),
@@ -46,6 +47,7 @@ def _suggest_excel_path() -> str | None:
 
 
 def _prompt_excel_path() -> str:
+    """사용자에게 Excel 파일 경로를 묻고 기본 경로가 있으면 함께 제안한다."""
     suggested = _suggest_excel_path()
     if suggested:
         raw = input(f"Excel file path (Enter={suggested}): ").strip()
@@ -54,6 +56,7 @@ def _prompt_excel_path() -> str:
 
 
 def _auto_match_columns(upload_columns: list[str], schema_field_names: set[str]) -> dict[str, str]:
+    """Excel 컬럼 이름과 schema 필드 이름이 비슷하면 자동 매핑을 제안한다."""
     selected_mapping: dict[str, str] = {}
 
     for col in upload_columns:
@@ -75,6 +78,7 @@ def _auto_match_columns(upload_columns: list[str], schema_field_names: set[str])
 
 
 def _print_option_check_summary(option_check_df):
+    """옵션 검증 결과를 읽기 쉬운 정보와 차단 이슈로 나눠 출력한다."""
     if option_check_df.empty:
         print("옵션/참조형 필드 검증 통과")
         return False
@@ -139,6 +143,7 @@ def _print_option_check_summary(option_check_df):
 
 
 def main():
+    """프로젝트 선택부터 업로드 실행까지 전체 CLI 흐름을 실행한다."""
     cfg = load_config()
     logger = setup_logger("cb-cli", level=cfg.log_level)
 

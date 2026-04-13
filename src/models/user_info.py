@@ -34,6 +34,7 @@ class UserInfo(DomainModel):
     mobile: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """사용자 정보를 API payload로 쓰기 쉬운 dict로 바꾼다."""
         return _drop_none({
             "id": self.id,
             "name": self.name,
@@ -60,6 +61,7 @@ class UserInfo(DomainModel):
 
     @classmethod
     def from_raw(cls, raw_value: dict[str, Any]) -> "UserInfo":
+        """서버에서 받은 사용자 JSON을 `UserInfo` 객체로 바꾼다."""
         init_kwargs: dict[str, Any] = {}
         for field_info in fields(cls):
             if field_info.name in raw_value:
@@ -67,6 +69,7 @@ class UserInfo(DomainModel):
         return cls(**init_kwargs)
 
     def to_reference(self) -> UserReference:
+        """상세 사용자 정보를 간단한 사용자 참조 객체로 축약한다."""
         return UserReference(
             id=self.id,
             name=self.name,

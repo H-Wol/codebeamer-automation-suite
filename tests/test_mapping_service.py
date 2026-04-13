@@ -19,16 +19,19 @@ from src.models import UserLookupStatus
 
 class MappingServiceTest(unittest.TestCase):
     def setUp(self) -> None:
+        """각 테스트마다 새 `MappingService` 인스턴스를 준비한다."""
         self.service = MappingService()
 
     @staticmethod
     def _field_by_name(schema_df: pd.DataFrame, field_name: str) -> pd.Series:
+        """schema 표에서 이름으로 원하는 필드 한 행을 찾는다."""
         matched = schema_df[schema_df["field_name"] == field_name]
         if matched.empty:
             raise AssertionError(f"Field not found in schema_df: {field_name}")
         return matched.iloc[0]
 
     def test_get_list_columns_for_mapping_returns_only_multiple_value_fields(self) -> None:
+        """여러 값을 받는 필드에 연결된 컬럼만 list 컬럼으로 잡히는지 확인한다."""
         schema_df = pd.DataFrame([
             {"field_name": "Summary", "multiple_values": False},
             {"field_name": "Assignees", "multiple_values": True},
@@ -47,6 +50,7 @@ class MappingServiceTest(unittest.TestCase):
         self.assertEqual(list_columns, ["담당자", "분류"])
 
     def test_get_list_columns_for_mapping_returns_empty_for_empty_mapping(self) -> None:
+        """매핑이 비어 있으면 list 컬럼도 비어 있어야 한다."""
         schema_df = pd.DataFrame([
             {"field_name": "Assignees", "multiple_values": True},
         ])
@@ -56,6 +60,7 @@ class MappingServiceTest(unittest.TestCase):
         self.assertEqual(list_columns, [])
 
     def test_flatten_schema_fields_resolves_field_kind_and_preconstruction(self) -> None:
+        """서로 다른 schema type이 올바른 내부 분류와 선구성 규칙으로 해석되는지 본다."""
         schema = [
             {
                 "id": 1,
@@ -185,6 +190,7 @@ class MappingServiceTest(unittest.TestCase):
         self.assertEqual(assigned_to["preconstruction_kind"], PreconstructionKind.REFERENCE_LIST.value)
 
     def test_compare_upload_df_with_schema_includes_resolution_columns(self) -> None:
+        """비교 결과 표에도 분류와 lookup 정보가 함께 들어가는지 확인한다."""
         schema_df = self.service.flatten_schema_fields([
             {
                 "id": 1,
@@ -210,6 +216,7 @@ class MappingServiceTest(unittest.TestCase):
         self.assertEqual(row["payload_target_kind"], PayloadTargetKind.CUSTOM_FIELD.value)
 
     def test_build_option_maps_from_schema_distinguishes_field_resolution_states(self) -> None:
+        """옵션 맵이 static option, user lookup, generic reference를 구분하는지 확인한다."""
         schema_df = self.service.flatten_schema_fields([
             {
                 "id": 1,
@@ -257,6 +264,7 @@ class MappingServiceTest(unittest.TestCase):
         self.assertEqual(option_maps["Choice Hint Only"]["source_status"], OptionSourceStatus.UNSUPPORTED.value)
 
     def test_check_option_alignment_surfaces_early_resolution_risks(self) -> None:
+        """조기 검증 단계에서 차단 이슈와 정보성 상태가 모두 드러나는지 확인한다."""
         schema_df = self.service.flatten_schema_fields([
             {
                 "id": 1,
