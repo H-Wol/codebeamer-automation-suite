@@ -1,0 +1,113 @@
+{
+  "fields": [
+    {
+      "id": 1,
+      "name": "Summary",
+      "type": "TextField",
+      "hidden": false,
+      "valueModel": "TextFieldValue",
+      "mandatoryInStatuses": [],
+      "trackerItemField": "name"
+    },
+    {
+      "id": 2,
+      "name": "Status",
+      "type": "OptionChoiceField",
+      "hidden": false,
+      "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+      "mandatoryInStatuses": [],
+      "trackerItemField": "status",
+      "options": [
+        {
+          "id": 101,
+          "name": "Open",
+          "type": "ChoiceOptionReference"
+        },
+        {
+          "id": 102,
+          "name": "Closed",
+          "type": "ChoiceOptionReference"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Approved",
+      "type": "BoolField",
+      "hidden": false,
+      "valueModel": "BoolFieldValue",
+      "mandatoryInStatuses": []
+    },
+    {
+      "id": 4,
+      "name": "Phase",
+      "type": "OptionChoiceField",
+      "hidden": false,
+      "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+      "mandatoryInStatuses": [],
+      "multipleValues": true,
+      "options": [
+        {
+          "id": 201,
+          "name": "Draft",
+          "type": "ChoiceOptionReference"
+        },
+        {
+          "id": 202,
+          "name": "Review",
+          "type": "ChoiceOptionReference"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "체크리스트",
+      "type": "TableField",
+      "hidden": false,
+      "valueModel": "TableFieldValue",
+      "mandatoryInStatuses": [],
+      "columns": [
+        {
+          "id": 501,
+          "name": "결과",
+          "type": "TextField",
+          "hidden": false,
+          "valueModel": "TextFieldValue",
+          "mandatoryInStatuses": []
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Owner",
+      "type": "ReferenceField",
+      "hidden": false,
+      "valueModel": "ChoiceFieldValue<UserReference>",
+      "mandatoryInStatuses": [],
+      "referenceType": "UserReference"
+    },
+    {
+      "id": 7,
+      "name": "Related Candidate",
+      "type": "ReferenceField",
+      "hidden": false,
+      "valueModel": "ChoiceFieldValue<TrackerItemReference>",
+      "mandatoryInStatuses": [],
+      "referenceType": "TrackerItemReference"
+    },
+    {
+      "id": 8,
+      "name": "시험 담당자",
+      "type": "MemberField",
+      "hidden": false,
+      "valueModel": "ChoiceFieldValue",
+      "mandatoryInStatuses": [],
+      "multipleValues": true,
+      "memberTypes": [
+        "USER",
+        "ROLE",
+        "GROUP"
+      ]
+    }
+  ]
+}
