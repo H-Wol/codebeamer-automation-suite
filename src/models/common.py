@@ -41,20 +41,69 @@ class SchemaFieldType(str, Enum):
     TABLE = "TableField"
 
 
+class ResolvedFieldKind(str, Enum):
+    SCALAR_TEXT = "scalar_text"
+    SCALAR_BOOL = "scalar_bool"
+    STATIC_OPTION = "static_option"
+    USER_REFERENCE = "user_reference"
+    GENERIC_REFERENCE = "generic_reference"
+    TABLE = "table"
+    UNSUPPORTED = "unsupported"
+
+
+class ResolutionStrategy(str, Enum):
+    BUILTIN_SCALAR = "builtin_scalar"
+    CUSTOM_SCALAR = "custom_scalar"
+    TYPE_BOOL = "type_bool"
+    TYPE_TABLE = "type_table"
+    TYPE_OPTION_WITH_OPTIONS = "type_option_with_options"
+    TYPE_OPTION_WITH_USER_REFERENCE = "type_option_with_user_reference"
+    TYPE_OPTION_WITH_REFERENCE_TYPE = "type_option_with_reference_type"
+    TYPE_OPTION_AMBIGUOUS = "type_option_ambiguous"
+    TYPE_REFERENCE_WITH_USER_REFERENCE = "type_reference_with_user_reference"
+    TYPE_REFERENCE_WITH_REFERENCE_TYPE = "type_reference_with_reference_type"
+    TYPE_REFERENCE_WITHOUT_REFERENCE_TYPE = "type_reference_without_reference_type"
+    UNKNOWN_TYPE = "unknown_type"
+
+
+class LookupTargetKind(str, Enum):
+    NONE = "none"
+    USER = "user"
+    REFERENCE = "reference"
+
+
+class PreconstructionKind(str, Enum):
+    NONE = "none"
+    BUILTIN_DIRECT = "builtin_direct"
+    FIELD_VALUE = "field_value"
+    REFERENCE = "reference"
+    REFERENCE_LIST = "reference_list"
+    TABLE_FIELD_VALUE = "table_field_value"
+
+
+class PayloadTargetKind(str, Enum):
+    BUILTIN_FIELD = "builtin_field"
+    CUSTOM_FIELD = "custom_field"
+    UNSUPPORTED = "unsupported"
+
+
 class OptionSourceKind(str, Enum):
     SCHEMA_OPTIONS = "schema_options"
     REFERENCE_LOOKUP = "reference_lookup"
+    UNSUPPORTED = "unsupported"
 
 
 class OptionMapKind(str, Enum):
     STATIC_OPTIONS = "static_options"
     USER_LOOKUP = "user_lookup"
     REFERENCE_LOOKUP = "reference_lookup"
+    UNSUPPORTED = "unsupported"
 
 
 class OptionSourceStatus(str, Enum):
     READY = "READY"
     LOOKUP_REQUIRED = "LOOKUP_REQUIRED"
+    UNSUPPORTED = "UNSUPPORTED"
 
 
 class MappingStatus(str, Enum):
@@ -65,9 +114,12 @@ class MappingStatus(str, Enum):
 
 class OptionCheckStatus(str, Enum):
     DF_COLUMN_MISSING = "DF_COLUMN_MISSING"
+    FIELD_UNSUPPORTED = "FIELD_UNSUPPORTED"
+    LOOKUP_REQUIRED = "LOOKUP_REQUIRED"
     OPTION_MAP_MISSING = "OPTION_MAP_MISSING"
     OPTION_NOT_FOUND = "OPTION_NOT_FOUND"
     OPTION_SOURCE_UNAVAILABLE = "OPTION_SOURCE_UNAVAILABLE"
+    PRECONSTRUCTION_REQUIRED = "PRECONSTRUCTION_REQUIRED"
 
 
 class UserLookupStatus(str, Enum):

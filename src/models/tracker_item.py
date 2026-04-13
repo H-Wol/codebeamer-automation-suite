@@ -7,8 +7,12 @@ from typing import ClassVar
 
 from .common import DomainModel
 from .common import FieldInfo
+from .common import PayloadTargetKind
+from .common import PreconstructionKind
+from .common import SchemaFieldType
 from .common import _as_list
 from .common import _camel_to_snake
+from .common import _coerce_bool
 from .common import _drop_none
 from .field_values import AbstractFieldValue
 from .field_values import TableFieldValue
@@ -196,6 +200,13 @@ class TrackerItemBase(DomainModel):
         normalized = _camel_to_snake(field_name)
         return normalized if hasattr(TrackerItemBase, normalized) else field_name
 
+    @classmethod
+    def has_builtin_field(cls, field_name: str | None) -> bool:
+        if not field_name:
+            return False
+        normalized = cls._normalize_tracker_field_name(field_name)
+        return hasattr(cls, normalized)
+
     @staticmethod
     def _reference_type(field_info: FieldInfo | None) -> str | None:
         if not field_info:
@@ -210,6 +221,12 @@ class TrackerItemBase(DomainModel):
         return [self._to_reference(item, reference_type) for item in _as_list(value)]
 
     def _create_field_value(self, field_info: FieldInfo, value: Any) -> AbstractFieldValue | None:
+        preconstruction_kind = field_info.get("preconstruction_kind")
+        if preconstruction_kind not in {
+            PreconstructionKind.FIELD_VALUE.value,
+            PreconstructionKind.TABLE_FIELD_VALUE.value,
+        }:
+            return None
         return _build_field_value(field_info, value)
 
     def add_field_value(self, field_value: AbstractFieldValue) -> None:
@@ -219,16 +236,29 @@ class TrackerItemBase(DomainModel):
         if not hasattr(self, tracker_field):
             return False
 
-        if tracker_field in self.REFERENCE_LIST_FIELDS:
+        preconstruction_kind = field_info.get("preconstruction_kind") if field_info else None
+        field_type = field_info.get("field_type") if field_info else None
+
+        if (
+            preconstruction_kind == PreconstructionKind.REFERENCE_LIST.value
+            or tracker_field in self.REFERENCE_LIST_FIELDS
+        ):
             setattr(self, tracker_field, self._to_reference_list(value, field_info))
             return True
 
-        if tracker_field in self.REFERENCE_SINGLE_FIELDS:
+        if (
+            preconstruction_kind == PreconstructionKind.REFERENCE.value
+            or tracker_field in self.REFERENCE_SINGLE_FIELDS
+        ):
             setattr(self, tracker_field, self._to_reference(value, self._reference_type(field_info)))
             return True
 
         if tracker_field in self.INTEGER_FIELDS and value is not None:
             setattr(self, tracker_field, int(value))
+            return True
+
+        if field_type == SchemaFieldType.BOOL.value and value is not None:
+            setattr(self, tracker_field, _coerce_bool(value))
             return True
 
         if tracker_field in self.STRING_FIELDS and value is not None:
@@ -240,7 +270,35 @@ class TrackerItemBase(DomainModel):
 
     def set_field_value(self, tracker_field: str, value: Any, field_info: FieldInfo | None = None) -> None:
         normalized_field = self._normalize_tracker_field_name(tracker_field)
+        payload_target_kind = field_info.get("payload_target_kind") if field_info else None
+        unsupported_reason = field_info.get("unsupported_reason") if field_info else None
+
+        if field_info and not field_info.get("is_supported", True):
+            detail = f": {unsupported_reason}" if unsupported_reason else ""
+            raise ValueError(
+                f"Field '{field_info.get('field_name') or tracker_field}' is unsupported for payload generation{detail}"
+            )
+
         if normalized_field in self.NON_CREATABLE_FIELDS:
+            return
+
+        if payload_target_kind == PayloadTargetKind.BUILTIN_FIELD.value:
+            if self._set_builtin_field(normalized_field, value, field_info):
+                return
+            raise ValueError(
+                f"Field '{field_info.get('field_name') or tracker_field}' is marked as builtin but could not be set."
+            )
+
+        if payload_target_kind == PayloadTargetKind.CUSTOM_FIELD.value:
+            if not field_info:
+                raise ValueError(f"Custom field '{tracker_field}' requires schema field info.")
+            field_value = self._create_field_value(field_info, value)
+            if field_value is None:
+                raise ValueError(
+                    f"Field '{field_info.get('field_name') or tracker_field}' requires a field value object "
+                    f"but no supported builder was found."
+                )
+            self.add_field_value(field_value)
             return
 
         if self._set_builtin_field(normalized_field, value, field_info):
@@ -250,6 +308,9 @@ class TrackerItemBase(DomainModel):
             field_value = self._create_field_value(field_info, value)
             if field_value is not None:
                 self.add_field_value(field_value)
+                return
+
+        raise ValueError(f"Field '{tracker_field}' could not be mapped to a builtin or custom payload field.")
 
     def to_dict(self) -> dict[str, Any]:
         return _drop_none({

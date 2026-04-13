@@ -15,6 +15,25 @@ from src.models import OptionCheckStatus
 from src.wizard import CodebeamerUploadWizard
 
 
+BLOCKING_OPTION_STATUSES = {
+    OptionCheckStatus.DF_COLUMN_MISSING.value,
+    OptionCheckStatus.FIELD_UNSUPPORTED.value,
+    OptionCheckStatus.LOOKUP_REQUIRED.value,
+    OptionCheckStatus.OPTION_MAP_MISSING.value,
+    OptionCheckStatus.OPTION_NOT_FOUND.value,
+    OptionCheckStatus.OPTION_SOURCE_UNAVAILABLE.value,
+}
+INFO_OPTION_STATUSES = {
+    OptionCheckStatus.PRECONSTRUCTION_REQUIRED.value,
+}
+USER_LOOKUP_FAILURE_SUFFIXES = (
+    "USER_LOOKUP_NOT_RUN",
+    "USER_LOOKUP_FAILED",
+    "USER_LOOKUP_AMBIGUOUS",
+    "USER_NOT_FOUND",
+)
+
+
 def _suggest_excel_path() -> str | None:
     candidates = [
         Path("./data/codebeamer_test_data_en_small.xlsx"),
@@ -53,6 +72,70 @@ def _auto_match_columns(upload_columns: list[str], schema_field_names: set[str])
             print(f"  mapped: {col} -> {matched_field}")
 
     return selected_mapping
+
+
+def _print_option_check_summary(option_check_df):
+    if option_check_df.empty:
+        print("옵션/참조형 필드 검증 통과")
+        return False
+
+    print("\n[옵션 검증 결과]")
+    print(option_check_df)
+
+    status_series = option_check_df["status"].fillna("")
+    info_df = option_check_df[status_series.isin(INFO_OPTION_STATUSES)]
+    blocking_df = option_check_df[
+        status_series.isin(BLOCKING_OPTION_STATUSES)
+        | status_series.astype(str).str.endswith(USER_LOOKUP_FAILURE_SUFFIXES)
+    ]
+
+    if not info_df.empty:
+        print("\n[사전 구성 정보]")
+        print(
+            info_df[
+                [
+                    "df_column",
+                    "schema_field",
+                    "resolved_field_kind",
+                    "preconstruction_kind",
+                    "preconstruction_detail",
+                    "payload_target_kind",
+                ]
+            ].drop_duplicates()
+        )
+
+    if not blocking_df.empty:
+        print("\n[차단 이슈 요약]")
+
+        unsupported_df = blocking_df[
+            blocking_df["status"] == OptionCheckStatus.FIELD_UNSUPPORTED.value
+        ]
+        if not unsupported_df.empty:
+            print("- 미지원 필드가 있습니다. unsupported_reason을 확인해야 합니다.")
+
+        lookup_required_df = blocking_df[
+            blocking_df["status"] == OptionCheckStatus.LOOKUP_REQUIRED.value
+        ]
+        if not lookup_required_df.empty:
+            print("- generic_reference lookup resolver가 없어 payload 생성 전에 중단됩니다.")
+
+        option_not_found_df = blocking_df[
+            blocking_df["status"] == OptionCheckStatus.OPTION_NOT_FOUND.value
+        ]
+        if not option_not_found_df.empty:
+            print("- schema option에 없는 값이 업로드 데이터에 있습니다.")
+
+        user_lookup_df = blocking_df[
+            blocking_df["status"].astype(str).str.endswith(USER_LOOKUP_FAILURE_SUFFIXES)
+        ]
+        if not user_lookup_df.empty:
+            print("- 사용자 lookup 실패 행이 있습니다. __lookup_error 또는 error 컬럼을 확인해야 합니다.")
+
+        print("\n[차단 이슈 상세]")
+        print(blocking_df)
+        return True
+
+    return False
 
 
 def main():
@@ -134,20 +217,13 @@ def main():
     if selected_option_mapping:
         print(f"자동 감지된 옵션/참조형 필드 수: {len(selected_option_mapping)}")
 
-        if not option_check_df.empty:
-            print("\n[옵션 검증 결과]")
-            print(option_check_df)
-
-            unavailable_df = option_check_df[
-                option_check_df["status"] == OptionCheckStatus.OPTION_SOURCE_UNAVAILABLE.value
-            ]
-            if not unavailable_df.empty:
-                print("\n참조 lookup 이 필요한 필드가 있습니다. 값이 있는 행은 payload 생성 또는 업로드 시 실패할 수 있습니다.")
-
-            if not confirm("검증 결과를 확인했습니다. 계속 진행할까요?", default=False):
+        has_blocking_issues = _print_option_check_summary(option_check_df)
+        if has_blocking_issues:
+            if not confirm("차단 이슈를 확인했습니다. 그래도 계속 진행할까요?", default=False):
                 return
-        else:
-            print("옵션/참조형 필드 검증 통과")
+        elif not option_check_df.empty:
+            if not confirm("사전 구성 정보를 확인했습니다. 계속 진행할까요?", default=True):
+                return
     else:
         print("옵션/참조형 필드 매핑 대상이 없습니다.")
 

@@ -1,13 +1,18 @@
 from .common import DescriptionFormat
 from .common import DomainModel
 from .common import FieldValueType
+from .common import LookupTargetKind
 from .common import MappingStatus
 from .common import OptionCheckStatus
 from .common import OptionMapKind
 from .common import OptionSourceKind
 from .common import OptionSourceStatus
+from .common import PayloadTargetKind
+from .common import PreconstructionKind
 from .common import OPTION_CONTAINER_KEYS
 from .common import ReferenceType
+from .common import ResolvedFieldKind
+from .common import ResolutionStrategy
 from .common import SchemaFieldType
 from .common import TrackerItemField
 from .common import TrackerSchemaName
@@ -47,6 +52,7 @@ __all__ = [
     "DescriptionFormat",
     "DomainModel",
     "FieldValueType",
+    "LookupTargetKind",
     "Label",
     "MappingStatus",
     "OptionCheckStatus",
@@ -54,9 +60,13 @@ __all__ = [
     "OptionSourceKind",
     "OptionSourceStatus",
     "OPTION_CONTAINER_KEYS",
+    "PayloadTargetKind",
+    "PreconstructionKind",
     "ProjectReference",
     "ReferenceType",
     "RepositoryReference",
+    "ResolvedFieldKind",
+    "ResolutionStrategy",
     "RoleReference",
     "ScalarFieldValue",
     "SchemaFieldType",

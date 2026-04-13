@@ -9,13 +9,11 @@ import pandas as pd
 from .codebeamer_client import CodebeamerClient
 from .excel_processor import ExcelHierarchyProcessor
 from .mapping_service import MappingService
-from .models import AbstractFieldValue
 from .models import DomainModel
 from .models import FieldValueType
 from .models import OptionMapKind
 from .models import ReferenceType
 from .models import TableFieldValue
-from .models import TextFieldValue
 from .models import TrackerItemBase
 from .models import UploadStatus
 from .models import UserInfo
@@ -413,13 +411,6 @@ class CodebeamerUploadWizard:
 
         return selected_option_mapping, option_check_df
 
-    def _create_field_value(self, field_info: dict, value) -> AbstractFieldValue:
-        return TrackerItemBase()._create_field_value(field_info, value) or TextFieldValue(
-            field_id=0,
-            field_name="",
-            type=FieldValueType.TEXT.value,
-        )
-
     def _serialize_payload_value(self, value: Any) -> Any:
         if isinstance(value, DomainModel):
             return value.to_dict()
@@ -443,11 +434,93 @@ class CodebeamerUploadWizard:
             return False
         return True
 
+    @staticmethod
+    def _schema_field_info(field_row: pd.Series, schema_field: str) -> dict[str, Any]:
+        return {
+            "field_id": field_row.get("field_id"),
+            "field_type": field_row.get("field_type"),
+            "field_name": schema_field,
+            "multiple_values": field_row.get("multiple_values", False),
+            "reference_type": field_row.get("reference_type"),
+            "value_model": field_row.get("value_model"),
+            "resolved_field_kind": field_row.get("resolved_field_kind"),
+            "resolution_strategy": field_row.get("resolution_strategy"),
+            "is_supported": field_row.get("is_supported", True),
+            "unsupported_reason": field_row.get("unsupported_reason"),
+            "requires_lookup": field_row.get("requires_lookup", False),
+            "lookup_target_kind": field_row.get("lookup_target_kind"),
+            "preconstruction_kind": field_row.get("preconstruction_kind"),
+            "preconstruction_detail": field_row.get("preconstruction_detail"),
+            "payload_target_kind": field_row.get("payload_target_kind"),
+            "tracker_item_field": field_row.get("tracker_item_field"),
+        }
+
+    @staticmethod
+    def _raise_payload_error(
+        code: str,
+        *,
+        schema_field: str,
+        row_id: int,
+        df_col: str,
+        detail: str,
+    ) -> None:
+        raise ValueError(
+            f"[{code}] field='{schema_field}' df_column='{df_col}' _row_id={row_id} {detail}"
+        )
+
+    def _ensure_field_ready_for_payload(
+        self,
+        *,
+        field_row: pd.Series,
+        schema_field: str,
+        df_col: str,
+        row_id: int,
+    ) -> None:
+        if not field_row.get("is_supported", True):
+            self._raise_payload_error(
+                "FIELD_UNSUPPORTED",
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+                detail=(
+                    f"reason={field_row.get('unsupported_reason')!r} "
+                    f"strategy={field_row.get('resolution_strategy')!r} "
+                    f"payload_target={field_row.get('payload_target_kind')!r} "
+                    f"preconstruction={field_row.get('preconstruction_kind')!r}"
+                ),
+            )
+
+        if field_row.get("requires_lookup") and df_col not in self.state.selected_option_mapping:
+            self._raise_payload_error(
+                "LOOKUP_REQUIRED",
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+                detail=(
+                    f"lookup_target={field_row.get('lookup_target_kind')!r} "
+                    f"preconstruction={field_row.get('preconstruction_kind')!r} "
+                    f"detail={field_row.get('preconstruction_detail')!r}"
+                ),
+            )
+
     def _resolve_option_field_value(self, row: pd.Series, row_id: int, df_col: str, schema_field: str) -> Any:
         option_info = (self.state.option_maps or {}).get(schema_field, {})
         resolved_col = f"{df_col}__resolved"
         status_col = f"{df_col}__lookup_status"
         error_col = f"{df_col}__lookup_error"
+
+        if not option_info.get("is_supported", True) or option_info.get("kind") == OptionMapKind.UNSUPPORTED.value:
+            self._raise_payload_error(
+                "FIELD_UNSUPPORTED",
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+                detail=(
+                    f"reason={option_info.get('unsupported_reason')!r} "
+                    f"strategy={option_info.get('resolution_strategy')!r} "
+                    f"preconstruction={option_info.get('preconstruction_kind')!r}"
+                ),
+            )
 
         if resolved_col in row.index and row[resolved_col] is not None:
             return row[resolved_col]
@@ -462,22 +535,41 @@ class CodebeamerUploadWizard:
                 else UserLookupStatus.USER_LOOKUP_NOT_RUN.value
             )
             lookup_error = row[error_col] if error_col in row.index else None
-            message = (
-                f"User lookup failed for field '{schema_field}' and value {row[df_col]!r} "
-                f"on _row_id={row_id} with status={lookup_status}."
+            detail = (
+                f"value={row[df_col]!r} lookup_status={lookup_status!r} "
+                f"preconstruction={option_info.get('preconstruction_kind')!r}"
             )
             if lookup_error:
-                message = f"{message} details={lookup_error}"
-            raise ValueError(message)
-
-        if option_info.get("kind") == OptionMapKind.REFERENCE_LOOKUP.value:
-            raise ValueError(
-                f"Field '{schema_field}' requires reference lookup for type "
-                f"'{option_info.get('reference_type')}' before building payload for _row_id={row_id}."
+                detail = f"{detail} error={lookup_error!r}"
+            self._raise_payload_error(
+                "LOOKUP_REQUIRED",
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+                detail=detail,
             )
 
-        raise ValueError(
-            f"Option field '{schema_field}' could not resolve value {row[df_col]!r} for _row_id={row_id}."
+        if option_info.get("kind") == OptionMapKind.REFERENCE_LOOKUP.value:
+            self._raise_payload_error(
+                "LOOKUP_REQUIRED",
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+                detail=(
+                    f"reference_type={option_info.get('reference_type')!r} "
+                    f"lookup_target={option_info.get('lookup_target_kind')!r} "
+                    f"preconstruction={option_info.get('preconstruction_kind')!r} "
+                    f"detail={option_info.get('preconstruction_detail')!r} "
+                    f"reason={option_info.get('unsupported_reason')!r}"
+                ),
+            )
+
+        self._raise_payload_error(
+            "OPTION_RESOLUTION_FAILED",
+            schema_field=schema_field,
+            df_col=df_col,
+            row_id=row_id,
+            detail=f"value={row[df_col]!r}",
         )
 
     def _build_table_custom_fields(self, row: pd.Series) -> list[TableFieldValue]:
@@ -557,30 +649,34 @@ class CodebeamerUploadWizard:
 
             field_row = matched.iloc[0]
             tracker_field = field_row["tracker_item_field"]
-            field_id = field_row.get("field_id")
-            field_type = field_row.get("field_type")
-            multiple_values = field_row.get("multiple_values", False)
 
             if not tracker_field:
                 continue
 
             field_value = None
             if df_col in self.state.selected_option_mapping:
+                if not self._has_row_value(row, df_col):
+                    continue
+                self._ensure_field_ready_for_payload(
+                    field_row=field_row,
+                    schema_field=schema_field,
+                    df_col=df_col,
+                    row_id=row_id,
+                )
                 field_value = self._resolve_option_field_value(row, row_id, df_col, schema_field)
             elif self._has_row_value(row, df_col):
+                self._ensure_field_ready_for_payload(
+                    field_row=field_row,
+                    schema_field=schema_field,
+                    df_col=df_col,
+                    row_id=row_id,
+                )
                 field_value = row[df_col]
 
             if field_value is None:
                 continue
 
-            field_info = {
-                "field_id": field_id,
-                "field_type": field_type,
-                "field_name": schema_field,
-                "multiple_values": multiple_values,
-                "reference_type": field_row.get("reference_type"),
-                "value_model": field_row.get("value_model"),
-            }
+            field_info = self._schema_field_info(field_row, schema_field)
             item.set_field_value(tracker_field, field_value, field_info)
 
         payload = item.create_new_item_payload()
