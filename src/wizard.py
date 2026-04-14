@@ -7,12 +7,15 @@ from typing import Any
 import pandas as pd
 
 from .codebeamer_client import CodebeamerClient
-from .excel_processor import ExcelHierarchyProcessor
+from .excel_reader import ExcelReader
+from .hierarchy_processor import HierarchyProcessor
 from .mapping_service import MappingService
 from .models import DomainModel
 from .models import FieldValueType
 from .models import OptionMapKind
+from .models import PayloadStatus
 from .models import ReferenceType
+from .models import ResolvedFieldKind
 from .models import TableFieldValue
 from .models import TrackerItemBase
 from .models import UploadStatus
@@ -28,12 +31,14 @@ class CodebeamerUploadWizard:
     def __init__(
         self,
         client: CodebeamerClient,
-        processor: ExcelHierarchyProcessor,
+        processor: HierarchyProcessor | None,
         mapper: MappingService,
+        reader: ExcelReader | None = None,
         logger=None,
     ):
         """업로드 전체 흐름을 묶어 실행하는 조정 객체를 만든다."""
         self.client = client
+        self.reader = reader
         self.processor = processor
         self.mapper = mapper
         self.logger = logger
@@ -47,6 +52,7 @@ class CodebeamerUploadWizard:
         """작업 대상을 프로젝트 단위로 바꾸고 관련 캐시를 초기화한다."""
         if self.state.project_id != project_id:
             self.state.user_lookup_cache.clear()
+            self._invalidate_payload_cache()
         self.state.project_id = project_id
 
     def load_trackers(self) -> list[dict]:
@@ -65,18 +71,48 @@ class CodebeamerUploadWizard:
 
     def select_tracker(self, tracker_id: int) -> None:
         """업로드 대상 트래커를 저장한다."""
+        if self.state.tracker_id != tracker_id:
+            self._invalidate_payload_cache()
         self.state.tracker_id = tracker_id
 
-    def read_excel(self, file_path: str, sheet_name: str | int = 0, list_cols: list[str] | None = None) -> None:
-        """Excel 파일을 읽어 업로드에 필요한 중간 DataFrame들을 모두 만든다."""
+    def _invalidate_payload_cache(self) -> None:
+        """입력/매핑/schema가 바뀌면 payload cache를 비운다."""
+        self.state.payload_df = None
+
+    def load_raw_dataframe(self, raw_df: pd.DataFrame, list_cols: list[str] | None = None) -> None:
+        """reader가 만든 raw DataFrame을 업로드용 중간 DataFrame들로 후처리한다."""
+        if self.processor is None:
+            raise ValueError("processor is required to transform raw dataframe.")
+
         if list_cols is None:
             list_cols = []
 
         self.state.list_cols = list_cols
-        self.state.raw_df = self.processor.read_excel(file_path=file_path, sheet_name=sheet_name)
+        self.state.raw_df = raw_df.copy()
         self.state.merged_df = self.processor.merge_multiline_records(self.state.raw_df, list_cols=list_cols)
         self.state.hierarchy_df = self.processor.add_hierarchy_by_indent(self.state.merged_df)
         self.state.upload_df = self.processor.build_upload_df(self.state.hierarchy_df, list_cols=list_cols)
+        self.state.converted_upload_df = None
+        self.state.table_field_mapping = {}
+        self.state.upload_result = None
+        self._invalidate_payload_cache()
+
+    def read_excel(self, file_path: str, sheet_name: str | int = 0, list_cols: list[str] | None = None) -> None:
+        """호환용 메서드다. reader로 raw DataFrame을 만든 뒤 processor로 후처리한다."""
+        if self.reader is not None:
+            raw_df = self.reader.read_excel(file_path=file_path, sheet_name=sheet_name)
+        elif self.processor is not None and hasattr(self.processor, "read_excel"):
+            raw_df = self.processor.read_excel(file_path=file_path, sheet_name=sheet_name)
+        else:
+            raise ValueError("reader or compatible processor.read_excel() is required to load Excel files.")
+        self.load_raw_dataframe(raw_df, list_cols=list_cols)
+
+    def _payload_source_df(self) -> pd.DataFrame:
+        if self.state.converted_upload_df is not None:
+            return self.state.converted_upload_df
+        if self.state.upload_df is not None:
+            return self.state.upload_df
+        raise ValueError("No upload dataframe is available.")
 
     def load_schema_and_compare(self, selected_mapping: dict[str, str]) -> pd.DataFrame:
         """트래커 schema를 읽고 업로드 컬럼과 비교 결과를 만든다."""
@@ -93,6 +129,7 @@ class CodebeamerUploadWizard:
             schema_df=self.state.schema_df,
             selected_mapping=selected_mapping,
         )
+        self._invalidate_payload_cache()
 
         self._detect_table_field_columns()
         return self.state.comparison_df
@@ -344,6 +381,7 @@ class CodebeamerUploadWizard:
             self.state.option_maps = {}
             self.state.option_check_df = pd.DataFrame()
             self.state.converted_upload_df = self.state.upload_df.copy()
+            self._invalidate_payload_cache()
             return {}, pd.DataFrame()
 
         self.state.selected_option_mapping = selected_option_mapping
@@ -368,6 +406,7 @@ class CodebeamerUploadWizard:
             option_mapping=selected_option_mapping,
             option_maps=option_maps,
         )
+        self._invalidate_payload_cache()
 
         return selected_option_mapping, option_check_df
 
@@ -399,14 +438,22 @@ class CodebeamerUploadWizard:
     @staticmethod
     def _schema_field_info(field_row: pd.Series, schema_field: str) -> dict[str, Any]:
         """schema 비교 행에서 payload 생성에 필요한 정보만 골라낸다."""
+        reference_type = field_row.get("reference_type")
+        resolved_field_kind = field_row.get("resolved_field_kind")
+
+        if not reference_type and resolved_field_kind == ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value:
+            reference_type = ReferenceType.TRACKER_ITEM.value
+        if not reference_type and resolved_field_kind == ResolvedFieldKind.USER_REFERENCE.value:
+            reference_type = ReferenceType.USER.value
+
         return {
             "field_id": field_row.get("field_id"),
             "field_type": field_row.get("field_type"),
             "field_name": schema_field,
             "multiple_values": field_row.get("multiple_values", False),
-            "reference_type": field_row.get("reference_type"),
+            "reference_type": reference_type,
             "value_model": field_row.get("value_model"),
-            "resolved_field_kind": field_row.get("resolved_field_kind"),
+            "resolved_field_kind": resolved_field_kind,
             "resolution_strategy": field_row.get("resolution_strategy"),
             "is_supported": field_row.get("is_supported", True),
             "unsupported_reason": field_row.get("unsupported_reason"),
@@ -515,6 +562,21 @@ class CodebeamerUploadWizard:
                 detail=detail,
             )
 
+        if option_info.get("kind") == OptionMapKind.TRACKER_ITEM_DIRECT.value:
+            try:
+                return self.mapper.resolve_tracker_item_reference_value(
+                    row[df_col],
+                    multiple_values=option_info.get("multiple_values", False),
+                )
+            except Exception as exc:
+                self._raise_payload_error(
+                    "DIRECT_PARSE_FAILED",
+                    schema_field=schema_field,
+                    df_col=df_col,
+                    row_id=row_id,
+                    detail=f"value={row[df_col]!r} error={str(exc)!r}",
+                )
+
         if option_info.get("kind") == OptionMapKind.REFERENCE_LOOKUP.value:
             self._raise_payload_error(
                 "LOOKUP_REQUIRED",
@@ -593,20 +655,8 @@ class CodebeamerUploadWizard:
 
         return custom_fields
 
-    def preview_payload(self, row_id: int) -> dict:
-        """한 행이 실제로 어떤 payload로 업로드되는지 미리 만들어 보여준다."""
-        if self.state.converted_upload_df is not None:
-            df = self.state.converted_upload_df
-        elif self.state.upload_df is not None:
-            df = self.state.upload_df
-        else:
-            raise ValueError("No upload dataframe is available.")
-
-        row_df = df[df["_row_id"] == row_id]
-        if row_df.empty:
-            raise ValueError(f"_row_id={row_id} was not found.")
-
-        row = row_df.iloc[0]
+    def _build_row_payload(self, row: pd.Series, row_id: int) -> dict[str, Any]:
+        """단일 행에서 순수 item payload만 계산한다."""
         item = TrackerItemBase()
         item.name = str(row.get("upload_name", ""))
 
@@ -657,25 +707,87 @@ class CodebeamerUploadWizard:
 
         return self._serialize_payload_value(payload)
 
+    @staticmethod
+    def _unresolved_parent_error(parent_row_id: Any) -> str:
+        if parent_row_id is None or pd.isna(parent_row_id):
+            return "Parent row is unresolved."
+        return f"Parent row {int(parent_row_id)} was not uploaded successfully."
+
+    def build_payloads(self, force: bool = False) -> pd.DataFrame:
+        """현재 업로드 대상 전체 행의 payload를 한 번에 계산해 cache한다."""
+        if self.state.schema_df is None:
+            raise ValueError("schema_df is required before payload generation.")
+
+        if self.state.payload_df is not None and not force:
+            return self.state.payload_df
+
+        source_df = self._payload_source_df()
+        payload_rows: list[dict[str, Any]] = []
+
+        for _, row in source_df.iterrows():
+            row_id = int(row["_row_id"])
+            try:
+                payload_json = self._build_row_payload(row, row_id)
+                payload_rows.append({
+                    "_row_id": row_id,
+                    "parent_row_id": row.get("parent_row_id"),
+                    "upload_name": row.get("upload_name"),
+                    "payload_json": payload_json,
+                    "payload_status": PayloadStatus.READY.value,
+                    "payload_error": None,
+                })
+            except Exception as exc:
+                payload_rows.append({
+                    "_row_id": row_id,
+                    "parent_row_id": row.get("parent_row_id"),
+                    "upload_name": row.get("upload_name"),
+                    "payload_json": None,
+                    "payload_status": PayloadStatus.FAILED.value,
+                    "payload_error": str(exc),
+                })
+
+        self.state.payload_df = pd.DataFrame(payload_rows)
+        return self.state.payload_df
+
+    def preview_payload(self, row_id: int) -> dict:
+        """cache된 payload를 돌려주고, 필요하면 먼저 build_payloads를 수행한다."""
+        payload_df = self.build_payloads()
+        row_df = payload_df[payload_df["_row_id"] == row_id]
+        if row_df.empty:
+            raise ValueError(f"_row_id={row_id} was not found.")
+
+        payload_row = row_df.iloc[0]
+        if payload_row["payload_status"] != PayloadStatus.READY.value:
+            raise ValueError(payload_row["payload_error"])
+
+        return payload_row["payload_json"]
+
     def upload(self, dry_run: bool = False, continue_on_error: bool = True) -> dict:
         """부모-자식 순서를 지키며 업로드를 실행하고 결과를 모아 돌려준다."""
         if self.state.tracker_id is None:
             raise ValueError("tracker_id is not set.")
-        if self.state.upload_df is None and self.state.converted_upload_df is None:
-            raise ValueError("No upload dataframe is available.")
+        payload_df = self.build_payloads()
+        ready_df = payload_df[payload_df["payload_status"] == PayloadStatus.READY.value].copy()
+        payload_failed_df = payload_df[payload_df["payload_status"] == PayloadStatus.FAILED.value].copy()
 
-        df = self.state.converted_upload_df if self.state.converted_upload_df is not None else self.state.upload_df
-        work = df.copy().reset_index(drop=True)
-
-        pending = set(work["_row_id"].tolist())
+        pending = set(ready_df["_row_id"].tolist())
         created_map = {}
         success_logs = []
-        failed_logs = []
+        failed_logs = [
+            {
+                "_row_id": int(row["_row_id"]),
+                "parent_row_id": row.get("parent_row_id"),
+                "upload_name": row.get("upload_name"),
+                "error": row.get("payload_error"),
+                "status": PayloadStatus.FAILED.value,
+            }
+            for _, row in payload_failed_df.iterrows()
+        ]
 
         while pending:
             progress = False
 
-            for _, row in work.iterrows():
+            for _, row in ready_df.iterrows():
                 row_id = int(row["_row_id"])
                 if row_id not in pending:
                     continue
@@ -690,7 +802,7 @@ class CodebeamerUploadWizard:
                     parent_item_id = created_map[parent_row_id]
 
                 try:
-                    payload = self.preview_payload(row_id)
+                    payload = row["payload_json"]
 
                     if dry_run:
                         result = {"id": f"DRYRUN-{row_id}"}
@@ -737,7 +849,7 @@ class CodebeamerUploadWizard:
                             "created_map": created_map,
                             "success_df": pd.DataFrame(success_logs),
                             "failed_df": pd.DataFrame(failed_logs),
-                            "unresolved_df": work[work["_row_id"].isin(sorted(pending))].copy(),
+                            "unresolved_df": ready_df[ready_df["_row_id"].isin(sorted(pending))].copy(),
                         }
                         return self.state.upload_result
 
@@ -747,11 +859,16 @@ class CodebeamerUploadWizard:
             if not progress:
                 break
 
+        unresolved_df = ready_df[ready_df["_row_id"].isin(sorted(pending))].copy()
+        if not unresolved_df.empty:
+            unresolved_df["status"] = UploadStatus.UNRESOLVED_PARENT.value
+            unresolved_df["error"] = unresolved_df["parent_row_id"].apply(self._unresolved_parent_error)
+
         self.state.upload_result = {
             "created_map": created_map,
             "success_df": pd.DataFrame(success_logs),
             "failed_df": pd.DataFrame(failed_logs),
-            "unresolved_df": work[work["_row_id"].isin(sorted(pending))].copy(),
+            "unresolved_df": unresolved_df,
         }
         return self.state.upload_result
 
@@ -766,6 +883,7 @@ class CodebeamerUploadWizard:
             "hierarchy_df.csv": self.state.hierarchy_df,
             "upload_df.csv": self.state.upload_df,
             "converted_upload_df.csv": self.state.converted_upload_df,
+            "payload_df.csv": self.state.payload_df,
             "schema_df.csv": self.state.schema_df,
             "comparison_df.csv": self.state.comparison_df,
             "option_check_df.csv": self.state.option_check_df,
@@ -773,7 +891,16 @@ class CodebeamerUploadWizard:
 
         for name, df in frames.items():
             if isinstance(df, pd.DataFrame) and not df.empty:
-                df.to_csv(out / name, index=False)
+                csv_df = df.copy()
+                if "payload_json" in csv_df.columns:
+                    csv_df["payload_json"] = csv_df["payload_json"].apply(
+                        lambda payload: (
+                            json.dumps(payload, ensure_ascii=False)
+                            if payload is not None
+                            else None
+                        )
+                    )
+                csv_df.to_csv(out / name, index=False)
 
         if self.state.schema is not None:
             with open(out / "schema.json", "w", encoding="utf-8") as file:
@@ -782,6 +909,19 @@ class CodebeamerUploadWizard:
         if self.state.option_maps is not None:
             with open(out / "option_maps.json", "w", encoding="utf-8") as file:
                 json.dump(self.state.option_maps, file, ensure_ascii=False, indent=2)
+
+        if isinstance(self.state.payload_df, pd.DataFrame) and not self.state.payload_df.empty:
+            with open(out / "payload_preview.jsonl", "w", encoding="utf-8") as file:
+                for _, row in self.state.payload_df.iterrows():
+                    file.write(json.dumps({
+                        "_row_id": row.get("_row_id"),
+                        "parent_row_id": row.get("parent_row_id"),
+                        "upload_name": row.get("upload_name"),
+                        "payload_status": row.get("payload_status"),
+                        "payload_error": row.get("payload_error"),
+                        "payload_json": row.get("payload_json"),
+                    }, ensure_ascii=False))
+                    file.write("\n")
 
         if self.state.upload_result is not None:
             for key in ["success_df", "failed_df", "unresolved_df"]:

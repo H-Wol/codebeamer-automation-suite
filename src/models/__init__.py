@@ -9,6 +9,7 @@ from .common import OptionMapKind
 from .common import OptionSourceKind
 from .common import OptionSourceStatus
 from .common import PayloadTargetKind
+from .common import PayloadStatus
 from .common import PreconstructionKind
 from .common import OPTION_CONTAINER_KEYS
 from .common import TODO_FIELD_TYPE_VALUE_MODEL_MAP
@@ -81,6 +82,7 @@ __all__ = [
     "OPTION_CONTAINER_KEYS",
     "TODO_FIELD_TYPE_VALUE_MODEL_MAP",
     "PayloadTargetKind",
+    "PayloadStatus",
     "PreconstructionKind",
     "ProjectReference",
     "ReferenceType",

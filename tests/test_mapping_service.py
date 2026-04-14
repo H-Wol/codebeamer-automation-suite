@@ -139,6 +139,15 @@ class MappingServiceTest(unittest.TestCase):
                 "multipleValues": True,
                 "valueModel": "ChoiceFieldValue<TrackerItemReference>",
             },
+            {
+                "id": 12,
+                "name": "Subjects",
+                "type": "ReferenceField",
+                "trackerItemField": "subjects",
+                "referenceType": "TrackerItemReference",
+                "multipleValues": True,
+                "valueModel": "ChoiceFieldValue<TrackerItemReference>",
+            },
         ]
 
         schema_df = self.service.flatten_schema_fields(schema)
@@ -202,6 +211,12 @@ class MappingServiceTest(unittest.TestCase):
         self.assertEqual(related_items["preconstruction_kind"], PreconstructionKind.FIELD_VALUE.value)
         self.assertEqual(related_items["preconstruction_detail"], "ChoiceFieldValue<TrackerItemReference>")
 
+        subjects = self._field_by_name(schema_df, "Subjects")
+        self.assertEqual(subjects["resolved_field_kind"], ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value)
+        self.assertEqual(subjects["payload_target_kind"], PayloadTargetKind.BUILTIN_FIELD.value)
+        self.assertEqual(subjects["preconstruction_kind"], PreconstructionKind.REFERENCE_LIST.value)
+        self.assertFalse(subjects["requires_lookup"])
+
     def test_compare_upload_df_with_schema_includes_resolution_columns(self) -> None:
         """비교 결과 표에도 분류와 lookup 정보가 함께 들어가는지 확인한다."""
         schema_df = self.service.flatten_schema_fields([
@@ -258,6 +273,13 @@ class MappingServiceTest(unittest.TestCase):
                 "type": "OptionChoiceField",
                 "valueModel": "ChoiceFieldValue<AbstractReference>",
             },
+            {
+                "id": 5,
+                "name": "Related Items",
+                "type": "TrackerItemChoiceField",
+                "multipleValues": True,
+                "valueModel": "ChoiceFieldValue<TrackerItemReference>",
+            },
         ])
 
         option_maps = self.service.build_option_maps_from_schema(schema_df)
@@ -272,6 +294,10 @@ class MappingServiceTest(unittest.TestCase):
         self.assertEqual(option_maps["Related Candidate"]["kind"], OptionMapKind.REFERENCE_LOOKUP.value)
         self.assertFalse(option_maps["Related Candidate"]["resolver_available"])
         self.assertIn("resolver", option_maps["Related Candidate"]["unsupported_reason"])
+
+        self.assertEqual(option_maps["Related Items"]["kind"], OptionMapKind.TRACKER_ITEM_DIRECT.value)
+        self.assertEqual(option_maps["Related Items"]["source_status"], OptionSourceStatus.READY.value)
+        self.assertTrue(option_maps["Related Items"]["resolver_available"])
 
         self.assertEqual(option_maps["Choice Hint Only"]["kind"], OptionMapKind.UNSUPPORTED.value)
         self.assertEqual(option_maps["Choice Hint Only"]["source_status"], OptionSourceStatus.UNSUPPORTED.value)
@@ -306,6 +332,13 @@ class MappingServiceTest(unittest.TestCase):
                 "type": "OptionChoiceField",
                 "valueModel": "ChoiceFieldValue<AbstractReference>",
             },
+            {
+                "id": 5,
+                "name": "Related Items",
+                "type": "TrackerItemChoiceField",
+                "multipleValues": True,
+                "valueModel": "ChoiceFieldValue<TrackerItemReference>",
+            },
         ])
         option_maps = self.service.build_option_maps_from_schema(schema_df)
         upload_df = pd.DataFrame([
@@ -315,6 +348,7 @@ class MappingServiceTest(unittest.TestCase):
                 "owner": "Jane Doe",
                 "related": "REQ-1",
                 "choice_hint": "Anything",
+                "related_items": ["Item [20263671]", "broken"],
             }
         ])
         option_mapping = {
@@ -322,6 +356,7 @@ class MappingServiceTest(unittest.TestCase):
             "owner": "Owner",
             "related": "Related Candidate",
             "choice_hint": "Choice Hint Only",
+            "related_items": "Related Items",
         }
 
         result = self.service.check_option_alignment(upload_df, option_mapping, option_maps)
@@ -330,6 +365,7 @@ class MappingServiceTest(unittest.TestCase):
         self.assertIn(OptionCheckStatus.PRECONSTRUCTION_REQUIRED.value, statuses)
         self.assertIn(OptionCheckStatus.OPTION_NOT_FOUND.value, statuses)
         self.assertIn(OptionCheckStatus.LOOKUP_REQUIRED.value, statuses)
+        self.assertIn(OptionCheckStatus.DIRECT_PARSE_FAILED.value, statuses)
         self.assertIn(OptionCheckStatus.FIELD_UNSUPPORTED.value, statuses)
         self.assertIn(UserLookupStatus.USER_LOOKUP_NOT_RUN.value, statuses)
 

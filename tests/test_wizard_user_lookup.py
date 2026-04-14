@@ -13,7 +13,13 @@ from src.wizard import CodebeamerUploadWizard
 try:
     import xlwings._xlmac as _xlmac
 
-    atexit.unregister(_xlmac.clean_up)
+    for cleanup_name in ("cleanup", "clean_up"):
+        cleanup_func = getattr(_xlmac, cleanup_name, None)
+        if cleanup_func is not None:
+            try:
+                atexit.unregister(cleanup_func)
+            except Exception:
+                pass
 except Exception:
     pass
 

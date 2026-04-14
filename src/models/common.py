@@ -165,12 +165,14 @@ class PayloadTargetKind(str, Enum):
 
 
 class OptionSourceKind(str, Enum):
+    DIRECT_PARSE = "direct_parse"
     SCHEMA_OPTIONS = "schema_options"
     REFERENCE_LOOKUP = "reference_lookup"
     UNSUPPORTED = "unsupported"
 
 
 class OptionMapKind(str, Enum):
+    TRACKER_ITEM_DIRECT = "tracker_item_direct"
     STATIC_OPTIONS = "static_options"
     USER_LOOKUP = "user_lookup"
     REFERENCE_LOOKUP = "reference_lookup"
@@ -191,6 +193,7 @@ class MappingStatus(str, Enum):
 
 class OptionCheckStatus(str, Enum):
     DF_COLUMN_MISSING = "DF_COLUMN_MISSING"
+    DIRECT_PARSE_FAILED = "DIRECT_PARSE_FAILED"
     FIELD_UNSUPPORTED = "FIELD_UNSUPPORTED"
     LOOKUP_REQUIRED = "LOOKUP_REQUIRED"
     OPTION_MAP_MISSING = "OPTION_MAP_MISSING"
@@ -207,9 +210,15 @@ class UserLookupStatus(str, Enum):
     USER_NOT_FOUND = "USER_NOT_FOUND"
 
 
+class PayloadStatus(str, Enum):
+    READY = "PAYLOAD_READY"
+    FAILED = "PAYLOAD_FAILED"
+
+
 class UploadStatus(str, Enum):
-    FAILED = "FAILED"
-    SUCCESS = "SUCCESS"
+    SUCCESS = "UPLOAD_SUCCESS"
+    FAILED = "UPLOAD_FAILED"
+    UNRESOLVED_PARENT = "UNRESOLVED_PARENT"
 
 
 class TrackerItemField(str, Enum):

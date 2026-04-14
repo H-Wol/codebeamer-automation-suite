@@ -17,6 +17,7 @@ class WizardState:
     hierarchy_df: pd.DataFrame | None = None
     upload_df: pd.DataFrame | None = None
     converted_upload_df: pd.DataFrame | None = None
+    payload_df: pd.DataFrame | None = None
 
     schema: dict | None = None
     schema_df: pd.DataFrame | None = None

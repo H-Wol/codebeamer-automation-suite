@@ -199,10 +199,11 @@ class TrackerItemBase(DomainModel):
         """schema 필드 이름을 현재 모델 속성 이름과 맞는 표기로 정리한다."""
         if not field_name:
             return field_name
-        if hasattr(TrackerItemBase, field_name):
+        field_names = TrackerItemBase.__dataclass_fields__
+        if field_name in field_names:
             return field_name
         normalized = _camel_to_snake(field_name)
-        return normalized if hasattr(TrackerItemBase, normalized) else field_name
+        return normalized if normalized in field_names else field_name
 
     @classmethod
     def has_builtin_field(cls, field_name: str | None) -> bool:
@@ -210,7 +211,7 @@ class TrackerItemBase(DomainModel):
         if not field_name:
             return False
         normalized = cls._normalize_tracker_field_name(field_name)
-        return hasattr(cls, normalized)
+        return normalized in cls.__dataclass_fields__
 
     @staticmethod
     def _reference_type(field_info: FieldInfo | None) -> str | None:
@@ -222,8 +223,14 @@ class TrackerItemBase(DomainModel):
     @staticmethod
     def _parse_tracker_item_reference_id(raw_value: Any) -> int:
         """입력값에서 `[]` 안의 첫 번째 정수 또는 전체 정수를 tracker item id로 추출한다."""
+        if isinstance(raw_value, bool):
+            raise ValueError(f"Cannot parse tracker item id from value: {raw_value!r}")
         if isinstance(raw_value, int):
             return raw_value
+        if isinstance(raw_value, float):
+            if raw_value.is_integer():
+                return int(raw_value)
+            raise ValueError(f"Cannot parse tracker item id from value: {raw_value!r}")
         if isinstance(raw_value, dict) and raw_value.get("id") is not None:
             return int(raw_value["id"])
 
@@ -233,6 +240,8 @@ class TrackerItemBase(DomainModel):
             return int(bracket_match.group(1))
         if text.isdigit():
             return int(text)
+        if text.endswith(".0") and text[:-2].isdigit():
+            return int(text[:-2])
         raise ValueError(f"Cannot parse tracker item id from value: {raw_value!r}")
 
     def _to_tracker_item_reference(self, raw_value: Any) -> TrackerItemReference:

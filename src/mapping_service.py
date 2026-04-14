@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pandas as pd
@@ -30,11 +31,21 @@ class MappingService:
         self.logger = logger
 
     @staticmethod
+    def _is_missing_scalar(value: Any) -> bool:
+        """None 또는 scalar NaN처럼 비어 있는 값을 공통 판정한다."""
+        if value is None:
+            return True
+        try:
+            return bool(pd.isna(value))
+        except Exception:
+            return False
+
+    @staticmethod
     def _is_truthy_flag(value: Any) -> bool:
         """문자열이나 숫자로 들어온 참/거짓 값을 불린으로 단순화한다."""
         if isinstance(value, bool):
             return value
-        if value is None:
+        if MappingService._is_missing_scalar(value):
             return False
         if isinstance(value, str):
             return value.strip().lower() == "true"
@@ -92,6 +103,72 @@ class MappingService:
         """valueModel 문자열이 choice 계열인지 빠르게 판정한다."""
         return isinstance(value_model, str) and "Choice" in value_model
 
+    @staticmethod
+    def _parse_tracker_item_reference_id(raw_value: Any) -> int:
+        """Tracker item 입력값에서 실제 item id를 추출한다."""
+        if isinstance(raw_value, bool):
+            raise ValueError(f"Cannot parse tracker item id from value: {raw_value!r}")
+        if isinstance(raw_value, int):
+            return raw_value
+        if isinstance(raw_value, float):
+            if pd.isna(raw_value) or not raw_value.is_integer():
+                raise ValueError(f"Cannot parse tracker item id from value: {raw_value!r}")
+            return int(raw_value)
+        if isinstance(raw_value, dict) and raw_value.get("id") is not None:
+            return int(raw_value["id"])
+
+        text = str(raw_value).strip()
+        bracket_match = re.search(r"\[(\d+)\]", text)
+        if bracket_match:
+            return int(bracket_match.group(1))
+        if text.isdigit():
+            return int(text)
+        if text.endswith(".0") and text[:-2].isdigit():
+            return int(text[:-2])
+        raise ValueError(f"Cannot parse tracker item id from value: {raw_value!r}")
+
+    @classmethod
+    def _to_tracker_item_reference_payload(cls, raw_value: Any) -> dict[str, Any]:
+        """원본 값을 tracker item reference payload dict로 정규화한다."""
+        item_id = cls._parse_tracker_item_reference_id(raw_value)
+        if isinstance(raw_value, dict):
+            normalized = dict(raw_value)
+            normalized["id"] = item_id
+            normalized.setdefault("type", ReferenceType.TRACKER_ITEM.value)
+            result = {
+                "id": normalized.get("id"),
+                "name": normalized.get("name"),
+                "type": normalized.get("type"),
+            }
+            return {key: value for key, value in result.items() if value is not None}
+
+        return {
+            "id": item_id,
+            "type": ReferenceType.TRACKER_ITEM.value,
+        }
+
+    @classmethod
+    def resolve_tracker_item_reference_value(
+        cls,
+        raw_value: Any,
+        *,
+        multiple_values: bool,
+    ) -> Any:
+        """TrackerItemChoiceField 입력을 업로드용 reference payload로 바꾼다."""
+        if raw_value is None or str(raw_value).strip() == "":
+            return None
+
+        if multiple_values:
+            values = raw_value if isinstance(raw_value, list) else [raw_value]
+            resolved_values = []
+            for item in values:
+                if item is None or str(item).strip() == "":
+                    continue
+                resolved_values.append(cls._to_tracker_item_reference_payload(item))
+            return resolved_values or None
+
+        return cls._to_tracker_item_reference_payload(raw_value)
+
     @classmethod
     def _resolve_payload_target_kind(cls, field: dict[str, Any]) -> str:
         """이 필드가 builtin field인지 custom field인지 먼저 판정한다."""
@@ -142,6 +219,7 @@ class MappingService:
         reference_type = field.get("referenceType")
         has_options = bool(field.get("options"))
         value_model = field.get("valueModel")
+        tracker_item_field = field.get("trackerItemField", field.get("name", None))
         payload_target_kind = cls._resolve_payload_target_kind(field)
 
         result = {
@@ -213,6 +291,14 @@ class MappingService:
             if reference_type == ReferenceType.USER.value:
                 result["resolved_field_kind"] = ResolvedFieldKind.USER_REFERENCE.value
                 result["resolution_strategy"] = ResolutionStrategy.TYPE_REFERENCE_WITH_USER_REFERENCE.value
+                return result
+            if (
+                reference_type == ReferenceType.TRACKER_ITEM.value
+                and payload_target_kind == PayloadTargetKind.BUILTIN_FIELD.value
+                and TrackerItemBase.has_builtin_field(tracker_item_field)
+            ):
+                result["resolved_field_kind"] = ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value
+                result["resolution_strategy"] = ResolutionStrategy.TYPE_REFERENCE_WITH_REFERENCE_TYPE.value
                 return result
             if reference_type:
                 result["resolved_field_kind"] = ResolvedFieldKind.GENERIC_REFERENCE.value
@@ -377,6 +463,7 @@ class MappingService:
         resolved_field_kind = getter("resolved_field_kind")
         if resolved_field_kind in {
             ResolvedFieldKind.STATIC_OPTION.value,
+            ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value,
             ResolvedFieldKind.USER_REFERENCE.value,
             ResolvedFieldKind.GENERIC_REFERENCE.value,
         }:
@@ -400,6 +487,8 @@ class MappingService:
         resolved_field_kind = getter("resolved_field_kind")
         if resolved_field_kind == ResolvedFieldKind.STATIC_OPTION.value:
             return OptionSourceKind.SCHEMA_OPTIONS.value
+        if resolved_field_kind == ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value:
+            return OptionSourceKind.DIRECT_PARSE.value
         if resolved_field_kind in {
             ResolvedFieldKind.USER_REFERENCE.value,
             ResolvedFieldKind.GENERIC_REFERENCE.value,
@@ -586,11 +675,15 @@ class MappingService:
     def _option_map_metadata(row: pd.Series | dict[str, Any]) -> dict[str, Any]:
         """option map에도 공통 분류 정보를 함께 담기 위한 묶음을 만든다."""
         getter = row.get
+        unsupported_reason = getter("unsupported_reason")
+        if MappingService._is_missing_scalar(unsupported_reason):
+            unsupported_reason = None
+
         return {
             "resolved_field_kind": getter("resolved_field_kind"),
             "resolution_strategy": getter("resolution_strategy"),
             "is_supported": getter("is_supported"),
-            "unsupported_reason": getter("unsupported_reason"),
+            "unsupported_reason": unsupported_reason,
             "requires_lookup": getter("requires_lookup"),
             "lookup_target_kind": getter("lookup_target_kind"),
             "preconstruction_kind": getter("preconstruction_kind"),
@@ -639,6 +732,19 @@ class MappingService:
                     "reference_type": reference_type,
                     "multiple_values": multiple_values,
                     "options": options,
+                    "source_status": OptionSourceStatus.READY.value,
+                    "resolver_available": True,
+                    **metadata,
+                }
+                continue
+
+            if resolved_field_kind == ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value:
+                option_maps[field_name] = {
+                    "kind": OptionMapKind.TRACKER_ITEM_DIRECT.value,
+                    "name_map": {},
+                    "reference_type": reference_type or ReferenceType.TRACKER_ITEM.value,
+                    "multiple_values": multiple_values,
+                    "options": None,
                     "source_status": OptionSourceStatus.READY.value,
                     "resolver_available": True,
                     **metadata,
@@ -803,6 +909,32 @@ class MappingService:
                     })
                 continue
 
+            if option_info.get("kind") == OptionMapKind.TRACKER_ITEM_DIRECT.value:
+                multiple_values = option_info.get("multiple_values", False)
+                for _, row in upload_df.iterrows():
+                    raw_value = row[df_col]
+                    if raw_value is None or str(raw_value).strip() == "":
+                        continue
+
+                    try:
+                        self.resolve_tracker_item_reference_value(
+                            raw_value,
+                            multiple_values=multiple_values,
+                        )
+                    except Exception as exc:
+                        errors.append({
+                            **self._validation_context(
+                                df_col,
+                                schema_field,
+                                option_info,
+                                row_id=row.get("_row_id"),
+                                raw_value=raw_value,
+                                error=str(exc),
+                            ),
+                            "status": OptionCheckStatus.DIRECT_PARSE_FAILED.value,
+                        })
+                continue
+
             if option_info.get("kind") == OptionMapKind.REFERENCE_LOOKUP.value:
                 errors.append({
                     **self._validation_context(
@@ -877,6 +1009,29 @@ class MappingService:
                 continue
 
             option_info = option_maps[schema_field]
+            if option_info.get("kind") == OptionMapKind.TRACKER_ITEM_DIRECT.value:
+                resolved_values = []
+                multiple_values = option_info.get("multiple_values", False)
+
+                for _, row in work.iterrows():
+                    raw_value = row[df_col]
+                    if raw_value is None or str(raw_value).strip() == "":
+                        resolved_values.append(None)
+                        continue
+
+                    try:
+                        resolved_values.append(
+                            self.resolve_tracker_item_reference_value(
+                                raw_value,
+                                multiple_values=multiple_values,
+                            )
+                        )
+                    except Exception:
+                        resolved_values.append(None)
+
+                work[f"{df_col}__resolved"] = resolved_values
+                continue
+
             if option_info.get("kind") == OptionMapKind.USER_LOOKUP.value:
                 resolved_col = f"{df_col}__resolved"
                 if resolved_col not in work.columns:

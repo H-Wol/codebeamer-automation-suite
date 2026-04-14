@@ -2,20 +2,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.cli_excel_utils import list_sheet_names
-from src.cli_excel_utils import read_headers
 from src.cli_helpers import choose_one
 from src.cli_helpers import confirm
 from src.codebeamer_client import CodebeamerClient
 from src.config import load_config
-from src.excel_processor import ExcelHierarchyProcessor
+from src.excel_reader import ExcelReader
+from src.hierarchy_processor import HierarchyProcessor
 from src.logger import setup_logger
 from src.mapping_service import MappingService
 from src.models import OptionCheckStatus
+from src.models import PayloadStatus
 from src.wizard import CodebeamerUploadWizard
 
 
 BLOCKING_OPTION_STATUSES = {
+    OptionCheckStatus.DIRECT_PARSE_FAILED.value,
     OptionCheckStatus.DF_COLUMN_MISSING.value,
     OptionCheckStatus.FIELD_UNSUPPORTED.value,
     OptionCheckStatus.LOOKUP_REQUIRED.value,
@@ -129,6 +130,12 @@ def _print_option_check_summary(option_check_df):
         if not option_not_found_df.empty:
             print("- schema option에 없는 값이 업로드 데이터에 있습니다.")
 
+        direct_parse_failed_df = blocking_df[
+            blocking_df["status"] == OptionCheckStatus.DIRECT_PARSE_FAILED.value
+        ]
+        if not direct_parse_failed_df.empty:
+            print("- tracker item ID를 직접 파싱하지 못한 값이 있습니다.")
+
         user_lookup_df = blocking_df[
             blocking_df["status"].astype(str).str.endswith(USER_LOOKUP_FAILURE_SUFFIXES)
         ]
@@ -148,10 +155,12 @@ def main():
     logger = setup_logger("cb-cli", level=cfg.log_level)
 
     client = CodebeamerClient(cfg.base_url, cfg.username, cfg.password, logger)
+    reader = ExcelReader(header_row=cfg.excel_header_row, logger=logger)
     wizard = CodebeamerUploadWizard(
         client=client,
         processor=None,
         mapper=MappingService(logger=logger),
+        reader=reader,
         logger=logger,
     )
 
@@ -165,11 +174,11 @@ def main():
     wizard.select_tracker(tracker_id)
 
     file_path = _prompt_excel_path()
-    sheet_names = list_sheet_names(file_path)
+    sheet_names = reader.list_sheet_names(file_path)
     sheet_index = choose_one("시트 선택", sheet_names)
     sheet_name = sheet_names[sheet_index]
 
-    headers = read_headers(file_path, sheet_name, header_row=cfg.excel_header_row)
+    headers = reader.read_headers(file_path, sheet_name)
     summary_candidates = [col for col in headers if col.lower() == "summary" or col == "요약"]
     if summary_candidates:
         summary_col = summary_candidates[0]
@@ -193,13 +202,14 @@ def main():
     else:
         print("\n[multipleValues 기준 자동 선택된 list 컬럼 없음]")
 
-    wizard.processor = ExcelHierarchyProcessor(
+    raw_df = reader.read_excel(file_path=file_path, sheet_name=sheet_name)
+
+    wizard.processor = HierarchyProcessor(
         header_row=cfg.excel_header_row,
         summary_col=summary_col,
         logger=logger,
     )
-
-    wizard.read_excel(file_path=file_path, sheet_name=sheet_name, list_cols=list_cols)
+    wizard.load_raw_dataframe(raw_df=raw_df, list_cols=list_cols)
 
     print("\n[업로드 컬럼 목록]")
     for col in wizard.state.upload_df.columns:
@@ -231,6 +241,11 @@ def main():
                 return
     else:
         print("옵션/참조형 필드 매핑 대상이 없습니다.")
+
+    payload_df = wizard.build_payloads()
+    ready_count = len(payload_df[payload_df["payload_status"] == PayloadStatus.READY.value])
+    failed_count = len(payload_df[payload_df["payload_status"] == PayloadStatus.FAILED.value])
+    print(f"\n[Payload Cache] ready={ready_count}, failed={failed_count}")
 
     preview_row_id = int(wizard.state.upload_df["_row_id"].min())
     print(f"\n[Payload Preview row_id={preview_row_id}]")

@@ -4,13 +4,14 @@
 
 이 프로젝트는 Excel 기반 계층형 데이터를 Codebeamer Tracker Item payload로 변환하고 업로드하는 자동화 파이프라인입니다.
 
-코드베이스는 크게 다섯 계층으로 나뉩니다.
+코드베이스는 크게 여섯 계층으로 나뉩니다.
 
 1. 엔트리 포인트
-2. Excel 처리
-3. schema 및 매핑
-4. payload 모델과 오케스트레이션
-5. Codebeamer API 접근
+2. 입력 reader
+3. hierarchy processor
+4. schema 및 매핑
+5. payload 모델과 오케스트레이션
+6. Codebeamer API 접근
 
 ## 주요 모듈
 
@@ -19,23 +20,36 @@
 - `cli_main.py`: 현재 권장 인터랙티브 CLI
 - `main.py`: 과거 엔트리 포인트, 현재 비권장
 
-### Excel 처리
+### 입력 reader
 
-`src/excel_processor.py`
+`src/excel_reader.py`
 
 주요 책임:
 - `xlwings`로 워크북과 시트를 열기
 - 헤더와 데이터 행 읽기
 - summary 셀의 들여쓰기 수준 감지
+- raw dataframe 반환
+- `_excel_row`, `_summary_indent` 메타 컬럼 부여
+
+주요 산출물:
+- `raw_df`
+
+### hierarchy processor
+
+`src/hierarchy_processor.py`
+
+주요 책임:
 - 여러 물리적 행을 하나의 논리 레코드로 병합
 - 들여쓰기 기준으로 parent-child 관계 계산
 - wizard가 사용하는 upload dataframe 생성
 
 주요 산출물:
-- `raw_df`
 - `merged_df`
 - `hierarchy_df`
 - `upload_df`
+
+호환 참고:
+- `src/excel_processor.py` 는 기존 import 경로를 위한 얇은 래퍼다.
 
 ### schema 및 매핑
 
@@ -86,9 +100,11 @@
 `src/wizard.py`
 
 주요 책임:
-- API client, Excel processor, mapping service를 조합해 전체 흐름 제어
+- API client, reader, hierarchy processor, mapping service를 조합해 전체 흐름 제어
 - 업로드 세션 상태 유지
-- row 단위 payload preview 생성
+- raw dataframe 기반 후처리 실행
+- row 단위 payload cache 생성
+- cache된 payload preview 제공
 - `TableField` custom field 조립
 - 사용자 선택 필드를 사용자 ID lookup 후 reference로 변환
 - tracker item 선택 필드를 tracker item ID parse 후 reference로 변환
@@ -120,25 +136,28 @@ flowchart TD
     E --> F["Tracker schema 조회"]
     F --> G["Excel 헤더와 schema 자동 매핑 확인"]
     G --> H["multipleValues=true 필드에 대응하는 list 컬럼 자동 선택"]
-    H --> I["Excel 읽기 및 멀티라인 병합"]
-    I --> J["들여쓰기 기반 계층 생성"]
-    J --> K["schema 비교 및 option-like 필드 분석"]
-    K --> L{"필드 종류 판별"}
-    L -->|정적 options| M["option 이름을 reference payload로 변환"]
-    L -->|사용자 선택 필드| N["user ID lookup"]
-    N --> O{"캐시에 있음?"}
-    O -->|예| P["캐시된 userInfo / reference 재사용"]
-    O -->|아니오| Q["GET /v3/users/{id} 호출"]
-    Q --> R["userInfo와 reference를 캐시에 저장"]
-    L -->|TrackerItemChoiceField| S["tracker item ID 파싱"]
-    L -->|기타 reference| X["LOOKUP_REQUIRED 또는 unsupported 표시"]
-    M --> T["row별 payload preview 생성"]
-    P --> T
-    R --> T
-    S --> T
-    X --> T
-    T --> U["parent-first 순서로 업로드"]
-    U --> V["성공 / 실패 / 미해결 결과 저장"]
+    H --> I["Excel reader가 raw dataframe 생성"]
+    I --> J["hierarchy processor가 멀티라인 병합"]
+    J --> K["들여쓰기 기반 계층 생성"]
+    K --> L["schema 비교 및 option-like 필드 분석"]
+    L --> M{"필드 종류 판별"}
+    M -->|정적 options| N["option 이름을 reference payload로 변환"]
+    M -->|사용자 선택 필드| O["user ID lookup"]
+    O --> P{"캐시에 있음?"}
+    P -->|예| Q["캐시된 userInfo / reference 재사용"]
+    P -->|아니오| R["GET /v3/users/{id} 호출"]
+    R --> S["userInfo와 reference를 캐시에 저장"]
+    M -->|TrackerItemChoiceField| T["tracker item ID 파싱"]
+    M -->|기타 reference| U["LOOKUP_REQUIRED 또는 unsupported 표시"]
+    N --> V["row별 payload cache 생성"]
+    Q --> V
+    S --> V
+    T --> V
+    U --> V
+    V --> W["preview는 cache된 payload 반환"]
+    W --> X["upload는 같은 payload cache 재사용"]
+    X --> Y["업로드 시점에만 parentItemId 결정"]
+    Y --> Z["성공 / 실패 / 미해결 / payload cache 저장"]
 ```
 
 ## End-to-End 흐름
@@ -149,16 +168,17 @@ flowchart TD
 4. CLI가 tracker schema를 먼저 조회합니다.
 5. Excel 헤더와 schema의 자동 매핑을 확인합니다.
 6. 매핑 결과와 schema의 `multipleValues`를 기준으로 list 컬럼을 자동 선택합니다.
-7. wizard가 Excel을 읽고 `raw_df`, `merged_df`, `hierarchy_df`, `upload_df`를 생성합니다.
-8. CLI와 wizard가 schema 비교 결과를 준비합니다.
-9. mapping service가 field type을 해석하고 resolution 전략을 결정합니다.
-10. 정적 option은 reference dict로 해석합니다.
-11. 사용자 선택 필드는 사용자 ID로 조회하고 `__resolved`, `__user_info` 컬럼에 반영합니다.
-12. tracker item 선택 필드는 입력값에서 tracker item ID를 파싱해 `TrackerItemReference` 로 변환합니다.
-13. user lookup 결과는 `WizardState.user_lookup_cache` 에 저장해 다음 행에서 재사용합니다.
-14. wizard가 payload preview를 생성합니다.
-15. wizard가 parent-first 순서로 업로드합니다.
-16. state와 실행 결과를 `output/`에 저장합니다.
+7. Excel reader가 raw dataframe을 만들고 `_excel_row`, `_summary_indent` 메타정보를 붙입니다.
+8. hierarchy processor가 `raw_df`, `merged_df`, `hierarchy_df`, `upload_df`를 생성합니다.
+9. CLI와 wizard가 schema 비교 결과를 준비합니다.
+10. mapping service가 field type을 해석하고 resolution 전략을 결정합니다.
+11. 정적 option은 reference dict로 해석합니다.
+12. 사용자 선택 필드는 사용자 ID로 조회하고 `__resolved`, `__user_info` 컬럼에 반영합니다.
+13. tracker item 선택 필드는 입력값에서 tracker item ID를 파싱해 `TrackerItemReference` 로 변환합니다.
+14. user lookup 결과는 `WizardState.user_lookup_cache` 에 저장해 다음 행에서 재사용합니다.
+15. wizard가 row별 payload를 먼저 계산해 `payload_df` cache에 저장합니다.
+16. preview는 `payload_df`를 재사용하고 upload는 같은 payload로 parent-first 업로드를 수행합니다.
+17. state와 실행 결과를 `output/`에 저장합니다.
 
 ## 상태 모델
 
@@ -170,6 +190,7 @@ flowchart TD
 - Excel 읽기 후 `raw_df`, `merged_df`, `hierarchy_df`, `upload_df`가 채워짐
 - schema 로딩 후 `schema`, `schema_df`, `comparison_df`가 채워짐
 - option 처리 후 `option_candidates_df`, `option_maps`, `option_check_df`, `converted_upload_df`가 채워짐
+- payload 생성 후 `payload_df` 가 채워짐
 - 사용자 lookup 중간 결과는 `user_lookup_cache` 에 유지됨
 - upload 수행 후 `upload_result`가 채워짐
 
