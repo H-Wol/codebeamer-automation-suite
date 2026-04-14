@@ -54,17 +54,9 @@ class OfflineSchemaClient:
         del tracker_id
         return self.schema
 
-    def get_user_by_name(self, name: str):
+    def get_user(self, user_id: int):
         """오프라인 모드에서는 사용자 디렉터리 조회를 제공하지 않는다."""
-        raise RuntimeError(f"offline fixture does not provide user lookup by name: {name}")
-
-    def get_user_by_email(self, email: str):
-        """오프라인 모드에서는 사용자 디렉터리 조회를 제공하지 않는다."""
-        raise RuntimeError(f"offline fixture does not provide user lookup by email: {email}")
-
-    def search_user_infos(self, **kwargs):
-        """오프라인 모드에서는 사용자 검색을 제공하지 않는다."""
-        raise RuntimeError(f"offline fixture does not provide user search: {kwargs}")
+        raise RuntimeError(f"offline fixture does not provide user lookup by id: {user_id}")
 
 
 class OfflinePayloadIntegrationTest(unittest.TestCase):
@@ -144,16 +136,16 @@ class OfflinePayloadIntegrationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"\[LOOKUP_REQUIRED\]"):
             wizard.preview_payload(0)
 
-    def test_offline_fixtures_mark_member_field_as_unsupported(self) -> None:
-        """`MemberField` 같은 미지원 타입은 서버 없이도 바로 unsupported로 드러나야 한다."""
+    def test_offline_fixtures_report_member_field_as_user_lookup_failed(self) -> None:
+        """`MemberField`는 사용자 ID lookup이 실패하면 곧바로 lookup 실패로 드러나야 한다."""
         wizard = self._build_wizard({
             "시험 담당자": "시험 담당자",
         })
 
         statuses = set(wizard.state.option_check_df["status"].dropna().tolist())
 
-        self.assertIn(OptionCheckStatus.FIELD_UNSUPPORTED.value, statuses)
-        with self.assertRaisesRegex(ValueError, r"\[FIELD_UNSUPPORTED\]"):
+        self.assertIn(UserLookupStatus.USER_LOOKUP_FAILED.value, statuses)
+        with self.assertRaisesRegex(ValueError, r"\[LOOKUP_REQUIRED\]"):
             wizard.preview_payload(0)
 
 

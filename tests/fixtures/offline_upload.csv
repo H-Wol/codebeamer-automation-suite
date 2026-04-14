@@ -1,3 +1,3 @@
 요약,상태,승인,단계,체크리스트.결과,Owner,Related Candidate,시험 담당자,들여쓰기
-REQ-001,Open,true,Draft,PASS,Jane Doe,REQ-999,Tester A,0
+REQ-001,Open,true,Draft,PASS,101,REQ-999,201,0
 ,,,Review,,,,,0

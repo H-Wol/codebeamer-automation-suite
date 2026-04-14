@@ -30,21 +30,97 @@ class ReferenceType(str, Enum):
 class FieldValueType(str, Enum):
     BOOL = "BoolFieldValue"
     CHOICE = "ChoiceFieldValue"
+    COLOR = "ColorFieldValue"
+    COUNTRY = "CountryFieldValue"
+    DATE = "DateFieldValue"
+    DECIMAL = "DecimalFieldValue"
+    DURATION = "DurationFieldValue"
+    INTEGER = "IntegerFieldValue"
+    LANGUAGE = "LanguageFieldValue"
     TABLE = "TableFieldValue"
     TEXT = "TextFieldValue"
+    URL = "UrlFieldValue"
+    WIKI_TEXT = "WikiTextFieldValue"
 
 
 class SchemaFieldType(str, Enum):
     BOOL = "BoolField"
+    COLOR = "ColorField"
+    COUNTRY = "CountryField"
+    DATE = "DateField"
+    DECIMAL = "DecimalField"
+    DURATION = "DurationField"
+    INTEGER = "IntegerField"
+    MEMBER = "MemberField"
+    LANGUAGE = "LanguageField"
     OPTION_CHOICE = "OptionChoiceField"
     REFERENCE = "ReferenceField"
     TABLE = "TableField"
+    TEXT = "TextField"
+    TRACKER_ITEM_CHOICE = "TrackerItemChoiceField"
+    URL = "UrlField"
+    USER_CHOICE = "UserChoiceField"
+    WIKI_TEXT = "WikiTextField"
+
+
+CONNECTED_FIELD_TYPE_VALUE_MODEL_MAP: dict[str, str] = {
+    SchemaFieldType.BOOL.value: FieldValueType.BOOL.value,
+    SchemaFieldType.COLOR.value: FieldValueType.COLOR.value,
+    SchemaFieldType.COUNTRY.value: FieldValueType.COUNTRY.value,
+    SchemaFieldType.DATE.value: FieldValueType.DATE.value,
+    SchemaFieldType.DECIMAL.value: FieldValueType.DECIMAL.value,
+    SchemaFieldType.DURATION.value: FieldValueType.DURATION.value,
+    SchemaFieldType.INTEGER.value: FieldValueType.INTEGER.value,
+    SchemaFieldType.MEMBER.value: FieldValueType.CHOICE.value,
+    SchemaFieldType.LANGUAGE.value: FieldValueType.LANGUAGE.value,
+    SchemaFieldType.OPTION_CHOICE.value: FieldValueType.CHOICE.value,
+    SchemaFieldType.REFERENCE.value: FieldValueType.CHOICE.value,
+    SchemaFieldType.TABLE.value: FieldValueType.TABLE.value,
+    SchemaFieldType.TEXT.value: FieldValueType.TEXT.value,
+    SchemaFieldType.TRACKER_ITEM_CHOICE.value: FieldValueType.CHOICE.value,
+    SchemaFieldType.URL.value: FieldValueType.URL.value,
+    SchemaFieldType.USER_CHOICE.value: FieldValueType.CHOICE.value,
+    SchemaFieldType.WIKI_TEXT.value: FieldValueType.WIKI_TEXT.value,
+}
+"""현재 코드에 실제로 구현체가 있어 로직에 연결한 schema field -> field value 매핑이다.
+
+Swagger V3 상속/추상 모델 문서 기준으로 AbstractFieldValue 구현체가 확인되고,
+현재 코드베이스에도 실제 FieldValue 클래스가 있는 항목만 여기에 둔다.
+"""
+
+
+TODO_FIELD_TYPE_VALUE_MODEL_MAP: dict[str, str | tuple[str, ...] | None] = {
+    # TODO: 아래 field 들은 공식 문서에서 AbstractFieldValue 구현체가 확인되므로
+    # single-value 형태는 우선 연결했다. multi-value 또는 세부 coercion 규칙은 추가 확인이 필요하다.
+    "CountryField": ("CountryFieldValue", "CountryFieldMultiValue"),
+    "LanguageField": ("LanguageFieldValue", "LanguageFieldMultiValue"),
+    "LayoutField": None,
+    # TODO: 아래 choice/reference 계열은 OptionChoiceField와 UserChoiceField를 제외하고
+    # schema 예시를 더 확인한 뒤 referenceType, multipleValues, valueModel 조합으로 연결한다.
+    "ProjectChoiceField": None,
+    "RepositoryChoiceField": None,
+    "ReviewMemberReferenceField": None,
+    "TrackerChoiceField": None,
+    "TrackerField": None,
+    "TrackerItemField": None,
+    "UpdateTrackerItemField": None,
+    "UpdateTrackerItemTableField": None,
+    # TODO: UrlField / WikiTextField 는 single-value 구현만 우선 반영했다.
+    "WikiTextField": ("WikiTextFieldValue", "WikiTextFieldMultiValue"),
+}
+"""다음 단계에서 구현할 field/value 연결 후보 목록이다.
+
+- 값이 문자열이면 예상되는 FieldValue 이름이다.
+- 값이 tuple이면 single/multi value 분기가 필요하다.
+- 값이 None이면 아직 payload 규칙을 확정하지 못한 field다.
+"""
 
 
 class ResolvedFieldKind(str, Enum):
     SCALAR_TEXT = "scalar_text"
     SCALAR_BOOL = "scalar_bool"
     STATIC_OPTION = "static_option"
+    TRACKER_ITEM_REFERENCE = "tracker_item_reference"
     USER_REFERENCE = "user_reference"
     GENERIC_REFERENCE = "generic_reference"
     TABLE = "table"
@@ -57,6 +133,7 @@ class ResolutionStrategy(str, Enum):
     TYPE_BOOL = "type_bool"
     TYPE_TABLE = "type_table"
     TYPE_OPTION_WITH_OPTIONS = "type_option_with_options"
+    TYPE_TRACKER_ITEM_CHOICE = "type_tracker_item_choice"
     TYPE_OPTION_WITH_USER_REFERENCE = "type_option_with_user_reference"
     TYPE_OPTION_WITH_REFERENCE_TYPE = "type_option_with_reference_type"
     TYPE_OPTION_AMBIGUOUS = "type_option_ambiguous"

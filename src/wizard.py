@@ -146,15 +146,6 @@ class CodebeamerUploadWizard:
             return ""
         return str(value).strip()
 
-    @classmethod
-    def _looks_like_email(cls, value: Any) -> bool:
-        """입력값이 이메일 주소처럼 보이는지 단순 판정한다."""
-        text = cls._normalize_lookup_text(value)
-        if "@" not in text:
-            return False
-        local_part, _, domain = text.partition("@")
-        return bool(local_part and domain)
-
     @staticmethod
     def _http_status_code(exc: Exception) -> int | None:
         """예외 안에 담긴 HTTP 상태 코드를 안전하게 꺼낸다."""
@@ -167,18 +158,13 @@ class CodebeamerUploadWizard:
 
     @classmethod
     def _user_lookup_aliases(cls, user_info: dict[str, Any] | None) -> set[str]:
-        """한 사용자를 다시 찾기 쉬우도록 이름과 이메일 별칭을 만든다."""
+        """한 사용자를 다시 찾기 쉬우도록 ID 문자열만 별칭으로 만든다."""
         if not user_info:
             return set()
 
-        alias_candidates = [
-            user_info.get("name"),
-            user_info.get("email"),
-            f"{user_info.get('firstName') or ''} {user_info.get('lastName') or ''}",
-        ]
         return {
             normalized.casefold()
-            for value in alias_candidates
+            for value in [user_info.get("id")]
             if (normalized := cls._normalize_lookup_text(value))
         }
 
@@ -199,32 +185,12 @@ class CodebeamerUploadWizard:
         return entry
 
     @classmethod
-    def _select_exact_user_matches(
-        cls,
-        candidates: list[UserInfo],
-        lookup_text: str,
-        *,
-        use_email: bool,
-    ) -> list[UserInfo]:
-        """검색 결과 중에서 입력값과 정확히 일치하는 사용자만 추린다."""
-        normalized_lookup = lookup_text.casefold()
-        exact_matches: list[UserInfo] = []
-
-        for candidate in candidates:
-            if use_email:
-                email = cls._normalize_lookup_text(candidate.email)
-                if email.casefold() == normalized_lookup:
-                    exact_matches.append(candidate)
-                continue
-
-            name = cls._normalize_lookup_text(candidate.name)
-            full_name = cls._normalize_lookup_text(
-                f"{candidate.firstName or ''} {candidate.lastName or ''}"
-            )
-            if name.casefold() == normalized_lookup or full_name.casefold() == normalized_lookup:
-                exact_matches.append(candidate)
-
-        return exact_matches
+    def _parse_user_id(cls, raw_value: Any) -> int:
+        """사용자 lookup 입력을 정수 ID로 해석한다."""
+        lookup_text = cls._normalize_lookup_text(raw_value)
+        if not lookup_text:
+            raise ValueError("user id is empty")
+        return int(lookup_text)
 
     @staticmethod
     def _to_user_reference(candidate: UserInfo) -> dict[str, Any]:
@@ -237,26 +203,21 @@ class CodebeamerUploadWizard:
         self,
         raw_value: Any,
     ) -> UserLookupCacheEntry:
-        """이름이나 이메일로 사용자를 찾아 reference와 상세 정보를 함께 돌려준다."""
+        """사용자 ID로 사용자를 찾아 reference와 상세 정보를 함께 돌려준다."""
         lookup_text = self._normalize_lookup_text(raw_value)
         cache_key = self._user_lookup_cache_key(lookup_text)
         if cache_key in self.state.user_lookup_cache:
             return self.state.user_lookup_cache[cache_key]
 
-        use_email = self._looks_like_email(lookup_text)
-
         try:
-            direct_match: UserInfo | None = None
+            user_id = self._parse_user_id(raw_value)
 
             try:
-                direct_match = (
-                    self.client.get_user_by_email(lookup_text)
-                    if use_email
-                    else self.client.get_user_by_name(lookup_text)
-                )
+                direct_match = self.client.get_user(user_id)
             except Exception as exc:
-                if self._http_status_code(exc) not in {404, None}:
+                if self._http_status_code(exc) != 404:
                     raise
+                direct_match = None
 
             if direct_match is not None:
                 resolved = self._to_user_reference(direct_match)
@@ -266,32 +227,9 @@ class CodebeamerUploadWizard:
                     (resolved, user_info, UserLookupStatus.RESOLVED.value, None),
                 )
 
-            candidates = self.client.search_user_infos(
-                email=lookup_text if use_email else None,
-                name=None if use_email else lookup_text,
-                project_id=self.state.project_id,
-            )
-            matches = self._select_exact_user_matches(candidates, lookup_text, use_email=use_email)
-
-            if len(matches) == 1:
-                resolved = self._to_user_reference(matches[0])
-                user_info = matches[0].to_dict()
-                return self._cache_user_lookup_entry(
-                    lookup_text,
-                    (resolved, user_info, UserLookupStatus.RESOLVED.value, None),
-                )
-
-            if not matches:
-                return self._cache_user_lookup_entry(
-                    lookup_text,
-                    (None, None, UserLookupStatus.USER_NOT_FOUND.value, None),
-                )
-
-            match_names = [self._normalize_lookup_text(item.name) for item in matches[:5]]
-            error_message = f"Multiple users matched {lookup_text!r}: {match_names}"
             return self._cache_user_lookup_entry(
                 lookup_text,
-                (None, None, UserLookupStatus.USER_LOOKUP_AMBIGUOUS.value, error_message),
+                (None, None, UserLookupStatus.USER_NOT_FOUND.value, None),
             )
         except Exception as exc:
             error_message = ""

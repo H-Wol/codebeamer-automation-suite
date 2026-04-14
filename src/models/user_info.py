@@ -34,29 +34,11 @@ class UserInfo(DomainModel):
     mobile: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        """사용자 정보를 API payload로 쓰기 쉬운 dict로 바꾼다."""
+        """사용자 정보를 최소 reference 형태로 축약한다."""
         return _drop_none({
             "id": self.id,
             "name": self.name,
-            "firstName": self.firstName,
-            "lastName": self.lastName,
-            "email": self.email,
-            "title": self.title,
-            "company": self.company,
-            "address": self.address,
-            "zip": self.zip,
-            "city": self.city,
-            "state": self.state,
-            "country": self.country,
-            "dateFormat": self.dateFormat,
-            "timeZone": self.timeZone,
-            "language": self.language,
-            "phone": self.phone,
-            "skills": self.skills,
-            "registryDate": self.registryDate,
-            "lastLoginDate": self.lastLoginDate,
-            "status": self.status,
-            "mobile": self.mobile,
+            "type": "UserReference",
         })
 
     @classmethod
@@ -73,5 +55,4 @@ class UserInfo(DomainModel):
         return UserReference(
             id=self.id,
             name=self.name,
-            email=self.email,
         )

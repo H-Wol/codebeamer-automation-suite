@@ -4,6 +4,7 @@ from typing import Any
 
 import pandas as pd
 
+from .models import CONNECTED_FIELD_TYPE_VALUE_MODEL_MAP
 from .models import FieldValueType
 from .models import LookupTargetKind
 from .models import MappingStatus
@@ -106,6 +107,8 @@ class MappingService:
         """reference 계열 필드가 실제로 어떤 참조 객체를 요구하는지 설명 문자열로 만든다."""
         if resolved_field_kind == ResolvedFieldKind.STATIC_OPTION.value:
             return field.get("referenceType") or ReferenceType.CHOICE_OPTION.value
+        if resolved_field_kind == ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value:
+            return ReferenceType.TRACKER_ITEM.value
         if resolved_field_kind == ResolvedFieldKind.USER_REFERENCE.value:
             return ReferenceType.USER.value
         if field.get("referenceType"):
@@ -115,16 +118,17 @@ class MappingService:
     @classmethod
     def _field_value_detail(cls, resolved_field_kind: str, field: dict[str, Any]) -> str:
         """custom field가 필요로 하는 FieldValue 종류를 사람이 읽기 쉬운 문자열로 만든다."""
-        if resolved_field_kind == ResolvedFieldKind.SCALAR_BOOL.value:
-            return FieldValueType.BOOL.value
-        if resolved_field_kind == ResolvedFieldKind.TABLE.value:
-            return FieldValueType.TABLE.value
         if resolved_field_kind in {
             ResolvedFieldKind.STATIC_OPTION.value,
+            ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value,
             ResolvedFieldKind.USER_REFERENCE.value,
             ResolvedFieldKind.GENERIC_REFERENCE.value,
         }:
             return f"{FieldValueType.CHOICE.value}<{cls._reference_detail(resolved_field_kind, field)}>"
+
+        field_type = field.get("field_type") or field.get("type")
+        if field_type in CONNECTED_FIELD_TYPE_VALUE_MODEL_MAP:
+            return CONNECTED_FIELD_TYPE_VALUE_MODEL_MAP[field_type]
 
         value_model = field.get("valueModel")
         if isinstance(value_model, str) and value_model.endswith("FieldValue"):
@@ -188,6 +192,21 @@ class MappingService:
                 result["unsupported_reason"] = (
                     "OptionChoiceField인데 options와 referenceType이 모두 없어 안전하게 해석할 수 없습니다."
                 )
+            return result
+
+        if field_type == SchemaFieldType.USER_CHOICE.value:
+            result["resolved_field_kind"] = ResolvedFieldKind.USER_REFERENCE.value
+            result["resolution_strategy"] = ResolutionStrategy.TYPE_REFERENCE_WITH_USER_REFERENCE.value
+            return result
+
+        if field_type == SchemaFieldType.TRACKER_ITEM_CHOICE.value:
+            result["resolved_field_kind"] = ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value
+            result["resolution_strategy"] = ResolutionStrategy.TYPE_TRACKER_ITEM_CHOICE.value
+            return result
+
+        if field_type == SchemaFieldType.MEMBER.value:
+            result["resolved_field_kind"] = ResolvedFieldKind.USER_REFERENCE.value
+            result["resolution_strategy"] = ResolutionStrategy.TYPE_REFERENCE_WITH_USER_REFERENCE.value
             return result
 
         if field_type == SchemaFieldType.REFERENCE.value:
@@ -307,6 +326,22 @@ class MappingService:
                     else PreconstructionKind.REFERENCE.value
                 )
                 result["preconstruction_detail"] = ReferenceType.USER.value
+            else:
+                result["preconstruction_kind"] = PreconstructionKind.FIELD_VALUE.value
+                result["preconstruction_detail"] = cls._field_value_detail(
+                    resolved_field_kind,
+                    field_resolution,
+                )
+            return result
+
+        if resolved_field_kind == ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value:
+            if payload_target_kind == PayloadTargetKind.BUILTIN_FIELD.value:
+                result["preconstruction_kind"] = (
+                    PreconstructionKind.REFERENCE_LIST.value
+                    if multiple_values
+                    else PreconstructionKind.REFERENCE.value
+                )
+                result["preconstruction_detail"] = ReferenceType.TRACKER_ITEM.value
             else:
                 result["preconstruction_kind"] = PreconstructionKind.FIELD_VALUE.value
                 result["preconstruction_detail"] = cls._field_value_detail(

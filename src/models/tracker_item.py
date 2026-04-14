@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import field
+import re
 from typing import Any
 from typing import ClassVar
 
@@ -9,6 +10,7 @@ from .common import DomainModel
 from .common import FieldInfo
 from .common import PayloadTargetKind
 from .common import PreconstructionKind
+from .common import ReferenceType
 from .common import SchemaFieldType
 from .common import _as_list
 from .common import _camel_to_snake
@@ -217,8 +219,41 @@ class TrackerItemBase(DomainModel):
             return None
         return field_info.get("reference_type")
 
+    @staticmethod
+    def _parse_tracker_item_reference_id(raw_value: Any) -> int:
+        """입력값에서 `[]` 안의 첫 번째 정수 또는 전체 정수를 tracker item id로 추출한다."""
+        if isinstance(raw_value, int):
+            return raw_value
+        if isinstance(raw_value, dict) and raw_value.get("id") is not None:
+            return int(raw_value["id"])
+
+        text = str(raw_value).strip()
+        bracket_match = re.search(r"\[(\d+)\]", text)
+        if bracket_match:
+            return int(bracket_match.group(1))
+        if text.isdigit():
+            return int(text)
+        raise ValueError(f"Cannot parse tracker item id from value: {raw_value!r}")
+
+    def _to_tracker_item_reference(self, raw_value: Any) -> TrackerItemReference:
+        """원본 값을 tracker item reference로 바꾼다."""
+        if isinstance(raw_value, TrackerItemReference):
+            return raw_value
+        if isinstance(raw_value, dict):
+            normalized = dict(raw_value)
+            normalized.setdefault("type", ReferenceType.TRACKER_ITEM.value)
+            return _build_reference(normalized, ReferenceType.TRACKER_ITEM.value)
+
+        item_id = self._parse_tracker_item_reference_id(raw_value)
+        return TrackerItemReference(
+            id=item_id,
+            type=ReferenceType.TRACKER_ITEM.value,
+        )
+
     def _to_reference(self, raw_value: Any, reference_type: str | None = None) -> Any:
         """원본 값을 단일 reference 객체로 바꾼다."""
+        if reference_type == ReferenceType.TRACKER_ITEM.value:
+            return self._to_tracker_item_reference(raw_value)
         return _build_reference(raw_value, reference_type)
 
     def _to_reference_list(self, value: Any, field_info: FieldInfo | None = None) -> list[Any]:

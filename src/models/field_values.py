@@ -78,6 +78,14 @@ class AbstractFieldValue(DomainModel):
 
 @dataclass
 class ChoiceFieldValue(AbstractFieldValue):
+    FIELD_TYPE_ALIASES: ClassVar[tuple[str, ...]] = (
+        SchemaFieldType.MEMBER.value,
+        SchemaFieldType.OPTION_CHOICE.value,
+        SchemaFieldType.REFERENCE.value,
+        SchemaFieldType.TRACKER_ITEM_CHOICE.value,
+        SchemaFieldType.USER_CHOICE.value,
+    )
+
     values: list[Any] = field(default_factory=list)
     type: str = FieldValueType.CHOICE.value
 
@@ -108,6 +116,7 @@ class ChoiceFieldValue(AbstractFieldValue):
 @dataclass
 class TextFieldValue(AbstractFieldValue):
     VALUE_MODEL_ALIASES: ClassVar[tuple[str, ...]] = (FieldValueType.TEXT.value,)
+    FIELD_TYPE_ALIASES: ClassVar[tuple[str, ...]] = (SchemaFieldType.TEXT.value,)
 
     value: str | None = None
     type: str = FieldValueType.TEXT.value
@@ -122,6 +131,102 @@ class TextFieldValue(AbstractFieldValue):
     @classmethod
     def from_value(cls, field_info: FieldInfo, value: Any) -> "TextFieldValue":
         """입력값을 문자열로 바꿔 텍스트 필드 값 객체를 만든다."""
+        return cls(
+            **cls._base_kwargs(field_info),
+            value=str(value) if value is not None else None,
+        )
+
+
+@dataclass
+class ColorFieldValue(AbstractFieldValue):
+    VALUE_MODEL_ALIASES: ClassVar[tuple[str, ...]] = (FieldValueType.COLOR.value,)
+    FIELD_TYPE_ALIASES: ClassVar[tuple[str, ...]] = (SchemaFieldType.COLOR.value,)
+
+    value: str | None = None
+    type: str = FieldValueType.COLOR.value
+
+    def to_dict(self) -> dict[str, Any]:
+        """색상 필드 값을 직렬화한다."""
+        data = super().to_dict()
+        if self.value is not None:
+            data["value"] = self.value
+        return data
+
+    @classmethod
+    def from_value(cls, field_info: FieldInfo, value: Any) -> "ColorFieldValue":
+        """입력값을 문자열로 보존해 색상 필드 값 객체를 만든다."""
+        return cls(
+            **cls._base_kwargs(field_info),
+            value=str(value) if value is not None else None,
+        )
+
+
+@dataclass
+class CountryFieldValue(AbstractFieldValue):
+    VALUE_MODEL_ALIASES: ClassVar[tuple[str, ...]] = (FieldValueType.COUNTRY.value,)
+    FIELD_TYPE_ALIASES: ClassVar[tuple[str, ...]] = (SchemaFieldType.COUNTRY.value,)
+
+    value: str | None = None
+    type: str = FieldValueType.COUNTRY.value
+
+    def to_dict(self) -> dict[str, Any]:
+        """국가 필드 값을 직렬화한다."""
+        data = super().to_dict()
+        if self.value is not None:
+            data["value"] = self.value
+        return data
+
+    @classmethod
+    def from_value(cls, field_info: FieldInfo, value: Any) -> "CountryFieldValue":
+        """입력값을 문자열로 보존해 국가 필드 값 객체를 만든다."""
+        return cls(
+            **cls._base_kwargs(field_info),
+            value=str(value) if value is not None else None,
+        )
+
+
+@dataclass
+class LanguageFieldValue(AbstractFieldValue):
+    VALUE_MODEL_ALIASES: ClassVar[tuple[str, ...]] = (FieldValueType.LANGUAGE.value,)
+    FIELD_TYPE_ALIASES: ClassVar[tuple[str, ...]] = (SchemaFieldType.LANGUAGE.value,)
+
+    value: str | None = None
+    type: str = FieldValueType.LANGUAGE.value
+
+    def to_dict(self) -> dict[str, Any]:
+        """언어 필드 값을 직렬화한다."""
+        data = super().to_dict()
+        if self.value is not None:
+            data["value"] = self.value
+        return data
+
+    @classmethod
+    def from_value(cls, field_info: FieldInfo, value: Any) -> "LanguageFieldValue":
+        """입력값을 문자열로 보존해 언어 필드 값 객체를 만든다."""
+        return cls(
+            **cls._base_kwargs(field_info),
+            value=str(value) if value is not None else None,
+        )
+
+
+@dataclass
+class WikiTextFieldValue(AbstractFieldValue):
+    VALUE_MODEL_ALIASES: ClassVar[tuple[str, ...]] = (FieldValueType.WIKI_TEXT.value,)
+    FIELD_TYPE_ALIASES: ClassVar[tuple[str, ...]] = (SchemaFieldType.WIKI_TEXT.value,)
+
+    value: str | None = None
+    type: str = FieldValueType.WIKI_TEXT.value
+
+    def to_dict(self) -> dict[str, Any]:
+        """위키 텍스트 필드 값을 직렬화한다."""
+        data = super().to_dict()
+        if self.value is not None:
+            data["value"] = self.value
+        return data
+
+    @classmethod
+    def from_value(cls, field_info: FieldInfo, value: Any) -> "WikiTextFieldValue":
+        """입력값을 문자열로 바꿔 위키 텍스트 필드 값 객체를 만든다."""
         return cls(
             **cls._base_kwargs(field_info),
             value=str(value) if value is not None else None,
@@ -180,6 +285,126 @@ class BoolFieldValue(AbstractFieldValue):
         return cls(
             **cls._base_kwargs(field_info),
             value=_coerce_bool(value),
+        )
+
+
+@dataclass
+class IntegerFieldValue(AbstractFieldValue):
+    VALUE_MODEL_ALIASES: ClassVar[tuple[str, ...]] = (FieldValueType.INTEGER.value,)
+    FIELD_TYPE_ALIASES: ClassVar[tuple[str, ...]] = (SchemaFieldType.INTEGER.value,)
+
+    value: int | None = None
+    type: str = FieldValueType.INTEGER.value
+
+    def to_dict(self) -> dict[str, Any]:
+        """정수 필드 값을 직렬화한다."""
+        data = super().to_dict()
+        if self.value is not None:
+            data["value"] = self.value
+        return data
+
+    @classmethod
+    def from_value(cls, field_info: FieldInfo, value: Any) -> "IntegerFieldValue":
+        """입력값을 정수로 바꿔 정수 필드 값 객체를 만든다."""
+        return cls(
+            **cls._base_kwargs(field_info),
+            value=int(value) if value is not None else None,
+        )
+
+
+@dataclass
+class DecimalFieldValue(AbstractFieldValue):
+    VALUE_MODEL_ALIASES: ClassVar[tuple[str, ...]] = (FieldValueType.DECIMAL.value,)
+    FIELD_TYPE_ALIASES: ClassVar[tuple[str, ...]] = (SchemaFieldType.DECIMAL.value,)
+
+    value: float | None = None
+    type: str = FieldValueType.DECIMAL.value
+
+    def to_dict(self) -> dict[str, Any]:
+        """소수 필드 값을 직렬화한다."""
+        data = super().to_dict()
+        if self.value is not None:
+            data["value"] = self.value
+        return data
+
+    @classmethod
+    def from_value(cls, field_info: FieldInfo, value: Any) -> "DecimalFieldValue":
+        """입력값을 소수로 바꿔 소수 필드 값 객체를 만든다."""
+        return cls(
+            **cls._base_kwargs(field_info),
+            value=float(value) if value is not None else None,
+        )
+
+
+@dataclass
+class DurationFieldValue(AbstractFieldValue):
+    VALUE_MODEL_ALIASES: ClassVar[tuple[str, ...]] = (FieldValueType.DURATION.value,)
+    FIELD_TYPE_ALIASES: ClassVar[tuple[str, ...]] = (SchemaFieldType.DURATION.value,)
+
+    value: int | None = None
+    type: str = FieldValueType.DURATION.value
+
+    def to_dict(self) -> dict[str, Any]:
+        """기간 필드 값을 직렬화한다."""
+        data = super().to_dict()
+        if self.value is not None:
+            data["value"] = self.value
+        return data
+
+    @classmethod
+    def from_value(cls, field_info: FieldInfo, value: Any) -> "DurationFieldValue":
+        """입력값을 정수 기간값으로 바꿔 기간 필드 값 객체를 만든다."""
+        return cls(
+            **cls._base_kwargs(field_info),
+            value=int(value) if value is not None else None,
+        )
+
+
+@dataclass
+class DateFieldValue(AbstractFieldValue):
+    VALUE_MODEL_ALIASES: ClassVar[tuple[str, ...]] = (FieldValueType.DATE.value,)
+    FIELD_TYPE_ALIASES: ClassVar[tuple[str, ...]] = (SchemaFieldType.DATE.value,)
+
+    value: str | None = None
+    type: str = FieldValueType.DATE.value
+
+    def to_dict(self) -> dict[str, Any]:
+        """날짜 필드 값을 직렬화한다."""
+        data = super().to_dict()
+        if self.value is not None:
+            data["value"] = self.value
+        return data
+
+    @classmethod
+    def from_value(cls, field_info: FieldInfo, value: Any) -> "DateFieldValue":
+        """입력값을 문자열로 보존해 날짜 필드 값 객체를 만든다."""
+        return cls(
+            **cls._base_kwargs(field_info),
+            value=str(value) if value is not None else None,
+        )
+
+
+@dataclass
+class UrlFieldValue(AbstractFieldValue):
+    VALUE_MODEL_ALIASES: ClassVar[tuple[str, ...]] = (FieldValueType.URL.value,)
+    FIELD_TYPE_ALIASES: ClassVar[tuple[str, ...]] = (SchemaFieldType.URL.value,)
+
+    value: str | None = None
+    type: str = FieldValueType.URL.value
+
+    def to_dict(self) -> dict[str, Any]:
+        """URL 필드 값을 직렬화한다."""
+        data = super().to_dict()
+        if self.value is not None:
+            data["value"] = self.value
+        return data
+
+    @classmethod
+    def from_value(cls, field_info: FieldInfo, value: Any) -> "UrlFieldValue":
+        """입력값을 문자열로 바꿔 URL 필드 값 객체를 만든다."""
+        return cls(
+            **cls._base_kwargs(field_info),
+            value=str(value) if value is not None else None,
         )
 
 

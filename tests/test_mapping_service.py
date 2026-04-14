@@ -132,6 +132,13 @@ class MappingServiceTest(unittest.TestCase):
                 "multipleValues": True,
                 "valueModel": "ChoiceFieldValue<UserReference>",
             },
+            {
+                "id": 11,
+                "name": "Related Items",
+                "type": "TrackerItemChoiceField",
+                "multipleValues": True,
+                "valueModel": "ChoiceFieldValue<TrackerItemReference>",
+            },
         ]
 
         schema_df = self.service.flatten_schema_fields(schema)
@@ -188,6 +195,12 @@ class MappingServiceTest(unittest.TestCase):
         assigned_to = self._field_by_name(schema_df, "Assigned To")
         self.assertEqual(assigned_to["payload_target_kind"], PayloadTargetKind.BUILTIN_FIELD.value)
         self.assertEqual(assigned_to["preconstruction_kind"], PreconstructionKind.REFERENCE_LIST.value)
+
+        related_items = self._field_by_name(schema_df, "Related Items")
+        self.assertEqual(related_items["resolved_field_kind"], ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value)
+        self.assertFalse(related_items["requires_lookup"])
+        self.assertEqual(related_items["preconstruction_kind"], PreconstructionKind.FIELD_VALUE.value)
+        self.assertEqual(related_items["preconstruction_detail"], "ChoiceFieldValue<TrackerItemReference>")
 
     def test_compare_upload_df_with_schema_includes_resolution_columns(self) -> None:
         """비교 결과 표에도 분류와 lookup 정보가 함께 들어가는지 확인한다."""
