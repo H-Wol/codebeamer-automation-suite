@@ -44,17 +44,18 @@
 주요 책임:
 - tracker schema를 dataframe 형태로 평탄화
 - upload 컬럼과 schema 필드 비교
-- option-like 필드 감지
+- payload 규칙 기준 field 분류
 - schema의 정적 options로 이름 매핑 테이블 생성
 - `multipleValues=true` 필드에 매핑된 Excel 컬럼 계산
-- Excel option 값 검증
-- 지원되는 option 값을 Codebeamer reference 형식으로 변환
+- Excel option/reference 값 검증
+- 지원되는 option/reference 값을 Codebeamer payload 형식으로 변환
 
 현재 반영된 포인트:
-- 감지 기준이 `has_options` 하나에만 의존하지 않음
-- `reference_type`, `Choice` value model, `ReferenceField`, `OptionChoiceField` 도 함께 감지
-- `UserReference` 는 별도 lookup 대상으로 분류
-- 정적 option이 없는 일반 reference field는 `OPTION_SOURCE_UNAVAILABLE` 로 명시적으로 드러냄
+- `type` 을 1차 기준으로 field를 해석
+- `referenceType`, `options`, `multipleValues`, `valueModel` 로 보조 판정
+- `UserChoiceField`, `MemberField`, `UserReference` 는 사용자 ID lookup 대상으로 분류
+- `TrackerItemChoiceField` 는 tracker item ID direct parse 대상으로 분류
+- 정적 option이 없는 일반 reference field는 `LOOKUP_REQUIRED` 또는 `FIELD_UNSUPPORTED` 로 조기 노출
 
 확장 참고:
 - 새로운 field type 지원 절차는 [필드 지원 추가 가이드](./field-support-guide.md)에 정리되어 있습니다.
@@ -67,7 +68,7 @@
 - reference 및 field value payload 모델 정의
 - `to_dict()` 기반 payload 직렬화
 - 타입 문자열과 상태 문자열을 enum 및 공통 상수로 관리
-- `UserInfo` 로 Codebeamer 사용자 상세 응답 모델링
+- `UserInfo` 로 Codebeamer 사용자 응답을 최소 reference 구조로 정규화
 - `WizardState` 로 업로드 세션 상태 표현
 - `TrackerItemBase` 를 통해 tracker item payload 구성
 
@@ -76,6 +77,7 @@
 - `ChoiceFieldValue`
 - `TextFieldValue`
 - `TableFieldValue`
+- `TrackerItemReference`
 - `UserInfo`
 - `WizardState`
 
@@ -88,7 +90,8 @@
 - 업로드 세션 상태 유지
 - row 단위 payload preview 생성
 - `TableField` custom field 조립
-- `UserReference` 를 user info 조회 후 reference로 변환
+- 사용자 선택 필드를 사용자 ID lookup 후 reference로 변환
+- tracker item 선택 필드를 tracker item ID parse 후 reference로 변환
 - 프로젝트 단위 user lookup cache 유지
 - parent-first 순서로 업로드 수행
 - 실행 산출물 저장
@@ -105,9 +108,6 @@
 
 현재 사용자 API helper:
 - `GET /v3/users/{userId}`
-- `GET /v3/users/findByName`
-- `GET /v3/users/findByEmail`
-- `POST /v3/users/search`
 
 ## 최신 업로드 순서도
 
@@ -125,16 +125,18 @@ flowchart TD
     J --> K["schema 비교 및 option-like 필드 분석"]
     K --> L{"필드 종류 판별"}
     L -->|정적 options| M["option 이름을 reference payload로 변환"]
-    L -->|UserReference| N["user info 조회"]
+    L -->|사용자 선택 필드| N["user ID lookup"]
     N --> O{"캐시에 있음?"}
     O -->|예| P["캐시된 userInfo / reference 재사용"]
-    O -->|아니오| Q["findByName/findByEmail 후 search fallback"]
+    O -->|아니오| Q["GET /v3/users/{id} 호출"]
     Q --> R["userInfo와 reference를 캐시에 저장"]
-    L -->|기타 reference| S["unavailable 상태로 표시"]
+    L -->|TrackerItemChoiceField| S["tracker item ID 파싱"]
+    L -->|기타 reference| X["LOOKUP_REQUIRED 또는 unsupported 표시"]
     M --> T["row별 payload preview 생성"]
     P --> T
     R --> T
     S --> T
+    X --> T
     T --> U["parent-first 순서로 업로드"]
     U --> V["성공 / 실패 / 미해결 결과 저장"]
 ```
@@ -149,13 +151,14 @@ flowchart TD
 6. 매핑 결과와 schema의 `multipleValues`를 기준으로 list 컬럼을 자동 선택합니다.
 7. wizard가 Excel을 읽고 `raw_df`, `merged_df`, `hierarchy_df`, `upload_df`를 생성합니다.
 8. CLI와 wizard가 schema 비교 결과를 준비합니다.
-9. mapping service가 option-like 필드를 감지하고 resolution 전략을 결정합니다.
+9. mapping service가 field type을 해석하고 resolution 전략을 결정합니다.
 10. 정적 option은 reference dict로 해석합니다.
-11. `UserReference` 는 user info를 조회하고 `__resolved`, `__user_info` 컬럼에 반영합니다.
-12. user lookup 결과는 `WizardState.user_lookup_cache` 에 저장해 다음 행에서 재사용합니다.
-13. wizard가 payload preview를 생성합니다.
-14. wizard가 parent-first 순서로 업로드합니다.
-15. state와 실행 결과를 `output/`에 저장합니다.
+11. 사용자 선택 필드는 사용자 ID로 조회하고 `__resolved`, `__user_info` 컬럼에 반영합니다.
+12. tracker item 선택 필드는 입력값에서 tracker item ID를 파싱해 `TrackerItemReference` 로 변환합니다.
+13. user lookup 결과는 `WizardState.user_lookup_cache` 에 저장해 다음 행에서 재사용합니다.
+14. wizard가 payload preview를 생성합니다.
+15. wizard가 parent-first 순서로 업로드합니다.
+16. state와 실행 결과를 `output/`에 저장합니다.
 
 ## 상태 모델
 
@@ -188,17 +191,23 @@ flowchart TD
 - Excel 값과 option 이름을 비교
 - `{id, name, type}` 형태의 reference dict로 변환
 
-`UserReference` 처리:
-- 이름 또는 이메일을 기준으로 사용자 조회
-- 우선 `findByName` 또는 `findByEmail` 시도
-- 단건이 안 잡히면 `users/search` 로 fallback
-- exact match가 1건이면 `UserInfo` 와 `UserReference` 로 저장
-- 결과는 프로젝트 단위 캐시에 alias와 함께 보관
+사용자 선택 필드 처리:
+- `UserChoiceField`, `MemberField`, `UserReference` 를 사용자 ID 기반으로 처리
+- 입력값을 정수 ID로 해석
+- `GET /v3/users/{userId}` 로 조회
+- 성공 시 최소 구조 `UserInfo` 와 `UserReference` 로 저장
+- 결과는 프로젝트 단위 캐시에 사용자 ID 키로 보관
+
+tracker item 선택 필드 처리:
+- `TrackerItemChoiceField` 와 builtin `subjects` 는 lookup 없이 직접 파싱
+- 단일 값 또는 list 모두 허용
+- 각 값에서 `[]` 안 첫 번째 integer를 우선 추출
+- 결과는 `{id, type="TrackerItemReference"}` 형태로 변환
 
 기타 reference 처리:
 - schema에는 reference type이 있으나 정적 options는 없음
 - 현재는 `reference_lookup` 으로 분류
-- 검증 단계에서 `OPTION_SOURCE_UNAVAILABLE` 표시
+- 검증 단계에서 `LOOKUP_REQUIRED` 또는 `FIELD_UNSUPPORTED` 표시
 - unresolved 값이 남아 있으면 payload preview/upload 시 명확한 오류 발생
 
 ## 권장 조합

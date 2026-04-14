@@ -65,15 +65,15 @@
 
 위 토큰을 `src/models/common.py` 에서 공통 enum/상수로 관리
 
-### 4. `UserReference` 자동 lookup
+### 4. 사용자 선택 필드와 tracker item 선택 필드 처리 확장
 
-- `UserReference` 필드는 사용자 상세 정보를 조회한 뒤 reference로 변환
-- `findByName`, `findByEmail`, `users/search` 를 조합해 처리
+- `UserReference`, `UserChoiceField`, `MemberField` 는 사용자 ID 기반으로 조회 후 reference로 변환
+- `TrackerItemChoiceField` 와 builtin `subjects` 는 tracker item ID를 직접 파싱해 `TrackerItemReference` 로 변환
 - `__user_info`, `__resolved`, `__lookup_status`, `__lookup_error` 를 남김
 
 ### 5. 사용자 lookup 캐시
 
-- 같은 프로젝트 내에서 같은 이름, 이메일, 풀네임 조합을 반복 조회하지 않도록 캐시 도입
+- 같은 프로젝트 내에서 같은 사용자 ID를 반복 조회하지 않도록 캐시 도입
 - 캐시는 `WizardState.user_lookup_cache` 에 저장
 
 ### 6. `multipleValues` 기반 list 컬럼 자동 선택
