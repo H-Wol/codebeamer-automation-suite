@@ -195,13 +195,16 @@ class CodebeamerUploadWizard:
 
     @classmethod
     def _user_lookup_aliases(cls, user_info: dict[str, Any] | None) -> set[str]:
-        """한 사용자를 다시 찾기 쉬우도록 ID 문자열만 별칭으로 만든다."""
+        """한 사용자를 다시 찾기 쉬우도록 이름과 ID를 별칭으로 만든다."""
         if not user_info:
             return set()
 
         return {
             normalized.casefold()
-            for value in [user_info.get("id")]
+            for value in [
+                user_info.get("id"),
+                user_info.get("name"),
+            ]
             if (normalized := cls._normalize_lookup_text(value))
         }
 
@@ -222,12 +225,14 @@ class CodebeamerUploadWizard:
         return entry
 
     @classmethod
-    def _parse_user_id(cls, raw_value: Any) -> int:
-        """사용자 lookup 입력을 정수 ID로 해석한다."""
+    def _parse_user_id(cls, raw_value: Any) -> int | None:
+        """사용자 lookup 입력이 숫자 문자열이면 정수 ID로 해석한다."""
         lookup_text = cls._normalize_lookup_text(raw_value)
         if not lookup_text:
-            raise ValueError("user id is empty")
-        return int(lookup_text)
+            return None
+        if lookup_text.isdigit():
+            return int(lookup_text)
+        return None
 
     @staticmethod
     def _to_user_reference(candidate: UserInfo) -> dict[str, Any]:
@@ -240,21 +245,32 @@ class CodebeamerUploadWizard:
         self,
         raw_value: Any,
     ) -> UserLookupCacheEntry:
-        """사용자 ID로 사용자를 찾아 reference와 상세 정보를 함께 돌려준다."""
+        """사용자 이름을 우선 사용하고 필요시 ID로 fallback 하여 reference와 상세 정보를 돌려준다."""
         lookup_text = self._normalize_lookup_text(raw_value)
         cache_key = self._user_lookup_cache_key(lookup_text)
         if cache_key in self.state.user_lookup_cache:
             return self.state.user_lookup_cache[cache_key]
 
         try:
-            user_id = self._parse_user_id(raw_value)
+            if not lookup_text:
+                raise ValueError("user lookup text is empty")
 
             try:
-                direct_match = self.client.get_user(user_id)
+                direct_match = self.client.get_user_by_name(lookup_text)
             except Exception as exc:
                 if self._http_status_code(exc) != 404:
                     raise
                 direct_match = None
+
+            if direct_match is None:
+                user_id = self._parse_user_id(raw_value)
+                if user_id is not None:
+                    try:
+                        direct_match = self.client.get_user(user_id)
+                    except Exception as exc:
+                        if self._http_status_code(exc) != 404:
+                            raise
+                        direct_match = None
 
             if direct_match is not None:
                 resolved = self._to_user_reference(direct_match)

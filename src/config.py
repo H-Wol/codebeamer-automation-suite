@@ -60,7 +60,7 @@ def load_config() -> AppConfig:
         default_project_id=_to_optional_int(os.getenv("DEFAULT_PROJECT_ID")),
         default_tracker_id=_to_optional_int(os.getenv("DEFAULT_TRACKER_ID")),
         excel_header_row=int(os.getenv("EXCEL_HEADER_ROW", "1")),
-        excel_summary_col=os.getenv("EXCEL_SUMMARY_COL", "요약"),
+        excel_summary_col=os.getenv("EXCEL_SUMMARY_COL", "Summary"),
         excel_sheet_name=_to_sheet_name(os.getenv("EXCEL_SHEET_NAME", "0")),
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         output_dir=os.getenv("OUTPUT_DIR", "output"),

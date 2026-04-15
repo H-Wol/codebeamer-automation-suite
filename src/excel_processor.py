@@ -7,7 +7,7 @@ from .hierarchy_processor import HierarchyProcessor
 class ExcelHierarchyProcessor(HierarchyProcessor):
     """기존 코드와 테스트 호환을 위한 통합 래퍼다."""
 
-    def __init__(self, header_row: int = 1, summary_col: str = "요약", logger=None):
+    def __init__(self, header_row: int = 1, summary_col: str = "Summary", logger=None):
         super().__init__(header_row=header_row, summary_col=summary_col, logger=logger)
         self.reader = ExcelReader(header_row=header_row, summary_col=summary_col, logger=logger)
 

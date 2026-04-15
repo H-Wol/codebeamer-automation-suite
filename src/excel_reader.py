@@ -9,7 +9,7 @@ import xlwings as xw
 class ExcelReader:
     """Excel 파일에서 raw DataFrame만 읽어오는 입력 전용 reader다."""
 
-    def __init__(self, header_row: int = 1, summary_col: str = "요약", logger=None):
+    def __init__(self, header_row: int = 1, summary_col: str = "Summary", logger=None):
         self.header_row = header_row
         self.summary_col = summary_col
         self.logger = logger

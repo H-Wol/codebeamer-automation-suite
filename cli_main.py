@@ -179,7 +179,9 @@ def main():
     sheet_name = sheet_names[sheet_index]
 
     headers = reader.read_headers(file_path, sheet_name)
-    summary_candidates = [col for col in headers if col.lower() == "summary" or col == "요약"]
+    summary_candidates = [col for col in headers if col.lower() == "summary"]
+    if not summary_candidates:
+        summary_candidates = [col for col in headers if col == "요약"]
     if summary_candidates:
         summary_col = summary_candidates[0]
         print(f"자동으로 요약 컬럼을 '{summary_col}' 로 선택했습니다.")

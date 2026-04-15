@@ -242,6 +242,9 @@ class WizardPayloadResolutionTest(unittest.TestCase):
         """MemberField는 사용자 ID를 조회해 `values=[UserReference]` 형태로 만들어야 한다."""
 
         class FakeUserClient:
+            def get_user_by_name(self, name: str) -> UserInfo:
+                return UserInfo(id=100 + len(name), name=name)
+
             def get_user(self, user_id: int) -> UserInfo:
                 return UserInfo(id=user_id, name=f"User {user_id}")
 
@@ -264,7 +267,7 @@ class WizardPayloadResolutionTest(unittest.TestCase):
         wizard.state.selected_option_mapping = {"members": "시험 담당자"}
         wizard.state.option_maps = self.mapper.build_option_maps_from_schema(wizard.state.schema_df)
         wizard.state.upload_df = pd.DataFrame([
-            {"_row_id": 1, "upload_name": "REQ-1", "members": ["11", "12"]}
+            {"_row_id": 1, "upload_name": "REQ-1", "members": ["Kim QA", "Lee QA"]}
         ])
         wizard.state.converted_upload_df = wizard._resolve_user_reference_fields(
             wizard.state.upload_df,
@@ -277,7 +280,7 @@ class WizardPayloadResolutionTest(unittest.TestCase):
 
         self.assertEqual(custom_field["name"], "시험 담당자")
         self.assertEqual(custom_field["type"], "ChoiceFieldValue")
-        self.assertEqual([value["id"] for value in custom_field["values"]], [11, 12])
+        self.assertEqual([value["name"] for value in custom_field["values"]], ["Kim QA", "Lee QA"])
         self.assertEqual([value["type"] for value in custom_field["values"]], ["UserReference", "UserReference"])
 
     def test_preview_payload_builds_tracker_item_choice_field_from_bracket_text(self) -> None:
