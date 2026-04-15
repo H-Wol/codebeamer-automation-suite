@@ -67,8 +67,10 @@
 현재 반영된 포인트:
 - `type` 을 1차 기준으로 field를 해석
 - `referenceType`, `options`, `multipleValues`, `valueModel` 로 보조 판정
-- `UserChoiceField`, `MemberField`, `UserReference` 는 사용자 ID lookup 대상으로 분류
+- `UserChoiceField`, `UserReference` 는 사용자 이름 우선 lookup 대상으로 분류
+- `MemberField` 는 `USER/ROLE/GROUP` mixed member lookup 대상으로 분류
 - `TrackerItemChoiceField` 는 tracker item ID direct parse 대상으로 분류
+- `Status` 는 transition 기반 후처리가 필요하므로 TODO 로 분리
 - 정적 option이 없는 일반 reference field는 `LOOKUP_REQUIRED` 또는 `FIELD_UNSUPPORTED` 로 조기 노출
 
 확장 참고:
@@ -106,7 +108,8 @@
 - row 단위 payload cache 생성
 - cache된 payload preview 제공
 - `TableField` custom field 조립
-- 사용자 선택 필드를 사용자 ID lookup 후 reference로 변환
+- 사용자 선택 필드를 사용자 이름 우선 lookup 후 reference로 변환
+- `MemberField` 를 `USER/ROLE/GROUP` mixed reference 로 변환
 - tracker item 선택 필드를 tracker item ID parse 후 reference로 변환
 - 프로젝트 단위 user lookup cache 유지
 - parent-first 순서로 업로드 수행
@@ -122,8 +125,11 @@
 - 사용자 조회 API 호출
 - 신규 tracker item 생성
 
-현재 사용자 API helper:
+현재 사용자/멤버 API helper:
 - `GET /v3/users/{userId}`
+- `GET /v3/users/findByName`
+- `GET /v3/users/groups`
+- `GET /v3/trackers/{trackerId}/fields/{fieldId}/permissions`
 
 ## 최신 업로드 순서도
 
@@ -142,13 +148,14 @@ flowchart TD
     K --> L["schema 비교 및 option-like 필드 분석"]
     L --> M{"필드 종류 판별"}
     M -->|정적 options| N["option 이름을 reference payload로 변환"]
-    M -->|사용자 선택 필드| O["user ID lookup"]
+    M -->|사용자 선택 필드| O["user 이름 lookup"]
     O --> P{"캐시에 있음?"}
     P -->|예| Q["캐시된 userInfo / reference 재사용"]
-    P -->|아니오| R["GET /v3/users/{id} 호출"]
+    P -->|아니오| R["findByName 후 필요시 user id fallback"]
     R --> S["userInfo와 reference를 캐시에 저장"]
-    M -->|TrackerItemChoiceField| T["tracker item ID 파싱"]
-    M -->|기타 reference| U["LOOKUP_REQUIRED 또는 unsupported 표시"]
+    M -->|MemberField| T["USER/ROLE/GROUP 이름 매칭"]
+    M -->|TrackerItemChoiceField| U["tracker item ID 파싱"]
+    M -->|기타 reference| V["LOOKUP_REQUIRED 또는 unsupported 표시"]
     N --> V["row별 payload cache 생성"]
     Q --> V
     S --> V
@@ -173,12 +180,14 @@ flowchart TD
 9. CLI와 wizard가 schema 비교 결과를 준비합니다.
 10. mapping service가 field type을 해석하고 resolution 전략을 결정합니다.
 11. 정적 option은 reference dict로 해석합니다.
-12. 사용자 선택 필드는 사용자 ID로 조회하고 `__resolved`, `__user_info` 컬럼에 반영합니다.
-13. tracker item 선택 필드는 입력값에서 tracker item ID를 파싱해 `TrackerItemReference` 로 변환합니다.
-14. user lookup 결과는 `WizardState.user_lookup_cache` 에 저장해 다음 행에서 재사용합니다.
-15. wizard가 row별 payload를 먼저 계산해 `payload_df` cache에 저장합니다.
-16. preview는 `payload_df`를 재사용하고 upload는 같은 payload로 parent-first 업로드를 수행합니다.
-17. state와 실행 결과를 `output/`에 저장합니다.
+12. 사용자 선택 필드는 사용자 이름으로 조회하고 필요시 숫자 입력에 한해 ID fallback 을 사용합니다.
+13. `MemberField` 는 `USER/ROLE/GROUP` 후보를 이름으로 찾아 mixed reference 로 변환합니다.
+14. tracker item 선택 필드는 입력값에서 tracker item ID를 파싱해 `TrackerItemReference` 로 변환합니다.
+15. user/member lookup 결과는 cache 에 저장해 다음 행에서 재사용합니다.
+16. wizard가 row별 payload를 먼저 계산해 `payload_df` cache에 저장합니다.
+17. preview는 `payload_df`를 재사용하고 upload는 같은 payload로 parent-first 업로드를 수행합니다.
+18. `Status` transition 후처리는 아직 TODO 입니다.
+19. state와 실행 결과를 `output/`에 저장합니다.
 
 ## 상태 모델
 
@@ -213,17 +222,28 @@ flowchart TD
 - `{id, name, type}` 형태의 reference dict로 변환
 
 사용자 선택 필드 처리:
-- `UserChoiceField`, `MemberField`, `UserReference` 를 사용자 ID 기반으로 처리
-- 입력값을 정수 ID로 해석
-- `GET /v3/users/{userId}` 로 조회
+- `UserChoiceField`, `UserReference` 는 사용자 이름을 우선 사용
+- 이름 조회 실패 시 입력값이 숫자면 `GET /v3/users/{userId}` 로 fallback
 - 성공 시 최소 구조 `UserInfo` 와 `UserReference` 로 저장
-- 결과는 프로젝트 단위 캐시에 사용자 ID 키로 보관
+- 결과는 프로젝트 단위 캐시에 이름/ID 키로 보관
+
+`MemberField` 처리:
+- `USER` 는 사용자 이름 lookup 재사용
+- `ROLE` 은 `GET /v3/trackers/{trackerId}/fields/{fieldId}/permissions` 의 role 목록을 이름으로 매칭
+- `GROUP` 은 `GET /v3/users/groups` 전체 목록을 이름으로 매칭
+- 결과는 `UserReference`, `RoleReference`, `GroupReference` 또는 `UserGroupReference` 로 직렬화
+- 하나의 이름이 여러 후보와 겹치면 `MEMBER_LOOKUP_AMBIGUOUS` 로 실패
 
 tracker item 선택 필드 처리:
 - `TrackerItemChoiceField` 와 builtin `subjects` 는 lookup 없이 직접 파싱
 - 단일 값 또는 list 모두 허용
-- 각 값에서 `[]` 안 첫 번째 integer를 우선 추출
+- 각 값에서 `[:id]` 패턴을 먼저, 없으면 `[]` 안 첫 번째 integer를 추출
 - 결과는 `{id, type="TrackerItemReference"}` 형태로 변환
+
+status 처리:
+- 현재 `Status.options` 는 전체 상태 목록일 뿐 transition 제약을 반영하지 않습니다.
+- 생성 시 마지막 상태를 바로 넣는 로직은 workflow-safe 하지 않습니다.
+- `Status` 는 create 후 transition 기반 후처리로 옮길 예정이며 현재는 TODO 입니다.
 
 기타 reference 처리:
 - schema에는 reference type이 있으나 정적 options는 없음

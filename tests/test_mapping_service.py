@@ -140,6 +140,14 @@ class MappingServiceTest(unittest.TestCase):
                 "valueModel": "ChoiceFieldValue<TrackerItemReference>",
             },
             {
+                "id": 13,
+                "name": "Team",
+                "type": "MemberField",
+                "multipleValues": True,
+                "valueModel": "ChoiceFieldValue<AbstractReference>",
+                "memberTypes": ["USER", "ROLE", "GROUP"],
+            },
+            {
                 "id": 12,
                 "name": "Subjects",
                 "type": "ReferenceField",
@@ -211,6 +219,13 @@ class MappingServiceTest(unittest.TestCase):
         self.assertEqual(related_items["preconstruction_kind"], PreconstructionKind.FIELD_VALUE.value)
         self.assertEqual(related_items["preconstruction_detail"], "ChoiceFieldValue<TrackerItemReference>")
 
+        team = self._field_by_name(schema_df, "Team")
+        self.assertEqual(team["resolved_field_kind"], ResolvedFieldKind.MEMBER_REFERENCE.value)
+        self.assertTrue(team["requires_lookup"])
+        self.assertEqual(team["lookup_target_kind"], LookupTargetKind.MEMBER.value)
+        self.assertEqual(team["preconstruction_kind"], PreconstructionKind.FIELD_VALUE.value)
+        self.assertEqual(team["preconstruction_detail"], "ChoiceFieldValue<AbstractReference>")
+
         subjects = self._field_by_name(schema_df, "Subjects")
         self.assertEqual(subjects["resolved_field_kind"], ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value)
         self.assertEqual(subjects["payload_target_kind"], PayloadTargetKind.BUILTIN_FIELD.value)
@@ -226,13 +241,21 @@ class MappingServiceTest(unittest.TestCase):
                 "type": "ReferenceField",
                 "referenceType": "UserReference",
                 "valueModel": "ChoiceFieldValue<UserReference>",
-            }
+            },
+            {
+                "id": 2,
+                "name": "Team",
+                "type": "MemberField",
+                "multipleValues": True,
+                "valueModel": "ChoiceFieldValue<AbstractReference>",
+                "memberTypes": ["USER", "ROLE", "GROUP"],
+            },
         ])
-        upload_df = pd.DataFrame([{"owner": "Jane Doe"}])
+        upload_df = pd.DataFrame([{"owner": "Jane Doe", "team": "Developers"}])
         comparison_df = self.service.compare_upload_df_with_schema(
             upload_df=upload_df,
             schema_df=schema_df,
-            selected_mapping={"owner": "Owner"},
+            selected_mapping={"owner": "Owner", "team": "Team"},
         )
 
         row = comparison_df.iloc[0]
@@ -242,6 +265,10 @@ class MappingServiceTest(unittest.TestCase):
         self.assertEqual(row["lookup_target_kind"], LookupTargetKind.USER.value)
         self.assertEqual(row["preconstruction_kind"], PreconstructionKind.FIELD_VALUE.value)
         self.assertEqual(row["payload_target_kind"], PayloadTargetKind.CUSTOM_FIELD.value)
+
+        team = comparison_df[comparison_df["df_column"] == "team"].iloc[0]
+        self.assertEqual(team["resolved_field_kind"], ResolvedFieldKind.MEMBER_REFERENCE.value)
+        self.assertEqual(team["lookup_target_kind"], LookupTargetKind.MEMBER.value)
 
     def test_build_option_maps_from_schema_distinguishes_field_resolution_states(self) -> None:
         """옵션 맵이 static option, user lookup, generic reference를 구분하는지 확인한다."""
@@ -280,6 +307,14 @@ class MappingServiceTest(unittest.TestCase):
                 "multipleValues": True,
                 "valueModel": "ChoiceFieldValue<TrackerItemReference>",
             },
+            {
+                "id": 6,
+                "name": "Team",
+                "type": "MemberField",
+                "multipleValues": True,
+                "valueModel": "ChoiceFieldValue<AbstractReference>",
+                "memberTypes": ["USER", "ROLE", "GROUP"],
+            },
         ])
 
         option_maps = self.service.build_option_maps_from_schema(schema_df)
@@ -298,6 +333,11 @@ class MappingServiceTest(unittest.TestCase):
         self.assertEqual(option_maps["Related Items"]["kind"], OptionMapKind.TRACKER_ITEM_DIRECT.value)
         self.assertEqual(option_maps["Related Items"]["source_status"], OptionSourceStatus.READY.value)
         self.assertTrue(option_maps["Related Items"]["resolver_available"])
+
+        self.assertEqual(option_maps["Team"]["kind"], OptionMapKind.MEMBER_LOOKUP.value)
+        self.assertEqual(option_maps["Team"]["source_status"], OptionSourceStatus.LOOKUP_REQUIRED.value)
+        self.assertEqual(option_maps["Team"]["lookup_target_kind"], LookupTargetKind.MEMBER.value)
+        self.assertEqual(option_maps["Team"]["member_types"], ["USER", "ROLE", "GROUP"])
 
         self.assertEqual(option_maps["Choice Hint Only"]["kind"], OptionMapKind.UNSUPPORTED.value)
         self.assertEqual(option_maps["Choice Hint Only"]["source_status"], OptionSourceStatus.UNSUPPORTED.value)
@@ -348,7 +388,7 @@ class MappingServiceTest(unittest.TestCase):
                 "owner": "Jane Doe",
                 "related": "REQ-1",
                 "choice_hint": "Anything",
-                "related_items": ["Item [20263671]", "broken"],
+                "related_items": ["Item [REQ:20263671]", "broken"],
             }
         ])
         option_mapping = {

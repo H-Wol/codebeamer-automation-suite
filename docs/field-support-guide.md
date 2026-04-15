@@ -113,7 +113,7 @@ raw schema type을 그대로 코드 전역에 퍼뜨리지 말고,
 
 예시 질문:
 
-- `MemberField`를 현재 업무 규칙상 사용자 ID 전용으로 제한할 것인가
+- `MemberField`를 `USER/ROLE/GROUP` mixed field로 볼 것인가
 - `TrackerItemChoiceField`를 lookup 없이 ID parse로 처리할 수 있는가
 - `referenceType`이 없을 때도 안전하게 결정 가능한가
 
@@ -205,7 +205,8 @@ raw schema type을 그대로 코드 전역에 퍼뜨리지 말고,
 
 현재 원칙:
 
-- `UserReference`, `UserChoiceField`, `MemberField`는 사용자 ID resolver가 있으므로 지원
+- `UserReference`, `UserChoiceField`는 사용자 이름 우선 resolver가 있으므로 지원
+- `MemberField`는 `USER/ROLE/GROUP` mixed resolver가 있으므로 지원
 - `TrackerItemChoiceField`는 tracker item ID parser가 있으므로 지원
 - `generic_reference`는 resolver가 없으므로 조기 실패
 - 모호한 필드는 text fallback으로 넘기지 않음
@@ -264,7 +265,7 @@ raw schema type을 그대로 코드 전역에 퍼뜨리지 말고,
 
 ## `MemberField` 처리 규칙
 
-현재 구현은 `MemberField`를 사용자 ID 목록으로 제한해 지원합니다.
+현재 구현은 `MemberField`를 `USER/ROLE/GROUP` mixed field로 지원합니다.
 
 예시 스키마:
 
@@ -273,17 +274,18 @@ raw schema type을 그대로 코드 전역에 퍼뜨리지 말고,
 - `multipleValues=true`
 - `memberTypes=[USER, ROLE, GROUP]`
 
-현재 파이프라인의 제한:
+현재 파이프라인의 규칙:
 
-- 입력값은 사용자 ID 또는 사용자 ID list여야 합니다.
-- 내부에서는 `GET /v3/users/{userId}` 로 사용자 조회 후 `ChoiceFieldValue(values=[UserReference...])` 를 만듭니다.
-- `memberTypes` 에 `ROLE`, `GROUP` 이 포함돼도 현재는 처리하지 않습니다.
+- 입력값은 이름 기반으로 해석합니다.
+- `USER` 는 `findByName` 으로 조회하고, 숫자 입력이면 `GET /v3/users/{id}` fallback 을 씁니다.
+- `ROLE` 은 `GET /v3/trackers/{trackerId}/fields/{fieldId}/permissions` 에서 role 후보를 모아 이름으로 찾습니다.
+- `GROUP` 은 `GET /v3/users/groups` 전체 목록을 가져와 이름으로 찾습니다.
+- 결과는 `ChoiceFieldValue(values=[...])` 안에 `UserReference`, `RoleReference`, `GroupReference` / `UserGroupReference` 로 들어갑니다.
 
-추가 지원이 필요하면 아래를 별도 설계해야 합니다.
+주의:
 
-- `ROLE`, `GROUP` reference lookup 전략
-- 입력값이 user/role/group 중 무엇인지 식별하는 규칙
-- `MemberField` 전용 resolver 계층
+- 같은 이름이 여러 타입 또는 여러 객체에 걸쳐 겹치면 `MEMBER_LOOKUP_AMBIGUOUS` 로 실패합니다.
+- 이름이 없으면 `MEMBER_NOT_FOUND` 로 실패합니다.
 
 ## `TrackerItemChoiceField` 처리 규칙
 
@@ -293,11 +295,24 @@ raw schema type을 그대로 코드 전역에 퍼뜨리지 말고,
 
 - lookup 없이 입력값에서 tracker item ID를 직접 추출합니다.
 - 단일 값 또는 list 모두 허용합니다.
-- 각 값에서 `[]` 안 첫 번째 integer를 우선 사용합니다.
+- 각 값에서 `[:id]` 패턴을 먼저, 없으면 `[]` 안 첫 번째 integer를 사용합니다.
 - `dict` 입력이면 `id` 값을 우선 사용합니다.
 - 결과는 `TrackerItemReference(id=<int>, type="TrackerItemReference")` 로 변환합니다.
 
 builtin `subjects` 도 같은 규칙을 사용합니다.
+
+## `Status` 처리 규칙
+
+현재 구현은 `Status` 를 schema option 기준으로만 해석하고 있으며,
+workflow transition 제약을 반영한 단계별 상태 전이는 아직 구현되지 않았습니다.
+
+즉 현재 상태:
+
+- `Status.options` 로 이름 매핑은 가능
+- 하지만 생성 시 마지막 상태를 바로 넣는 것은 workflow-safe 하지 않음
+- create 후 transition 기반 후처리로 옮겨야 함
+
+따라서 `Status` 는 현재 TODO 로 관리합니다.
 
 ## 피해야 할 구현 방식
 

@@ -18,6 +18,7 @@ class ReferenceType(str, Enum):
     ABSTRACT = "AbstractReference"
     CHOICE_OPTION = "ChoiceOptionReference"
     COMMENT = "CommentReference"
+    GROUP = "GroupReference"
     PROJECT = "ProjectReference"
     REPOSITORY = "RepositoryReference"
     ROLE = "RoleReference"
@@ -25,6 +26,7 @@ class ReferenceType(str, Enum):
     TRACKER_ITEM = "TrackerItemReference"
     TRACKER_PERMISSION = "TrackerPermissionReference"
     USER = "UserReference"
+    USER_GROUP = "UserGroupReference"
 
 
 class FieldValueType(str, Enum):
@@ -117,6 +119,7 @@ TODO_FIELD_TYPE_VALUE_MODEL_MAP: dict[str, str | tuple[str, ...] | None] = {
 
 
 class ResolvedFieldKind(str, Enum):
+    MEMBER_REFERENCE = "member_reference"
     SCALAR_TEXT = "scalar_text"
     SCALAR_BOOL = "scalar_bool"
     STATIC_OPTION = "static_option"
@@ -131,6 +134,7 @@ class ResolutionStrategy(str, Enum):
     BUILTIN_SCALAR = "builtin_scalar"
     CUSTOM_SCALAR = "custom_scalar"
     TYPE_BOOL = "type_bool"
+    TYPE_MEMBER = "type_member"
     TYPE_TABLE = "type_table"
     TYPE_OPTION_WITH_OPTIONS = "type_option_with_options"
     TYPE_TRACKER_ITEM_CHOICE = "type_tracker_item_choice"
@@ -144,6 +148,7 @@ class ResolutionStrategy(str, Enum):
 
 
 class LookupTargetKind(str, Enum):
+    MEMBER = "member"
     NONE = "none"
     USER = "user"
     REFERENCE = "reference"
@@ -172,6 +177,7 @@ class OptionSourceKind(str, Enum):
 
 
 class OptionMapKind(str, Enum):
+    MEMBER_LOOKUP = "member_lookup"
     TRACKER_ITEM_DIRECT = "tracker_item_direct"
     STATIC_OPTIONS = "static_options"
     USER_LOOKUP = "user_lookup"
@@ -203,6 +209,9 @@ class OptionCheckStatus(str, Enum):
 
 
 class UserLookupStatus(str, Enum):
+    MEMBER_LOOKUP_AMBIGUOUS = "MEMBER_LOOKUP_AMBIGUOUS"
+    MEMBER_LOOKUP_FAILED = "MEMBER_LOOKUP_FAILED"
+    MEMBER_NOT_FOUND = "MEMBER_NOT_FOUND"
     RESOLVED = "RESOLVED"
     USER_LOOKUP_AMBIGUOUS = "USER_LOOKUP_AMBIGUOUS"
     USER_LOOKUP_FAILED = "USER_LOOKUP_FAILED"

@@ -64,6 +64,18 @@ class OfflineSchemaClient:
         """오프라인 모드에서는 사용자 디렉터리 조회를 제공하지 않는다."""
         raise RuntimeError(f"offline fixture does not provide user lookup by id: {user_id}")
 
+    def get_user_by_name(self, name: str):
+        """오프라인 모드에서는 사용자 이름 조회를 제공하지 않는다."""
+        raise RuntimeError(f"offline fixture does not provide user lookup by name: {name}")
+
+    def get_user_groups(self):
+        """오프라인 모드에서는 그룹 목록을 제공하지 않는다."""
+        raise RuntimeError("offline fixture does not provide user groups")
+
+    def get_tracker_field_permissions(self, tracker_id: int, field_id: int):
+        """오프라인 모드에서는 field permission matrix를 제공하지 않는다."""
+        raise RuntimeError(f"offline fixture does not provide field permissions: {tracker_id}/{field_id}")
+
 
 class OfflinePayloadIntegrationTest(unittest.TestCase):
     """서버 없이 schema JSON과 CSV만으로 어디까지 갈 수 있는지 검증한다."""
@@ -142,15 +154,15 @@ class OfflinePayloadIntegrationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"\[LOOKUP_REQUIRED\]"):
             wizard.preview_payload(0)
 
-    def test_offline_fixtures_report_member_field_as_user_lookup_failed(self) -> None:
-        """`MemberField`는 사용자 ID lookup이 실패하면 곧바로 lookup 실패로 드러나야 한다."""
+    def test_offline_fixtures_report_member_field_as_member_lookup_failed(self) -> None:
+        """`MemberField`는 member 후보를 구성하지 못하면 곧바로 lookup 실패로 드러나야 한다."""
         wizard = self._build_wizard({
             "시험 담당자": "시험 담당자",
         })
 
         statuses = set(wizard.state.option_check_df["status"].dropna().tolist())
 
-        self.assertIn(UserLookupStatus.USER_LOOKUP_FAILED.value, statuses)
+        self.assertIn(UserLookupStatus.MEMBER_LOOKUP_FAILED.value, statuses)
         with self.assertRaisesRegex(ValueError, r"\[LOOKUP_REQUIRED\]"):
             wizard.preview_payload(0)
 

@@ -149,7 +149,7 @@ class TrackerItemPreconstructionTest(unittest.TestCase):
 
         item.set_field_value(
             "subjects",
-            ["Candidate [20263671] extra text", "[20263672] another"],
+            ["Candidate [REQ:20263671] extra text", "[20263672] another"],
             {
                 "field_name": "Subjects",
                 "field_type": "TrackerItemChoiceField",
@@ -238,15 +238,39 @@ class WizardPayloadResolutionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"\[FIELD_UNSUPPORTED\]"):
             self.wizard.preview_payload(1)
 
-    def test_preview_payload_builds_member_field_from_user_ids(self) -> None:
-        """MemberField는 사용자 ID를 조회해 `values=[UserReference]` 형태로 만들어야 한다."""
+    def test_preview_payload_builds_member_field_from_user_role_group_names(self) -> None:
+        """MemberField는 USER/ROLE/GROUP 이름을 각각 해당 reference로 변환해야 한다."""
+
+        class NotFoundError(Exception):
+            def __init__(self) -> None:
+                self.response = type("Response", (), {"status_code": 404})()
+                super().__init__("not found")
 
         class FakeUserClient:
             def get_user_by_name(self, name: str) -> UserInfo:
-                return UserInfo(id=100 + len(name), name=name)
+                if name == "Kim QA":
+                    return UserInfo(id=101, name=name)
+                raise NotFoundError()
 
             def get_user(self, user_id: int) -> UserInfo:
                 return UserInfo(id=user_id, name=f"User {user_id}")
+
+            def get_user_groups(self):
+                return [
+                    {"id": 301, "name": "QA Group", "type": "GroupReference"},
+                ]
+
+            def get_tracker_field_permissions(self, tracker_id: int, field_id: int):
+                return [
+                    {
+                        "status": {"id": 0, "name": "Unset", "type": "ChoiceOptionReference"},
+                        "permissions": [
+                            {
+                                "role": {"id": 201, "name": "Developer", "type": "RoleReference"},
+                            }
+                        ],
+                    }
+                ]
 
         wizard = CodebeamerUploadWizard(
             client=FakeUserClient(),
@@ -254,6 +278,7 @@ class WizardPayloadResolutionTest(unittest.TestCase):
             mapper=self.mapper,
         )
         wizard.select_project(1)
+        wizard.select_tracker(1)
         wizard.state.schema_df = self.mapper.flatten_schema_fields([
             {
                 "id": 9,
@@ -261,15 +286,16 @@ class WizardPayloadResolutionTest(unittest.TestCase):
                 "type": "MemberField",
                 "valueModel": "ChoiceFieldValue",
                 "multipleValues": True,
+                "memberTypes": ["USER", "ROLE", "GROUP"],
             }
         ])
         wizard.state.selected_mapping = {"members": "시험 담당자"}
         wizard.state.selected_option_mapping = {"members": "시험 담당자"}
         wizard.state.option_maps = self.mapper.build_option_maps_from_schema(wizard.state.schema_df)
         wizard.state.upload_df = pd.DataFrame([
-            {"_row_id": 1, "upload_name": "REQ-1", "members": ["Kim QA", "Lee QA"]}
+            {"_row_id": 1, "upload_name": "REQ-1", "members": ["Kim QA", "Developer", "QA Group"]}
         ])
-        wizard.state.converted_upload_df = wizard._resolve_user_reference_fields(
+        wizard.state.converted_upload_df = wizard._resolve_member_reference_fields(
             wizard.state.upload_df,
             wizard.state.selected_option_mapping,
             wizard.state.option_maps,
@@ -280,8 +306,11 @@ class WizardPayloadResolutionTest(unittest.TestCase):
 
         self.assertEqual(custom_field["name"], "시험 담당자")
         self.assertEqual(custom_field["type"], "ChoiceFieldValue")
-        self.assertEqual([value["name"] for value in custom_field["values"]], ["Kim QA", "Lee QA"])
-        self.assertEqual([value["type"] for value in custom_field["values"]], ["UserReference", "UserReference"])
+        self.assertEqual([value["name"] for value in custom_field["values"]], ["Kim QA", "Developer", "QA Group"])
+        self.assertEqual(
+            [value["type"] for value in custom_field["values"]],
+            ["UserReference", "RoleReference", "GroupReference"],
+        )
 
     def test_preview_payload_builds_tracker_item_choice_field_from_bracket_text(self) -> None:
         """TrackerItemChoiceField는 입력 문자열에서 item id를 직접 파싱해야 한다."""
@@ -301,7 +330,7 @@ class WizardPayloadResolutionTest(unittest.TestCase):
             {
                 "_row_id": 1,
                 "upload_name": "REQ-1",
-                "related_items": ["Candidate [20263671] extra", "20263672"],
+                "related_items": ["Candidate [REQ:20263671] extra", "20263672"],
             }
         ])
         self.wizard.state.converted_upload_df = self.mapper.apply_option_resolution(

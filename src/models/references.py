@@ -81,6 +81,12 @@ class CommentReference(BaseReference):
 
 
 @dataclass
+class GroupReference(BaseReference):
+    TYPE_NAME: ClassVar[str] = ReferenceType.GROUP.value
+    type: str = ReferenceType.GROUP.value
+
+
+@dataclass
 class ProjectReference(BaseReference):
     TYPE_NAME: ClassVar[str] = ReferenceType.PROJECT.value
     type: str = ReferenceType.PROJECT.value
@@ -109,6 +115,12 @@ class UserReference(BaseReference):
     TYPE_NAME: ClassVar[str] = ReferenceType.USER.value
     type: str = ReferenceType.USER.value
     email: str | None = None
+
+
+@dataclass
+class UserGroupReference(BaseReference):
+    TYPE_NAME: ClassVar[str] = ReferenceType.USER_GROUP.value
+    type: str = ReferenceType.USER_GROUP.value
 
 
 @dataclass

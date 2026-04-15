@@ -235,6 +235,9 @@ class TrackerItemBase(DomainModel):
             return int(raw_value["id"])
 
         text = str(raw_value).strip()
+        bracket_match = re.search(r"\[.*?:(\d+).*?\]", text)
+        if bracket_match:
+            return int(bracket_match.group(1))
         bracket_match = re.search(r"\[(\d+)\]", text)
         if bracket_match:
             return int(bracket_match.group(1))

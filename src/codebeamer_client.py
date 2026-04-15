@@ -81,6 +81,18 @@ class CodebeamerClient:
         """트래커 스키마를 가져와 필드 구조를 분석할 수 있게 한다."""
         return self._get(f"/v3/trackers/{tracker_id}/schema")
 
+    def get_project_members(self, project_id: int) -> Any:
+        """프로젝트 멤버 목록을 가져온다."""
+        return self._get(f"/v3/projects/{project_id}/members")
+
+    def get_user_groups(self) -> Any:
+        """전체 사용자 그룹 목록을 가져온다."""
+        return self._get("/v3/users/groups")
+
+    def get_tracker_field_permissions(self, tracker_id: int, field_id: int) -> Any:
+        """특정 field의 permission matrix를 가져온다."""
+        return self._get(f"/v3/trackers/{tracker_id}/fields/{field_id}/permissions")
+
     def get_field_options(self, item_id: int, field_id: int) -> list[dict]:
         """특정 아이템 필드에서 선택 가능한 옵션 목록을 가져온다."""
         data = self._get(f"/v3/items/{item_id}/fields/{field_id}/options")

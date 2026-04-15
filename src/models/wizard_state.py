@@ -31,5 +31,8 @@ class WizardState:
     table_field_mapping: dict[str, dict[str, Any]] = field(default_factory=dict)
     list_cols: list[str] = field(default_factory=list)
     user_lookup_cache: dict[tuple[int | None, str], tuple[Any, Any, str, str | None]] = field(default_factory=dict)
+    member_lookup_cache: dict[tuple[int | None, int | None, int | None, str], tuple[Any, Any, str, str | None]] = field(default_factory=dict)
+    group_lookup_cache: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    tracker_role_cache: dict[tuple[int, int, int], dict[str, list[dict[str, Any]]]] = field(default_factory=dict)
 
     upload_result: dict[str, Any] | None = None

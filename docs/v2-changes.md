@@ -67,14 +67,15 @@
 
 ### 4. 사용자 선택 필드와 tracker item 선택 필드 처리 확장
 
-- `UserReference`, `UserChoiceField`, `MemberField` 는 사용자 ID 기반으로 조회 후 reference로 변환
+- `UserReference`, `UserChoiceField` 는 사용자 이름 우선 조회 후 reference로 변환
+- `MemberField` 는 `USER/ROLE/GROUP` 후보를 이름으로 찾아 mixed reference로 변환
 - `TrackerItemChoiceField` 와 builtin `subjects` 는 tracker item ID를 직접 파싱해 `TrackerItemReference` 로 변환
 - `__user_info`, `__resolved`, `__lookup_status`, `__lookup_error` 를 남김
 
-### 5. 사용자 lookup 캐시
+### 5. 사용자/member lookup 캐시
 
-- 같은 프로젝트 내에서 같은 사용자 ID를 반복 조회하지 않도록 캐시 도입
-- 캐시는 `WizardState.user_lookup_cache` 에 저장
+- 같은 프로젝트 내에서 같은 사용자 이름/ID, 같은 member 이름을 반복 조회하지 않도록 캐시 도입
+- 캐시는 `WizardState.user_lookup_cache`, `member_lookup_cache`, `group_lookup_cache`, `tracker_role_cache` 로 분리
 
 ### 6. `multipleValues` 기반 list 컬럼 자동 선택
 
@@ -87,5 +88,6 @@
 
 - `TrackerItemReference` 자동 lookup
 - `ProjectReference`, `RepositoryReference` 같은 기타 reference field lookup
+- `Status` transition 기반 후처리
 - pagination 및 대량 검색 전략 정교화
 - lookup 실패 시 재시도 정책 또는 별도 사용자 피드백 UI

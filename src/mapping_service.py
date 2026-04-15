@@ -118,6 +118,9 @@ class MappingService:
             return int(raw_value["id"])
 
         text = str(raw_value).strip()
+        bracket_match = re.search(r"\[.*?:(\d+).*?\]", text)
+        if bracket_match:
+            return int(bracket_match.group(1))
         bracket_match = re.search(r"\[(\d+)\]", text)
         if bracket_match:
             return int(bracket_match.group(1))
@@ -184,6 +187,8 @@ class MappingService:
         """reference 계열 필드가 실제로 어떤 참조 객체를 요구하는지 설명 문자열로 만든다."""
         if resolved_field_kind == ResolvedFieldKind.STATIC_OPTION.value:
             return field.get("referenceType") or ReferenceType.CHOICE_OPTION.value
+        if resolved_field_kind == ResolvedFieldKind.MEMBER_REFERENCE.value:
+            return ReferenceType.ABSTRACT.value
         if resolved_field_kind == ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value:
             return ReferenceType.TRACKER_ITEM.value
         if resolved_field_kind == ResolvedFieldKind.USER_REFERENCE.value:
@@ -196,6 +201,7 @@ class MappingService:
     def _field_value_detail(cls, resolved_field_kind: str, field: dict[str, Any]) -> str:
         """custom field가 필요로 하는 FieldValue 종류를 사람이 읽기 쉬운 문자열로 만든다."""
         if resolved_field_kind in {
+            ResolvedFieldKind.MEMBER_REFERENCE.value,
             ResolvedFieldKind.STATIC_OPTION.value,
             ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value,
             ResolvedFieldKind.USER_REFERENCE.value,
@@ -283,8 +289,8 @@ class MappingService:
             return result
 
         if field_type == SchemaFieldType.MEMBER.value:
-            result["resolved_field_kind"] = ResolvedFieldKind.USER_REFERENCE.value
-            result["resolution_strategy"] = ResolutionStrategy.TYPE_REFERENCE_WITH_USER_REFERENCE.value
+            result["resolved_field_kind"] = ResolvedFieldKind.MEMBER_REFERENCE.value
+            result["resolution_strategy"] = ResolutionStrategy.TYPE_MEMBER.value
             return result
 
         if field_type == SchemaFieldType.REFERENCE.value:
@@ -420,6 +426,24 @@ class MappingService:
                 )
             return result
 
+        if resolved_field_kind == ResolvedFieldKind.MEMBER_REFERENCE.value:
+            result["requires_lookup"] = True
+            result["lookup_target_kind"] = LookupTargetKind.MEMBER.value
+            if payload_target_kind == PayloadTargetKind.BUILTIN_FIELD.value:
+                result["preconstruction_kind"] = (
+                    PreconstructionKind.REFERENCE_LIST.value
+                    if multiple_values
+                    else PreconstructionKind.REFERENCE.value
+                )
+                result["preconstruction_detail"] = ReferenceType.ABSTRACT.value
+            else:
+                result["preconstruction_kind"] = PreconstructionKind.FIELD_VALUE.value
+                result["preconstruction_detail"] = cls._field_value_detail(
+                    resolved_field_kind,
+                    field_resolution,
+                )
+            return result
+
         if resolved_field_kind == ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value:
             if payload_target_kind == PayloadTargetKind.BUILTIN_FIELD.value:
                 result["preconstruction_kind"] = (
@@ -462,6 +486,7 @@ class MappingService:
         getter = field.get
         resolved_field_kind = getter("resolved_field_kind")
         if resolved_field_kind in {
+            ResolvedFieldKind.MEMBER_REFERENCE.value,
             ResolvedFieldKind.STATIC_OPTION.value,
             ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value,
             ResolvedFieldKind.USER_REFERENCE.value,
@@ -490,6 +515,7 @@ class MappingService:
         if resolved_field_kind == ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value:
             return OptionSourceKind.DIRECT_PARSE.value
         if resolved_field_kind in {
+            ResolvedFieldKind.MEMBER_REFERENCE.value,
             ResolvedFieldKind.USER_REFERENCE.value,
             ResolvedFieldKind.GENERIC_REFERENCE.value,
         }:
@@ -544,6 +570,7 @@ class MappingService:
                 "raw_tracker_item_field": field.get("trackerItemField"),
                 "value_model": value_model,
                 "reference_type": reference_type,
+                "member_types": field.get("memberTypes") or [],
                 "has_options": has_options,
                 "multiple_values": multiple_values,
                 "options": options if has_options else None,
@@ -751,6 +778,25 @@ class MappingService:
                 }
                 continue
 
+            if resolved_field_kind == ResolvedFieldKind.MEMBER_REFERENCE.value:
+                option_maps[field_name] = {
+                    "kind": OptionMapKind.MEMBER_LOOKUP.value,
+                    "name_map": {},
+                    "reference_type": reference_type,
+                    "multiple_values": multiple_values,
+                    "options": None,
+                    "source_status": (
+                        OptionSourceStatus.LOOKUP_REQUIRED.value
+                        if metadata["is_supported"]
+                        else OptionSourceStatus.UNSUPPORTED.value
+                    ),
+                    "resolver_available": True,
+                    "member_types": row.get("member_types") or [],
+                    "field_id": row.get("field_id"),
+                    **metadata,
+                }
+                continue
+
             if resolved_field_kind == ResolvedFieldKind.USER_REFERENCE.value:
                 option_maps[field_name] = {
                     "kind": OptionMapKind.USER_LOOKUP.value,
@@ -878,7 +924,10 @@ class MappingService:
                     "status": OptionCheckStatus.PRECONSTRUCTION_REQUIRED.value,
                 })
 
-            if option_info.get("kind") == OptionMapKind.USER_LOOKUP.value:
+            if option_info.get("kind") in {
+                OptionMapKind.USER_LOOKUP.value,
+                OptionMapKind.MEMBER_LOOKUP.value,
+            }:
                 resolved_col = f"{df_col}__resolved"
                 status_col = f"{df_col}__lookup_status"
                 error_col = f"{df_col}__lookup_error"
@@ -1032,7 +1081,10 @@ class MappingService:
                 work[f"{df_col}__resolved"] = resolved_values
                 continue
 
-            if option_info.get("kind") == OptionMapKind.USER_LOOKUP.value:
+            if option_info.get("kind") in {
+                OptionMapKind.USER_LOOKUP.value,
+                OptionMapKind.MEMBER_LOOKUP.value,
+            }:
                 resolved_col = f"{df_col}__resolved"
                 if resolved_col not in work.columns:
                     work[resolved_col] = [None] * len(work)

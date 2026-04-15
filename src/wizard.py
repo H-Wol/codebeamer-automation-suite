@@ -16,15 +16,19 @@ from .models import OptionMapKind
 from .models import PayloadStatus
 from .models import ReferenceType
 from .models import ResolvedFieldKind
+from .models import GroupReference
+from .models import RoleReference
 from .models import TableFieldValue
 from .models import TrackerItemBase
 from .models import UploadStatus
 from .models import UserInfo
+from .models import UserGroupReference
 from .models import UserLookupStatus
 from .models import WizardState
 
 
 UserLookupCacheEntry = tuple[dict[str, Any] | None, dict[str, Any] | None, str, str | None]
+MemberLookupCacheEntry = tuple[dict[str, Any] | None, dict[str, Any] | None, str, str | None]
 
 
 class CodebeamerUploadWizard:
@@ -52,6 +56,9 @@ class CodebeamerUploadWizard:
         """작업 대상을 프로젝트 단위로 바꾸고 관련 캐시를 초기화한다."""
         if self.state.project_id != project_id:
             self.state.user_lookup_cache.clear()
+            self.state.member_lookup_cache.clear()
+            self.state.group_lookup_cache.clear()
+            self.state.tracker_role_cache.clear()
             self._invalidate_payload_cache()
         self.state.project_id = project_id
 
@@ -72,6 +79,8 @@ class CodebeamerUploadWizard:
     def select_tracker(self, tracker_id: int) -> None:
         """업로드 대상 트래커를 저장한다."""
         if self.state.tracker_id != tracker_id:
+            self.state.member_lookup_cache.clear()
+            self.state.tracker_role_cache.clear()
             self._invalidate_payload_cache()
         self.state.tracker_id = tracker_id
 
@@ -298,6 +307,216 @@ class CodebeamerUploadWizard:
                 (None, None, UserLookupStatus.USER_LOOKUP_FAILED.value, error_message),
             )
 
+    def _member_lookup_cache_key(
+        self,
+        field_id: int | None,
+        lookup_text: Any,
+    ) -> tuple[int | None, int | None, int | None, str]:
+        """MemberField lookup 결과 캐시 키를 만든다."""
+        return (
+            self.state.project_id,
+            self.state.tracker_id,
+            field_id,
+            self._normalize_lookup_text(lookup_text).casefold(),
+        )
+
+    @classmethod
+    def _reference_payload_to_info(cls, payload: dict[str, Any] | None) -> dict[str, Any] | None:
+        """reference payload를 lookup 결과 정보 형태로 정리한다."""
+        if payload is None:
+            return None
+        return {
+            "id": payload.get("id"),
+            "name": payload.get("name"),
+            "type": payload.get("type"),
+        }
+
+    @staticmethod
+    def _normalize_member_name_key(value: Any) -> str:
+        """role/group 이름 비교용 정규화 키를 만든다."""
+        if value is None:
+            return ""
+        return str(value).strip().casefold()
+
+    @staticmethod
+    def _extract_group_references(data: Any) -> list[dict[str, Any]]:
+        """사용자 그룹 목록 응답에서 그룹 reference 후보를 평탄화한다."""
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            for key in ("groups", "groupReferences", "items", "references"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, dict)]
+        return []
+
+    @staticmethod
+    def _extract_role_references(permission_matrix: Any) -> list[dict[str, Any]]:
+        """field permission matrix에서 RoleReference 목록을 추출한다."""
+        roles: dict[int, dict[str, Any]] = {}
+        if not isinstance(permission_matrix, list):
+            return []
+        for status_row in permission_matrix:
+            if not isinstance(status_row, dict):
+                continue
+            permissions = status_row.get("permissions") or []
+            for permission_row in permissions:
+                if not isinstance(permission_row, dict):
+                    continue
+                role = permission_row.get("role")
+                if not isinstance(role, dict):
+                    continue
+                if role.get("id") is None:
+                    continue
+                normalized = dict(role)
+                normalized.setdefault("type", ReferenceType.ROLE.value)
+                roles[int(normalized["id"])] = normalized
+        return list(roles.values())
+
+    def _group_candidates(self) -> dict[str, list[dict[str, Any]]]:
+        """전체 그룹 후보를 이름 키로 캐시한다."""
+        cached = self.state.group_lookup_cache
+        if cached:
+            return cached
+
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for raw in self._extract_group_references(self.client.get_user_groups()):
+            ref_type = raw.get("type") or ReferenceType.USER_GROUP.value
+            key = self._normalize_member_name_key(raw.get("name"))
+            if not key or raw.get("id") is None:
+                continue
+            grouped.setdefault(f"GROUP:{key}", []).append({
+                "id": raw.get("id"),
+                "name": raw.get("name"),
+                "type": ref_type,
+            })
+
+        self.state.group_lookup_cache = grouped
+        return grouped
+
+    def _tracker_role_candidates(self, field_id: int | None) -> dict[str, list[dict[str, Any]]]:
+        """현재 트래커/필드 기준 role 후보를 이름 키로 캐시한다."""
+        if self.state.project_id is None or self.state.tracker_id is None or field_id is None:
+            return {}
+        cache_key = (self.state.project_id, self.state.tracker_id, int(field_id))
+        cached = self.state.tracker_role_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for role in self._extract_role_references(
+            self.client.get_tracker_field_permissions(self.state.tracker_id, int(field_id))
+        ):
+            key = self._normalize_member_name_key(role.get("name"))
+            if not key:
+                continue
+            grouped.setdefault(f"ROLE:{key}", []).append({
+                "id": role.get("id"),
+                "name": role.get("name"),
+                "type": role.get("type") or ReferenceType.ROLE.value,
+            })
+
+        self.state.tracker_role_cache[cache_key] = grouped
+        return grouped
+
+    def _build_member_reference(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        """member lookup 후보를 업로드용 reference payload로 정리한다."""
+        ref_type = candidate.get("type") or ReferenceType.ABSTRACT.value
+        if ref_type == ReferenceType.USER.value:
+            return UserInfo(id=int(candidate["id"]), name=candidate.get("name")).to_reference().to_dict()
+        if ref_type == ReferenceType.ROLE.value:
+            return RoleReference(id=int(candidate["id"]), name=candidate.get("name"), type=ReferenceType.ROLE.value).to_dict()
+        if ref_type in {ReferenceType.GROUP.value, ReferenceType.USER_GROUP.value}:
+            if ref_type == ReferenceType.GROUP.value:
+                return GroupReference(
+                    id=int(candidate["id"]),
+                    name=candidate.get("name"),
+                    type=ReferenceType.GROUP.value,
+                ).to_dict()
+            return UserGroupReference(
+                id=int(candidate["id"]),
+                name=candidate.get("name"),
+                type=ReferenceType.USER_GROUP.value,
+            ).to_dict()
+        return {
+            "id": int(candidate["id"]),
+            "name": candidate.get("name"),
+            "type": ref_type,
+        }
+
+    def _lookup_member_reference(
+        self,
+        raw_value: Any,
+        *,
+        field_id: int | None,
+        member_types: list[str] | None,
+    ) -> MemberLookupCacheEntry:
+        """MemberField 값을 USER/ROLE/GROUP 후보에서 이름 기준으로 찾는다."""
+        lookup_text = self._normalize_lookup_text(raw_value)
+        cache_key = self._member_lookup_cache_key(field_id, lookup_text)
+        if cache_key in self.state.member_lookup_cache:
+            return self.state.member_lookup_cache[cache_key]
+
+        try:
+            if not lookup_text:
+                raise ValueError("member lookup text is empty")
+
+            allowed_types = [str(member_type).strip().upper() for member_type in (member_types or []) if str(member_type).strip()]
+            if not allowed_types:
+                allowed_types = ["USER"]
+
+            matches: list[dict[str, Any]] = []
+
+            if "USER" in allowed_types:
+                user_resolved, user_info, user_status, user_error = self._lookup_user_reference(lookup_text)
+                if user_resolved is not None and user_status == UserLookupStatus.RESOLVED.value:
+                    matches.append(user_resolved)
+                elif user_error and user_status not in {
+                    UserLookupStatus.USER_NOT_FOUND.value,
+                    UserLookupStatus.USER_LOOKUP_NOT_RUN.value,
+                }:
+                    entry = (None, None, UserLookupStatus.MEMBER_LOOKUP_FAILED.value, user_error)
+                    self.state.member_lookup_cache[cache_key] = entry
+                    return entry
+
+            member_name_key = self._normalize_member_name_key(lookup_text)
+            if "GROUP" in allowed_types:
+                matches.extend(self._group_candidates().get(f"GROUP:{member_name_key}", []))
+            if "ROLE" in allowed_types:
+                matches.extend(self._tracker_role_candidates(field_id).get(f"ROLE:{member_name_key}", []))
+
+            unique_matches: dict[tuple[int, str], dict[str, Any]] = {}
+            for match in matches:
+                if match.get("id") is None or match.get("type") is None:
+                    continue
+                unique_matches[(int(match["id"]), str(match["type"]))] = match
+
+            if len(unique_matches) == 1:
+                candidate = next(iter(unique_matches.values()))
+                resolved = self._build_member_reference(candidate)
+                info = self._reference_payload_to_info(resolved)
+                entry = (resolved, info, UserLookupStatus.RESOLVED.value, None)
+                self.state.member_lookup_cache[cache_key] = entry
+                return entry
+
+            if len(unique_matches) > 1:
+                entry = (
+                    None,
+                    None,
+                    UserLookupStatus.MEMBER_LOOKUP_AMBIGUOUS.value,
+                    f"Ambiguous member name: {lookup_text!r}",
+                )
+                self.state.member_lookup_cache[cache_key] = entry
+                return entry
+
+            entry = (None, None, UserLookupStatus.MEMBER_NOT_FOUND.value, None)
+            self.state.member_lookup_cache[cache_key] = entry
+            return entry
+        except Exception as exc:
+            entry = (None, None, UserLookupStatus.MEMBER_LOOKUP_FAILED.value, str(exc))
+            self.state.member_lookup_cache[cache_key] = entry
+            return entry
+
     def _resolve_user_reference_value(
         self,
         raw_value: Any,
@@ -371,6 +590,92 @@ class CodebeamerUploadWizard:
 
         return work
 
+    def _resolve_member_reference_value(
+        self,
+        raw_value: Any,
+        *,
+        multiple_values: bool,
+        field_id: int | None,
+        member_types: list[str] | None,
+    ) -> tuple[Any, Any, str | None, str | None]:
+        """단일 값 또는 목록 값을 member reference 형태로 해석한다."""
+        if multiple_values and isinstance(raw_value, list):
+            resolved_values = []
+            member_infos = []
+            for item in raw_value:
+                if item is None or self._normalize_lookup_text(item) == "":
+                    continue
+                resolved, member_info, status, error = self._lookup_member_reference(
+                    item,
+                    field_id=field_id,
+                    member_types=member_types,
+                )
+                if resolved is None:
+                    return None, None, status, error
+                resolved_values.append(resolved)
+                member_infos.append(member_info)
+            return (
+                resolved_values if resolved_values else None,
+                member_infos if member_infos else None,
+                UserLookupStatus.RESOLVED.value,
+                None,
+            )
+
+        return self._lookup_member_reference(
+            raw_value,
+            field_id=field_id,
+            member_types=member_types,
+        )
+
+    def _resolve_member_reference_fields(
+        self,
+        upload_df: pd.DataFrame,
+        option_mapping: dict[str, str],
+        option_maps: dict[str, dict],
+    ) -> pd.DataFrame:
+        """MemberField 값을 미리 찾아 `__resolved` 컬럼에 넣는다."""
+        work = upload_df.copy()
+
+        for df_col, schema_field in option_mapping.items():
+            option_info = option_maps.get(schema_field, {})
+            if option_info.get("kind") != OptionMapKind.MEMBER_LOOKUP.value:
+                continue
+
+            resolved_values = []
+            member_infos = []
+            statuses = []
+            errors = []
+            multiple_values = option_info.get("multiple_values", False)
+            field_id = option_info.get("field_id")
+            member_types = option_info.get("member_types") or []
+
+            for _, row in work.iterrows():
+                raw_value = row[df_col]
+                if raw_value is None or (isinstance(raw_value, str) and raw_value.strip() == ""):
+                    resolved_values.append(None)
+                    member_infos.append(None)
+                    statuses.append(None)
+                    errors.append(None)
+                    continue
+
+                resolved, member_info, status, error = self._resolve_member_reference_value(
+                    raw_value,
+                    multiple_values=multiple_values,
+                    field_id=field_id,
+                    member_types=member_types,
+                )
+                resolved_values.append(resolved)
+                member_infos.append(member_info)
+                statuses.append(status)
+                errors.append(error)
+
+            work[f"{df_col}__resolved"] = resolved_values
+            work[f"{df_col}__user_info"] = member_infos
+            work[f"{df_col}__lookup_status"] = statuses
+            work[f"{df_col}__lookup_error"] = errors
+
+        return work
+
     def process_option_mapping(
         self,
         selected_mapping: dict[str, str],
@@ -406,6 +711,11 @@ class CodebeamerUploadWizard:
 
         lookup_ready_df = self._resolve_user_reference_fields(
             upload_df=self.state.upload_df,
+            option_mapping=selected_option_mapping,
+            option_maps=option_maps,
+        )
+        lookup_ready_df = self._resolve_member_reference_fields(
+            upload_df=lookup_ready_df,
             option_mapping=selected_option_mapping,
             option_maps=option_maps,
         )
@@ -461,6 +771,8 @@ class CodebeamerUploadWizard:
             reference_type = ReferenceType.TRACKER_ITEM.value
         if not reference_type and resolved_field_kind == ResolvedFieldKind.USER_REFERENCE.value:
             reference_type = ReferenceType.USER.value
+        if not reference_type and resolved_field_kind == ResolvedFieldKind.MEMBER_REFERENCE.value:
+            reference_type = ReferenceType.ABSTRACT.value
 
         return {
             "field_id": field_row.get("field_id"),
@@ -557,7 +869,10 @@ class CodebeamerUploadWizard:
         if not self._has_row_value(row, df_col):
             return None
 
-        if option_info.get("kind") == OptionMapKind.USER_LOOKUP.value:
+        if option_info.get("kind") in {
+            OptionMapKind.USER_LOOKUP.value,
+            OptionMapKind.MEMBER_LOOKUP.value,
+        }:
             lookup_status = (
                 row[status_col]
                 if status_col in row.index

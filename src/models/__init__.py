@@ -41,6 +41,7 @@ from .references import AbstractReference
 from .references import BaseReference
 from .references import ChoiceOptionReference
 from .references import CommentReference
+from .references import GroupReference
 from .references import Label
 from .references import ProjectReference
 from .references import RepositoryReference
@@ -49,6 +50,7 @@ from .references import TrackerItemReference
 from .references import TrackerPermissionReference
 from .references import TrackerReference
 from .references import UserReference
+from .references import UserGroupReference
 from .tracker_item import TrackerItemBase
 from .user_info import UserInfo
 from .wizard_state import WizardState
@@ -62,6 +64,7 @@ __all__ = [
     "ChoiceOptionReference",
     "ColorFieldValue",
     "CommentReference",
+    "GroupReference",
     "CountryFieldValue",
     "DateFieldValue",
     "DecimalFieldValue",
@@ -103,6 +106,7 @@ __all__ = [
     "UploadStatus",
     "UrlFieldValue",
     "USER_SEARCH_RESULT_KEYS",
+    "UserGroupReference",
     "UserInfo",
     "UserReference",
     "UserLookupStatus",

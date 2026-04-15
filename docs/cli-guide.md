@@ -12,8 +12,10 @@ py -3 cli_main.py
 - tracker schema를 먼저 읽고 Excel 헤더와의 자동 매핑을 확인합니다.
 - schema의 `multipleValues=true` 필드에 매핑된 Excel 컬럼은 자동으로 list 컬럼으로 처리합니다.
 - 정적 option 필드는 reference payload로 자동 변환합니다.
-- `UserChoiceField`, `MemberField`, `UserReference` 필드는 사용자 ID lookup 후 reference로 변환하고, 같은 사용자 ID에 대한 결과는 프로젝트 단위로 캐시합니다.
+- `UserChoiceField`, `UserReference` 필드는 사용자 이름 우선 lookup 후 reference로 변환하고, 같은 사용자 이름/ID에 대한 결과는 프로젝트 단위로 캐시합니다.
+- `MemberField` 는 `USER/ROLE/GROUP` 후보를 이름으로 찾아 mixed reference로 변환합니다.
 - `TrackerItemChoiceField` 와 builtin `subjects` 는 tracker item ID를 파싱해 `TrackerItemReference`로 변환합니다.
+- `Status` 는 transition 기반 후처리로 옮겨야 하므로 현재 TODO 상태입니다.
 - row별 payload cache를 먼저 만들고 preview와 upload가 같은 payload를 재사용합니다.
 - payload 생성 실패와 upload 실패를 분리해 저장합니다.
 
@@ -80,12 +82,13 @@ CLI는 다음 구조를 전제로 합니다.
 9. hierarchy processor가 멀티라인 병합과 계층 생성
 10. schema 비교 결과 확인
 11. option/reference 필드 검증 결과 확인
-12. 사용자 선택 필드가 있으면 사용자 ID lookup 및 캐시 반영
-13. tracker item 선택 필드가 있으면 tracker item ID 파싱
-14. payload cache 생성 결과 확인
-15. payload preview 확인
-16. dry-run 또는 실제 업로드 수행
-17. 실행 결과 저장 여부 선택
+12. 사용자 선택 필드가 있으면 사용자 이름 우선 lookup 및 캐시 반영
+13. `MemberField` 가 있으면 `USER/ROLE/GROUP` 이름 매칭
+14. tracker item 선택 필드가 있으면 tracker item ID 파싱
+15. payload cache 생성 결과 확인
+16. payload preview 확인
+17. dry-run 또는 실제 업로드 수행
+18. 실행 결과 저장 여부 선택
 
 ## 산출물
 
@@ -102,10 +105,11 @@ wizard는 다음 결과를 저장할 수 있습니다.
 
 ## lookup 관련 참고
 
-- 사용자 lookup 결과는 `__resolved`, `__user_info`, `__lookup_status`, `__lookup_error` 컬럼에 반영됩니다.
-- 같은 프로젝트 안에서 동일한 사용자 ID는 재사용 캐시로 처리됩니다.
+- 사용자/member lookup 결과는 `__resolved`, `__user_info`, `__lookup_status`, `__lookup_error` 컬럼에 반영됩니다.
+- 같은 프로젝트 안에서 동일한 사용자 이름/ID, 동일한 member 이름은 재사용 캐시로 처리됩니다.
 - `__user_info` 는 `{id, name, type="UserReference"}` 최소 구조로 저장됩니다.
 - `TrackerItemChoiceField` 와 builtin `subjects` 는 lookup 없이 입력값에서 tracker item ID를 직접 파싱합니다.
+- `MemberField` 의 `ROLE` 은 `GET /v3/trackers/{trackerId}/fields/{fieldId}/permissions`, `GROUP` 은 `GET /v3/users/groups` 로 후보를 미리 가져와 이름으로 찾습니다.
 - 정적 option이 없는 일반 reference field는 아직 자동 lookup을 모두 지원하지 않습니다.
 - payload cache 상태는 `PAYLOAD_READY`, `PAYLOAD_FAILED` 로 구분됩니다.
 - 업로드 결과 상태는 `UPLOAD_SUCCESS`, `UPLOAD_FAILED`, `UNRESOLVED_PARENT` 로 구분됩니다.
