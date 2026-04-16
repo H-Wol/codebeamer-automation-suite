@@ -10,6 +10,10 @@ from src.excel_reader import ExcelReader
 from src.hierarchy_processor import HierarchyProcessor
 from src.mapping_service import MappingService
 from src.models import OptionCheckStatus
+from src.upload_pipeline import load_tracker_schema_df
+from src.upload_pipeline import prepare_upload_dataframe
+from src.upload_pipeline import run_validation_pipeline
+from src.upload_pipeline import suggest_mapping_from_headers
 from src.wizard import CodebeamerUploadWizard
 
 
@@ -236,31 +240,6 @@ class GuiUploadPipelineService:
         return field_name in GUI_EXCLUDED_TARGET_FIELDS or tracker_item_field in GUI_EXCLUDED_TARGET_FIELDS
 
     @staticmethod
-    def _auto_match_columns(
-        upload_columns: list[str],
-        schema_field_names: set[str],
-        table_field_names: set[str] | None = None,
-    ) -> dict[str, str]:
-        selected_mapping: dict[str, str] = {}
-        table_field_names = table_field_names or set()
-        for column in upload_columns:
-            if column in schema_field_names:
-                selected_mapping[column] = column
-                continue
-
-            if "." in column:
-                potential_table_field = column.split(".", 1)[0].strip()
-                if potential_table_field in table_field_names:
-                    selected_mapping[column] = potential_table_field
-                    continue
-
-            for schema_field in schema_field_names:
-                if column.lower() == schema_field.lower():
-                    selected_mapping[column] = schema_field
-                    break
-        return selected_mapping
-
-    @staticmethod
     def _gui_upload_columns(upload_df: pd.DataFrame) -> list[str]:
         columns: list[str] = []
         for column in upload_df.columns:
@@ -287,8 +266,7 @@ class GuiUploadPipelineService:
         wizard.select_project(int(settings.default_project_id))
         wizard.select_tracker(int(settings.default_tracker_id))
 
-        schema = wizard.client.get_tracker_schema(wizard.state.tracker_id)
-        schema_df = self.mapper.flatten_schema_fields(schema)
+        schema, schema_df = load_tracker_schema_df(wizard)
         mappable_schema_df = schema_df[
             ~schema_df.apply(self._is_gui_excluded_schema_field, axis=1)
         ].reset_index(drop=True)
@@ -299,31 +277,17 @@ class GuiUploadPipelineService:
             header_row=int(file_state["header_row"]),
         )
         headers = preview.headers
-        table_field_names = set(
-            mappable_schema_df[
-                mappable_schema_df.get("is_table_field", False).fillna(False)
-            ]["field_name"].dropna().astype(str).tolist()
-        )
-        raw_mapping = self._auto_match_columns(
-            headers,
-            set(mappable_schema_df["field_name"].dropna().astype(str).str.strip()),
-            table_field_names=table_field_names,
-        )
-        list_cols = self.mapper.get_list_columns_for_mapping(raw_mapping, mappable_schema_df)
+        raw_mapping = suggest_mapping_from_headers(headers, mappable_schema_df)
 
-        reader = wizard.reader
-        if reader is None:
-            raise ValueError("wizard.reader 가 준비되지 않았습니다.")
-        reader.header_row = int(file_state["header_row"])
-        reader.summary_col = str(file_state["summary_column"])
-        raw_df = reader.read_excel(
+        _, list_cols = prepare_upload_dataframe(
+            wizard,
             file_path=file_state["file_path"],
             sheet_name=file_state["sheet_name"],
+            summary_col=str(file_state["summary_column"]),
+            selected_mapping=raw_mapping,
+            schema=schema,
+            schema_df=mappable_schema_df,
         )
-        wizard.load_raw_dataframe(raw_df, list_cols=list_cols)
-        wizard.state.schema = schema
-        wizard.state.schema_df = schema_df
-        wizard._detect_table_field_columns()
 
         upload_columns = self._gui_upload_columns(wizard.state.upload_df)
         selected_mapping = {
@@ -348,10 +312,14 @@ class GuiUploadPipelineService:
         wizard = mapping_context.wizard
         list_cols = self.mapper.get_list_columns_for_mapping(selected_mapping, mapping_context.schema_df)
         wizard.load_raw_dataframe(wizard.state.raw_df.copy(), list_cols=list_cols)
-        comparison_df = wizard.load_schema_and_compare(selected_mapping)
+        validation_result = run_validation_pipeline(wizard, selected_mapping)
+        comparison_df = validation_result.comparison_df
         comparison_df = self._gui_visible_comparison_df(comparison_df)
-        _, option_check_df = wizard.process_option_mapping(selected_mapping)
-        option_check_df = option_check_df if option_check_df is not None else pd.DataFrame()
+        option_check_df = (
+            validation_result.option_check_df
+            if validation_result.option_check_df is not None
+            else pd.DataFrame()
+        )
 
         has_blocking = False
         if not option_check_df.empty:
@@ -361,7 +329,7 @@ class GuiUploadPipelineService:
                 or status_series.str.endswith(USER_LOOKUP_FAILURE_SUFFIXES).any()
             )
 
-        payload_df = wizard.build_payloads(force=True)
+        payload_df = validation_result.payload_df
         if not payload_df.empty and (payload_df["payload_status"] != "ready").any():
             has_blocking = True
 
@@ -396,9 +364,68 @@ class GuiUploadPipelineService:
             return "오류", f"사용자를 찾지 못했습니다. 컬럼: {df_column}"
         if status.endswith(("MEMBER_LOOKUP_FAILED", "MEMBER_LOOKUP_AMBIGUOUS", "MEMBER_NOT_FOUND")):
             return "오류", f"담당자/역할/그룹을 찾지 못했습니다. 컬럼: {df_column}"
-        if status == OptionCheckStatus.PRECONSTRUCTION_REQUIRED.value:
-            return "안내", f"업로드 전에 내부 변환이 필요한 필드입니다. 필드: {field_name}"
         return "안내", str(row.get("error") or row.get("detail") or status or value or "")
+
+    @staticmethod
+    def _parse_payload_error(payload_error: str) -> dict[str, str]:
+        work = str(payload_error or "").strip()
+        parsed = {
+            "code": "",
+            "field": "",
+            "df_column": "",
+            "row_id": "",
+            "detail": work,
+        }
+        if not work.startswith("[") or "]" not in work:
+            return parsed
+
+        code_end = work.find("]")
+        parsed["code"] = work[1:code_end].strip()
+        remainder = work[code_end + 1 :].strip()
+
+        for key, token in (("field", "field='"), ("df_column", "df_column='")):
+            token_index = remainder.find(token)
+            if token_index >= 0:
+                value_start = token_index + len(token)
+                value_end = remainder.find("'", value_start)
+                if value_end > value_start:
+                    parsed[key] = remainder[value_start:value_end]
+
+        row_token = "_row_id="
+        row_index = remainder.find(row_token)
+        if row_index >= 0:
+            row_start = row_index + len(row_token)
+            row_end = remainder.find(" ", row_start)
+            parsed["row_id"] = remainder[row_start:] if row_end < 0 else remainder[row_start:row_end]
+
+        detail_start = remainder.find(" ", row_index + len(row_token)) if row_index >= 0 else -1
+        if detail_start >= 0:
+            parsed["detail"] = remainder[detail_start + 1 :].strip()
+        elif remainder:
+            parsed["detail"] = remainder
+        return parsed
+
+    @classmethod
+    def _message_from_payload_error(cls, row: pd.Series) -> tuple[str, str, str]:
+        payload_error = str(row.get("payload_error") or "").strip()
+        parsed = cls._parse_payload_error(payload_error)
+        code = parsed["code"]
+        field = parsed["field"] or str(row.get("upload_name") or "")
+        column = parsed["df_column"]
+        detail = parsed["detail"]
+
+        if code == "FIELD_UNSUPPORTED":
+            return column, field, "현재 GUI에서 지원하지 않는 필드가 포함되어 있습니다."
+        if code == "LOOKUP_REQUIRED":
+            return column, field, "필요한 값을 찾지 못해 업로드용 데이터를 만들 수 없습니다."
+        if code == "DIRECT_PARSE_FAILED":
+            return column, field, "입력값을 아이디 형식으로 해석하지 못했습니다."
+        if code == "OPTION_RESOLUTION_FAILED":
+            return column, field, "선택값을 업로드 형식으로 변환하지 못했습니다."
+
+        if detail:
+            return column, field, detail
+        return column, field, "업로드용 데이터를 만들 수 없습니다."
 
     @classmethod
     def _build_user_issue_df(
@@ -436,6 +463,8 @@ class GuiUploadPipelineService:
                 severity, message = cls._message_from_option_status(row)
                 if not message:
                     continue
+                if str(row.get("status") or "") == OptionCheckStatus.PRECONSTRUCTION_REQUIRED.value:
+                    continue
                 issues.append({
                     "severity": severity,
                     "category": "값 검증",
@@ -447,12 +476,13 @@ class GuiUploadPipelineService:
         if payload_df is not None and not payload_df.empty:
             failed_df = payload_df[payload_df["payload_status"] != "ready"]
             for _, row in failed_df.iterrows():
+                column, field, message = cls._message_from_payload_error(row)
                 issues.append({
                     "severity": "오류",
                     "category": "Payload 생성",
-                    "column": "",
-                    "field": str(row.get("upload_name") or ""),
-                    "message": str(row.get("payload_error") or "Payload를 만들지 못했습니다."),
+                    "column": column,
+                    "field": field,
+                    "message": message,
                 })
 
         issue_df = pd.DataFrame(issues)

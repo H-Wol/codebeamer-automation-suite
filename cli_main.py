@@ -12,6 +12,10 @@ from src.logger import setup_logger
 from src.mapping_service import MappingService
 from src.models import OptionCheckStatus
 from src.models import PayloadStatus
+from src.upload_pipeline import load_tracker_schema_df
+from src.upload_pipeline import prepare_upload_dataframe
+from src.upload_pipeline import run_validation_pipeline
+from src.upload_pipeline import suggest_mapping_from_headers
 from src.wizard import CodebeamerUploadWizard
 
 
@@ -54,29 +58,6 @@ def _prompt_excel_path() -> str:
         raw = input(f"Excel file path (Enter={suggested}): ").strip()
         return raw or suggested
     return input("Excel file path: ").strip()
-
-
-def _auto_match_columns(upload_columns: list[str], schema_field_names: set[str]) -> dict[str, str]:
-    """Excel 컬럼 이름과 schema 필드 이름이 비슷하면 자동 매핑을 제안한다."""
-    selected_mapping: dict[str, str] = {}
-
-    for col in upload_columns:
-        matched_field = None
-
-        if col in schema_field_names:
-            matched_field = col
-        else:
-            for schema_field in schema_field_names:
-                if col.lower() == schema_field.lower():
-                    matched_field = schema_field
-                    break
-
-        if matched_field and confirm(f"Map '{col}' -> '{matched_field}'?", default=True):
-            selected_mapping[col] = matched_field
-            print(f"  mapped: {col} -> {matched_field}")
-
-    return selected_mapping
-
 
 def _print_option_check_summary(option_check_df):
     """옵션 검증 결과를 읽기 쉬운 정보와 차단 이슈로 나눠 출력한다."""
@@ -196,14 +177,31 @@ def main():
         summary_index = choose_one("요약 컬럼 선택", headers)
         summary_col = headers[summary_index]
 
-    tracker_schema = wizard.client.get_tracker_schema(wizard.state.tracker_id)
-    schema_df = wizard.mapper.flatten_schema_fields(tracker_schema)
-    schema_field_names = set(schema_df["field_name"].dropna().astype(str).str.strip())
+    tracker_schema, schema_df = load_tracker_schema_df(wizard)
+    suggested_mapping = suggest_mapping_from_headers(headers, schema_df)
 
     print("\n[컬럼 자동 매핑 확인]")
-    selected_mapping = _auto_match_columns(headers, schema_field_names)
+    selected_mapping: dict[str, str] = {}
+    for col, matched_field in suggested_mapping.items():
+        if confirm(f"Map '{col}' -> '{matched_field}'?", default=True):
+            selected_mapping[col] = matched_field
+            print(f"  mapped: {col} -> {matched_field}")
 
-    list_cols = wizard.mapper.get_list_columns_for_mapping(selected_mapping, schema_df)
+    wizard.processor = HierarchyProcessor(
+        header_row=cfg.excel_header_row,
+        summary_col=summary_col,
+        logger=logger,
+    )
+    _, list_cols = prepare_upload_dataframe(
+        wizard,
+        file_path=file_path,
+        sheet_name=sheet_name,
+        summary_col=summary_col,
+        selected_mapping=selected_mapping,
+        schema=tracker_schema,
+        schema_df=schema_df,
+    )
+
     if list_cols:
         print("\n[multipleValues 기준 자동 선택된 list 컬럼]")
         for col in list_cols:
@@ -211,20 +209,12 @@ def main():
     else:
         print("\n[multipleValues 기준 자동 선택된 list 컬럼 없음]")
 
-    raw_df = reader.read_excel(file_path=file_path, sheet_name=sheet_name)
-
-    wizard.processor = HierarchyProcessor(
-        header_row=cfg.excel_header_row,
-        summary_col=summary_col,
-        logger=logger,
-    )
-    wizard.load_raw_dataframe(raw_df=raw_df, list_cols=list_cols)
-
     print("\n[업로드 컬럼 목록]")
     for col in wizard.state.upload_df.columns:
         print("-", col)
 
-    comparison_df = wizard.load_schema_and_compare(selected_mapping)
+    validation_result = run_validation_pipeline(wizard, selected_mapping)
+    comparison_df = validation_result.comparison_df
     print("\n[Schema Comparison]")
     print(comparison_df[["df_column", "selected_schema_field", "status"]])
 
@@ -236,7 +226,8 @@ def main():
         print("\n[감지된 TableField 컬럼 없음]")
 
     print("\n[옵션/참조형 필드 처리 중]")
-    selected_option_mapping, option_check_df = wizard.process_option_mapping(selected_mapping)
+    selected_option_mapping = validation_result.selected_option_mapping
+    option_check_df = validation_result.option_check_df
 
     if selected_option_mapping:
         print(f"자동 감지된 옵션/참조형 필드 수: {len(selected_option_mapping)}")
@@ -251,7 +242,7 @@ def main():
     else:
         print("옵션/참조형 필드 매핑 대상이 없습니다.")
 
-    payload_df = wizard.build_payloads()
+    payload_df = validation_result.payload_df
     ready_count = len(payload_df[payload_df["payload_status"] == PayloadStatus.READY.value])
     failed_count = len(payload_df[payload_df["payload_status"] == PayloadStatus.FAILED.value])
     print(f"\n[Payload Cache] ready={ready_count}, failed={failed_count}")

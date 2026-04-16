@@ -251,4 +251,23 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
         self.assertFalse((issue_df["column"] == "_row_id").any())
         self.assertTrue((issue_df["column"] == "담당자").any())
         self.assertTrue(issue_df["message"].str.contains("사용자를 찾지 못했습니다").any())
+        self.assertFalse(issue_df["message"].str.contains("내부 변환").any())
         self.assertTrue(issue_df["message"].str.contains("payload error").any())
+
+    def test_build_user_issue_df_formats_structured_payload_errors(self) -> None:
+        service = GuiUploadPipelineService(client_factory=FakeClient)
+        issue_df = service._build_user_issue_df(
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame([
+                {
+                    "upload_name": "REQ-001",
+                    "payload_status": "failed",
+                    "payload_error": "[LOOKUP_REQUIRED] field='담당자' df_column='담당자' _row_id=1 lookup_target='user'",
+                }
+            ]),
+        )
+
+        self.assertEqual(issue_df.iloc[0]["column"], "담당자")
+        self.assertEqual(issue_df.iloc[0]["field"], "담당자")
+        self.assertIn("필요한 값을 찾지 못해 업로드용 데이터를 만들 수 없습니다.", issue_df.iloc[0]["message"])
