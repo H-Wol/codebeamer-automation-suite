@@ -13,47 +13,47 @@ QWidget#app_root {
 QWidget#header_card, QWidget#page_card {
     background: #FFFFFF;
     border: 1px solid #D8E1EA;
-    border-radius: 14px;
+    border-radius: 12px;
 }
 
 QLabel#app_title {
     color: #0E4A84;
-    font-size: 24px;
+    font-size: 21px;
     font-weight: 700;
 }
 
 QLabel#app_subtitle {
     color: #5B6B7F;
-    font-size: 13px;
+    font-size: 12px;
 }
 
 QLabel#page_title {
     color: #13263A;
-    font-size: 22px;
+    font-size: 19px;
     font-weight: 700;
-    padding-bottom: 2px;
+    padding-bottom: 1px;
 }
 
 QLabel#section_label {
     color: #5B6B7F;
-    font-size: 13px;
-    padding-bottom: 8px;
+    font-size: 12px;
+    padding-bottom: 4px;
 }
 
 QLabel#status_label {
     color: #0E4A84;
     background: #EAF4FB;
     border: 1px solid #CBE4F3;
-    border-radius: 10px;
-    padding: 10px 12px;
+    border-radius: 8px;
+    padding: 8px 10px;
 }
 
 QLabel#summary_label {
     color: #13263A;
     background: #F7FAFD;
     border: 1px solid #D8E1EA;
-    border-radius: 10px;
-    padding: 10px 12px;
+    border-radius: 8px;
+    padding: 8px 10px;
     font-weight: 600;
 }
 
@@ -61,9 +61,9 @@ QLabel#step_badge {
     color: #6B7B8D;
     background: #EEF3F8;
     border: 1px solid #D8E1EA;
-    border-radius: 16px;
-    padding: 8px 14px;
-    font-size: 12px;
+    border-radius: 14px;
+    padding: 6px 12px;
+    font-size: 11px;
     font-weight: 600;
 }
 
@@ -80,10 +80,10 @@ QLabel#step_badge[complete="true"] {
 }
 
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
-    min-height: 38px;
-    padding: 4px 10px;
+    min-height: 32px;
+    padding: 2px 8px;
     border: 1px solid #C9D5E2;
-    border-radius: 10px;
+    border-radius: 8px;
     background: #FFFFFF;
     color: #13263A;
 }
@@ -93,9 +93,9 @@ QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
 }
 
 QPushButton {
-    min-height: 38px;
-    padding: 0 16px;
-    border-radius: 10px;
+    min-height: 32px;
+    padding: 0 12px;
+    border-radius: 8px;
     border: 1px solid #C9D5E2;
     background: #FFFFFF;
     color: #13263A;
@@ -135,7 +135,7 @@ QPushButton#danger_button:hover {
 QTableWidget, QPlainTextEdit, QTabWidget::pane {
     background: #FFFFFF;
     border: 1px solid #D8E1EA;
-    border-radius: 12px;
+    border-radius: 10px;
 }
 
 QTableWidget {
@@ -151,14 +151,14 @@ QHeaderView::section {
     border: none;
     border-right: 1px solid #D8E1EA;
     border-bottom: 1px solid #D8E1EA;
-    padding: 10px 8px;
+    padding: 8px 6px;
     font-weight: 700;
 }
 
 QProgressBar {
-    min-height: 16px;
+    min-height: 14px;
     border: 1px solid #D8E1EA;
-    border-radius: 8px;
+    border-radius: 7px;
     background: #ECF2F7;
     text-align: center;
 }
@@ -179,4 +179,3 @@ QStatusBar {
     border-top: 1px solid #D8E1EA;
 }
 """
-

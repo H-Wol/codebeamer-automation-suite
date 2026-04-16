@@ -86,7 +86,7 @@ class MainWindow:
                 self.upload_success_count = 0
                 self.upload_failed_count = 0
                 self.setWindowTitle("Codebeamer Upload GUI")
-                self.resize(qt["QSize"](1240, 860))
+                self.resize(qt["QSize"](1160, 780))
                 self._build_shell()
                 self.setStatusBar(qt["QStatusBar"]())
                 self._build_pages()
@@ -101,14 +101,14 @@ class MainWindow:
                 root = QWidget()
                 root.setObjectName("app_root")
                 root_layout = QVBoxLayout(root)
-                root_layout.setContentsMargins(24, 20, 24, 20)
-                root_layout.setSpacing(16)
+                root_layout.setContentsMargins(18, 16, 18, 16)
+                root_layout.setSpacing(12)
 
                 header_card = QFrame()
                 header_card.setObjectName("header_card")
                 header_layout = QVBoxLayout(header_card)
-                header_layout.setContentsMargins(24, 20, 24, 18)
-                header_layout.setSpacing(12)
+                header_layout.setContentsMargins(18, 14, 18, 14)
+                header_layout.setSpacing(8)
 
                 title = QLabel("Codebeamer Upload Studio")
                 title.setObjectName("app_title")
@@ -118,7 +118,7 @@ class MainWindow:
                 header_layout.addWidget(subtitle)
 
                 steps_row = QHBoxLayout()
-                steps_row.setSpacing(10)
+                steps_row.setSpacing(8)
                 self.step_labels = []
                 for step_name in ("설정", "프로젝트", "파일", "매핑", "검증", "업로드", "결과"):
                     label = QLabel(step_name)
@@ -138,7 +138,7 @@ class MainWindow:
                 self.stack_card = QFrame()
                 self.stack_card.setObjectName("page_card")
                 stack_layout = QVBoxLayout(self.stack_card)
-                stack_layout.setContentsMargins(18, 18, 18, 18)
+                stack_layout.setContentsMargins(14, 14, 14, 14)
                 stack_layout.setSpacing(0)
                 self.stack = self.qt["QStackedWidget"]()
                 stack_layout.addWidget(self.stack)
