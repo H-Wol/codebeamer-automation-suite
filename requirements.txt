@@ -3,3 +3,5 @@ requests
 xlwings
 python-dotenv
 openpyxl
+PySide6
+cryptography

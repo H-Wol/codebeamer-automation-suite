@@ -8,8 +8,9 @@
 2. [아키텍처](./architecture.md)
 3. [CLI 사용 가이드](./cli-guide.md)
 4. [필드 지원 추가 가이드](./field-support-guide.md)
-5. [트러블슈팅](./troubleshooting.md)
-6. [v2 변경 사항](./v2-changes.md)
+5. [GUI 설계 초안](./gui-plan.md)
+6. [트러블슈팅](./troubleshooting.md)
+7. [v2 변경 사항](./v2-changes.md)
 
 ## 문서별 역할
 
@@ -24,6 +25,9 @@
 
 - [필드 지원 추가 가이드](./field-support-guide.md)
   새로운 schema field type 또는 reference field를 지원할 때 수정해야 하는 코드 경로와 구현 순서를 설명합니다.
+
+- [GUI 설계 초안](./gui-plan.md)
+  사용자용 GUI 의 단계형 화면 구성, 설정 항목, 매핑 UX, 진행률과 일시정지 요구사항을 정리합니다.
 
 - [트러블슈팅](./troubleshooting.md)
   자주 발생하는 에러와 대응 방법을 정리합니다.
