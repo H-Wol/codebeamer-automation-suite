@@ -198,6 +198,17 @@ class CodebeamerUploadWizard:
         response = getattr(exc, "response", None)
         return getattr(response, "status_code", None)
 
+    @staticmethod
+    def _response_json(exc: Exception) -> Any:
+        """예외 안의 HTTP 응답 JSON을 안전하게 꺼낸다."""
+        response = getattr(exc, "response", None)
+        if response is None:
+            return None
+        try:
+            return response.json()
+        except Exception:
+            return None
+
     def _user_lookup_cache_key(self, value: Any) -> tuple[int | None, str]:
         """현재 프로젝트 기준으로 사용자 lookup 캐시 키를 만든다."""
         return (self.state.project_id, self._normalize_lookup_text(value).casefold())
@@ -1158,12 +1169,11 @@ class CodebeamerUploadWizard:
                     print(f"Row {row['upload_name']} uploaded successfully: item_id={result['id']}")
 
                 except Exception as exc:
+                    error_status_code = self._http_status_code(exc)
+                    error_response_json = self._response_json(exc)
                     error_message = ""
-                    if hasattr(exc, "response") and exc.response is not None:
-                        try:
-                            error_message = str(exc.response.json())
-                        except Exception:
-                            error_message = str(exc)
+                    if error_response_json is not None:
+                        error_message = str(error_response_json)
                     else:
                         error_message = str(exc)
 
@@ -1171,6 +1181,8 @@ class CodebeamerUploadWizard:
                         "_row_id": row_id,
                         "parent_row_id": row["parent_row_id"],
                         "upload_name": row["upload_name"],
+                        "error_status_code": error_status_code,
+                        "error_response_json": error_response_json,
                         "error": error_message,
                         "status": UploadStatus.FAILED.value,
                     })
@@ -1258,7 +1270,31 @@ class CodebeamerUploadWizard:
             for key in ["success_df", "failed_df", "unresolved_df"]:
                 df = self.state.upload_result.get(key)
                 if isinstance(df, pd.DataFrame) and not df.empty:
-                    df.to_csv(out / f"{key}.csv", index=False)
+                    csv_df = df.copy()
+                    if "error_response_json" in csv_df.columns:
+                        csv_df["error_response_json"] = csv_df["error_response_json"].apply(
+                            lambda payload: (
+                                json.dumps(payload, ensure_ascii=False)
+                                if payload is not None
+                                else None
+                            )
+                        )
+                    csv_df.to_csv(out / f"{key}.csv", index=False)
+
+            failed_df = self.state.upload_result.get("failed_df")
+            if isinstance(failed_df, pd.DataFrame) and not failed_df.empty:
+                with open(out / "failed_responses.jsonl", "w", encoding="utf-8") as file:
+                    for _, row in failed_df.iterrows():
+                        file.write(json.dumps({
+                            "_row_id": row.get("_row_id"),
+                            "parent_row_id": row.get("parent_row_id"),
+                            "upload_name": row.get("upload_name"),
+                            "error_status_code": row.get("error_status_code"),
+                            "error_response_json": row.get("error_response_json"),
+                            "error": row.get("error"),
+                            "status": row.get("status"),
+                        }, ensure_ascii=False))
+                        file.write("\n")
 
             with open(out / "created_map.json", "w", encoding="utf-8") as file:
                 json.dump(self.state.upload_result.get("created_map", {}), file, ensure_ascii=False, indent=2)

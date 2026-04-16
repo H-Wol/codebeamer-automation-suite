@@ -33,6 +33,28 @@ class StaticSchemaClient:
         return {"id": 1000 + len(self.create_item_calls)}
 
 
+class FailingSchemaClient(StaticSchemaClient):
+    def create_item(self, tracker_id: int, payload: dict[str, Any], parent_item_id: int | None = None):
+        del tracker_id, payload, parent_item_id
+
+        class UploadError(Exception):
+            def __init__(self) -> None:
+                self.response = type(
+                    "Response",
+                    (),
+                    {
+                        "status_code": 400,
+                        "json": staticmethod(lambda: {
+                            "message": "Invalid tracker item",
+                            "details": {"field": "Status"},
+                        }),
+                    },
+                )()
+                super().__init__("upload failed")
+
+        raise UploadError()
+
+
 class CountingWizard(CodebeamerUploadWizard):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -132,6 +154,48 @@ class PayloadCacheWizardTest(unittest.TestCase):
             saved_payload = json.loads(first_line)
             self.assertEqual(saved_payload["payload_status"], PayloadStatus.READY.value)
             self.assertEqual(saved_payload["payload_json"]["name"], "REQ-001")
+
+    def test_upload_failure_persists_response_json(self) -> None:
+        wizard = CountingWizard(
+            client=FailingSchemaClient(self.schema),
+            processor=self.processor,
+            mapper=self.mapper,
+        )
+        wizard.select_project(1)
+        wizard.select_tracker(2)
+        raw_df = pd.DataFrame([
+            {"요약": "REQ-001", "_excel_row": 2, "_summary_indent": 0},
+        ])
+        wizard.load_raw_dataframe(raw_df, list_cols=[])
+        wizard.load_schema_and_compare({"요약": "Summary"})
+        wizard.process_option_mapping({"요약": "Summary"})
+
+        upload_result = wizard.upload(dry_run=False, continue_on_error=True)
+
+        failed_df = upload_result["failed_df"]
+        self.assertEqual(failed_df.iloc[0]["error_status_code"], 400)
+        self.assertEqual(
+            failed_df.iloc[0]["error_response_json"],
+            {"message": "Invalid tracker item", "details": {"field": "Status"}},
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            wizard.save_state(tmp_dir)
+
+            failed_csv = Path(tmp_dir) / "failed_df.csv"
+            failed_jsonl = Path(tmp_dir) / "failed_responses.jsonl"
+
+            self.assertTrue(failed_csv.exists())
+            self.assertTrue(failed_jsonl.exists())
+
+            failed_df_saved = pd.read_csv(failed_csv)
+            self.assertEqual(int(failed_df_saved.iloc[0]["error_status_code"]), 400)
+            self.assertIn("Invalid tracker item", failed_df_saved.iloc[0]["error_response_json"])
+
+            first_line = failed_jsonl.read_text(encoding="utf-8").strip().splitlines()[0]
+            saved_failure = json.loads(first_line)
+            self.assertEqual(saved_failure["error_status_code"], 400)
+            self.assertEqual(saved_failure["error_response_json"]["message"], "Invalid tracker item")
 
 
 if __name__ == "__main__":

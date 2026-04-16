@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import time
 from typing import Any
 
 import requests
@@ -11,12 +12,25 @@ from .models import UserInfo
 
 
 class CodebeamerClient:
-    def __init__(self, base_url: str, username: str, password: str, logger=None):
+    def __init__(
+        self,
+        base_url: str,
+        username: str,
+        password: str,
+        logger=None,
+        *,
+        rate_limit_retry_delay_seconds: float = 1.0,
+        rate_limit_max_retries: int = 5,
+        sleep_fn=time.sleep,
+    ):
         """Codebeamer 서버에 요청할 때 필요한 접속 정보를 보관한다."""
         self.base_url = base_url.rstrip("/")
         self.username = username
         self.password = password
         self.logger = logger
+        self.rate_limit_retry_delay_seconds = rate_limit_retry_delay_seconds
+        self.rate_limit_max_retries = rate_limit_max_retries
+        self._sleep_fn = sleep_fn
 
     def _session(self) -> requests.Session:
         """인증 헤더가 포함된 새 HTTP 세션을 만든다."""
@@ -56,6 +70,16 @@ class CodebeamerClient:
                 if isinstance(value, list):
                     return [item for item in value if isinstance(item, dict)]
         return []
+
+    @staticmethod
+    def _is_rate_limited(exc: Exception) -> bool:
+        """예외가 rate limit 상황인지 판정한다."""
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+        if status_code == 429:
+            return True
+        message = str(exc).lower()
+        return "max request" in message or "too many requests" in message or "rate limit" in message
 
     def get_projects(self) -> list[dict]:
         """접근 가능한 프로젝트 목록을 가져온다."""
@@ -178,4 +202,27 @@ class CodebeamerClient:
         params = {}
         if parent_item_id is not None:
             params["parentItemId"] = parent_item_id
-        return self._post(f"/v3/trackers/{tracker_id}/items", json_body=payload, params=params)
+        attempts = self.rate_limit_max_retries + 1
+        last_exc: Exception | None = None
+
+        for attempt in range(1, attempts + 1):
+            try:
+                return self._post(f"/v3/trackers/{tracker_id}/items", json_body=payload, params=params)
+            except Exception as exc:
+                last_exc = exc
+                if not self._is_rate_limited(exc) or attempt >= attempts:
+                    raise
+
+                delay_seconds = self.rate_limit_retry_delay_seconds * attempt
+                if self.logger is not None:
+                    self.logger.warning(
+                        "create_item rate limited; retrying in %.2fs (attempt %s/%s)",
+                        delay_seconds,
+                        attempt,
+                        attempts,
+                    )
+                self._sleep_fn(delay_seconds)
+
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("create_item retry loop exited unexpectedly")

@@ -154,7 +154,14 @@ def main():
     cfg = load_config()
     logger = setup_logger("cb-cli", level=cfg.log_level)
 
-    client = CodebeamerClient(cfg.base_url, cfg.username, cfg.password, logger)
+    client = CodebeamerClient(
+        cfg.base_url,
+        cfg.username,
+        cfg.password,
+        logger,
+        rate_limit_retry_delay_seconds=cfg.rate_limit_retry_delay_seconds,
+        rate_limit_max_retries=cfg.rate_limit_max_retries,
+    )
     reader = ExcelReader(header_row=cfg.excel_header_row, logger=logger)
     wizard = CodebeamerUploadWizard(
         client=client,
