@@ -51,6 +51,22 @@ class FakeClient:
                     "valueModel": "TextFieldValue",
                     "multipleValues": False,
                 },
+                {
+                    "id": 3,
+                    "name": "테이블필드",
+                    "type": "TableField",
+                    "trackerItemField": None,
+                    "valueModel": "TableFieldValue",
+                    "multipleValues": False,
+                    "columns": [
+                        {
+                            "id": 31,
+                            "name": "컬럼A",
+                            "type": "TextField",
+                            "valueModel": "TextFieldValue",
+                        }
+                    ],
+                },
             ]
         }
 
@@ -104,8 +120,8 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             workbook = Workbook()
             sheet = workbook.active
             sheet.title = "Main"
-            sheet.append(["Summary", "담당자", "id", "parent"])
-            sheet.append(["REQ-001", "홍길동", "1", ""])
+            sheet.append(["Summary", "담당자", "테이블필드.컬럼A", "id", "parent"])
+            sheet.append(["REQ-001", "홍길동", "값1", "1", ""])
             workbook.save(path)
             workbook.close()
 
@@ -132,7 +148,9 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
 
             self.assertIn("Summary", mapping_context.upload_columns)
             self.assertIn("담당자", mapping_context.upload_columns)
+            self.assertIn("테이블필드.컬럼A", mapping_context.upload_columns)
             self.assertNotIn("id", mapping_context.upload_columns)
             self.assertNotIn("parent", mapping_context.upload_columns)
             self.assertEqual(mapping_context.selected_mapping["Summary"], "Summary")
             self.assertEqual(mapping_context.selected_mapping["담당자"], "담당자")
+            self.assertEqual(mapping_context.selected_mapping["테이블필드.컬럼A"], "테이블필드")

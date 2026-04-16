@@ -269,12 +269,24 @@ class GuiUploadPipelineService:
         )
 
     @staticmethod
-    def _auto_match_columns(upload_columns: list[str], schema_field_names: set[str]) -> dict[str, str]:
+    def _auto_match_columns(
+        upload_columns: list[str],
+        schema_field_names: set[str],
+        table_field_names: set[str] | None = None,
+    ) -> dict[str, str]:
         selected_mapping: dict[str, str] = {}
+        table_field_names = table_field_names or set()
         for column in upload_columns:
             if column in schema_field_names:
                 selected_mapping[column] = column
                 continue
+
+            if "." in column:
+                potential_table_field = column.split(".", 1)[0].strip()
+                if potential_table_field in table_field_names:
+                    selected_mapping[column] = potential_table_field
+                    continue
+
             for schema_field in schema_field_names:
                 if column.lower() == schema_field.lower():
                     selected_mapping[column] = schema_field
@@ -292,6 +304,17 @@ class GuiUploadPipelineService:
             columns.append(str(column))
         return columns
 
+    @staticmethod
+    def _gui_visible_comparison_df(comparison_df: pd.DataFrame) -> pd.DataFrame:
+        if comparison_df is None or comparison_df.empty:
+            return comparison_df
+        work = comparison_df.copy()
+        if "df_column" not in work.columns:
+            return work
+        mask = ~work["df_column"].astype(str).isin(GUI_EXCLUDED_MAPPING_COLUMNS)
+        mask &= ~work["df_column"].astype(str).str.startswith("_")
+        return work[mask].reset_index(drop=True)
+
     def prepare_mapping_context(self, settings, file_state: dict[str, Any]) -> MappingContext:
         wizard = self.create_wizard(settings)
         wizard.select_project(int(settings.default_project_id))
@@ -306,9 +329,15 @@ class GuiUploadPipelineService:
             header_row=int(file_state["header_row"]),
         )
         headers = preview.headers
+        table_field_names = set(
+            schema_df[
+                schema_df.get("is_table_field", False).fillna(False)
+            ]["field_name"].dropna().astype(str).tolist()
+        )
         raw_mapping = self._auto_match_columns(
             headers,
             set(schema_df["field_name"].dropna().astype(str).str.strip()),
+            table_field_names=table_field_names,
         )
         list_cols = self.mapper.get_list_columns_for_mapping(raw_mapping, schema_df)
 
@@ -347,6 +376,7 @@ class GuiUploadPipelineService:
         list_cols = self.mapper.get_list_columns_for_mapping(selected_mapping, mapping_context.schema_df)
         wizard.load_raw_dataframe(wizard.state.raw_df.copy(), list_cols=list_cols)
         comparison_df = wizard.load_schema_and_compare(selected_mapping)
+        comparison_df = self._gui_visible_comparison_df(comparison_df)
         _, option_check_df = wizard.process_option_mapping(selected_mapping)
         option_check_df = option_check_df if option_check_df is not None else pd.DataFrame()
 
