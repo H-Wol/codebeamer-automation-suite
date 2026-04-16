@@ -21,19 +21,29 @@ from .worker import UploadWorker
 def _require_qt():
     try:
         from PySide6.QtCore import QSize
+        from PySide6.QtWidgets import QFrame
+        from PySide6.QtWidgets import QHBoxLayout
+        from PySide6.QtWidgets import QLabel
         from PySide6.QtWidgets import QMainWindow
         from PySide6.QtWidgets import QMessageBox
         from PySide6.QtWidgets import QStackedWidget
         from PySide6.QtWidgets import QStatusBar
+        from PySide6.QtWidgets import QVBoxLayout
+        from PySide6.QtWidgets import QWidget
     except ImportError as exc:
         raise RuntimeError("GUI 실행에는 PySide6 패키지가 필요합니다.") from exc
 
     return {
+        "QFrame": QFrame,
+        "QHBoxLayout": QHBoxLayout,
+        "QLabel": QLabel,
         "QMainWindow": QMainWindow,
         "QMessageBox": QMessageBox,
         "QSize": QSize,
         "QStackedWidget": QStackedWidget,
         "QStatusBar": QStatusBar,
+        "QVBoxLayout": QVBoxLayout,
+        "QWidget": QWidget,
     }
 
 
@@ -58,6 +68,7 @@ class MainWindow:
         class _MainWindow(base_cls):
             def __init__(self, store: GuiSettingsStore) -> None:
                 super().__init__()
+                self.qt = qt
                 self.settings_store = store
                 self.session_state = GuiSessionState(
                     settings=store.load(),
@@ -75,11 +86,66 @@ class MainWindow:
                 self.upload_success_count = 0
                 self.upload_failed_count = 0
                 self.setWindowTitle("Codebeamer Upload GUI")
-                self.resize(qt["QSize"](1100, 760))
-                self.stack = qt["QStackedWidget"]()
-                self.setCentralWidget(self.stack)
+                self.resize(qt["QSize"](1240, 860))
+                self._build_shell()
                 self.setStatusBar(qt["QStatusBar"]())
                 self._build_pages()
+
+            def _build_shell(self) -> None:
+                QWidget = self.qt["QWidget"]
+                QVBoxLayout = self.qt["QVBoxLayout"]
+                QHBoxLayout = self.qt["QHBoxLayout"]
+                QLabel = self.qt["QLabel"]
+                QFrame = self.qt["QFrame"]
+
+                root = QWidget()
+                root.setObjectName("app_root")
+                root_layout = QVBoxLayout(root)
+                root_layout.setContentsMargins(24, 20, 24, 20)
+                root_layout.setSpacing(16)
+
+                header_card = QFrame()
+                header_card.setObjectName("header_card")
+                header_layout = QVBoxLayout(header_card)
+                header_layout.setContentsMargins(24, 20, 24, 18)
+                header_layout.setSpacing(12)
+
+                title = QLabel("Codebeamer Upload Studio")
+                title.setObjectName("app_title")
+                subtitle = QLabel("현대케피코용 업로드 작업을 단계별로 확인하고 실행하는 도구")
+                subtitle.setObjectName("app_subtitle")
+                header_layout.addWidget(title)
+                header_layout.addWidget(subtitle)
+
+                steps_row = QHBoxLayout()
+                steps_row.setSpacing(10)
+                self.step_labels = []
+                for step_name in ("설정", "프로젝트", "파일", "매핑", "검증", "업로드", "결과"):
+                    label = QLabel(step_name)
+                    label.setObjectName("step_badge")
+                    steps_row.addWidget(label)
+                    self.step_labels.append(label)
+                steps_row.addStretch(1)
+                header_layout.addLayout(steps_row)
+
+                self.page_title_label = QLabel("")
+                self.page_title_label.setObjectName("page_title")
+                self.page_subtitle_label = QLabel("")
+                self.page_subtitle_label.setObjectName("app_subtitle")
+                header_layout.addWidget(self.page_title_label)
+                header_layout.addWidget(self.page_subtitle_label)
+
+                self.stack_card = QFrame()
+                self.stack_card.setObjectName("page_card")
+                stack_layout = QVBoxLayout(self.stack_card)
+                stack_layout.setContentsMargins(18, 18, 18, 18)
+                stack_layout.setSpacing(0)
+                self.stack = self.qt["QStackedWidget"]()
+                stack_layout.addWidget(self.stack)
+
+                root_layout.addWidget(header_card)
+                root_layout.addWidget(self.stack_card, 1)
+                self.setCentralWidget(root)
 
             def _build_pages(self) -> None:
                 self.settings_page = create_settings_page(
@@ -154,8 +220,28 @@ class MainWindow:
                 ):
                     self.stack.addWidget(page)
 
-                self.stack.setCurrentWidget(self.settings_page)
+                self.page_meta = {
+                    self.settings_page: ("설정", "연결 정보와 기본 실행 옵션을 입력합니다.", 0),
+                    self.project_page: ("프로젝트 선택", "업로드 대상 프로젝트와 트래커를 선택합니다.", 1),
+                    self.file_page: ("파일 선택", "Excel 파일과 시트, 헤더 정보를 확인합니다.", 2),
+                    self.mapping_page: ("컬럼 매핑", "업로드할 컬럼만 선택하고 Codebeamer 필드와 연결합니다.", 3),
+                    self.validation_page: ("검증", "문제가 있는 항목만 먼저 확인하고 수정 여부를 판단합니다.", 4),
+                    self.upload_page: ("업로드", "진행 상황을 확인하면서 업로드를 제어합니다.", 5),
+                    self.result_page: ("결과", "성공, 실패, 미해결 항목을 정리해서 확인합니다.", 6),
+                }
+                self._show_page(self.settings_page)
                 self.statusBar().showMessage("GUI 스켈레톤이 준비되었습니다.")
+
+            def _show_page(self, page) -> None:
+                self.stack.setCurrentWidget(page)
+                title, subtitle, active_index = self.page_meta.get(page, ("", "", -1))
+                self.page_title_label.setText(title)
+                self.page_subtitle_label.setText(subtitle)
+                for index, label in enumerate(self.step_labels):
+                    label.setProperty("active", index == active_index)
+                    label.setProperty("complete", active_index >= 0 and index < active_index)
+                    label.style().unpolish(label)
+                    label.style().polish(label)
 
             def _attach_navigation(
                 self,
@@ -167,14 +253,14 @@ class MainWindow:
             ) -> None:
                 def _go_previous():
                     if previous_page is not None:
-                        self.stack.setCurrentWidget(previous_page)
+                        self._show_page(previous_page)
 
                 def _go_next():
                     if next_handler is not None:
                         next_handler()
                         return
                     if next_page is not None:
-                        self.stack.setCurrentWidget(next_page)
+                        self._show_page(next_page)
 
                 def _restart():
                     if restart_handler is not None:
@@ -219,10 +305,10 @@ class MainWindow:
                 return preview
 
             def _show_mapping_page(self) -> None:
-                self.stack.setCurrentWidget(self.mapping_page)
+                self._show_page(self.mapping_page)
 
             def _enter_validation_page(self) -> None:
-                self.stack.setCurrentWidget(self.validation_page)
+                self._show_page(self.validation_page)
 
             def _enter_upload_page(self) -> None:
                 self.upload_page.reset(
@@ -230,19 +316,19 @@ class MainWindow:
                     if self.session_state.mapping_context is not None
                     else 0
                 )
-                self.stack.setCurrentWidget(self.upload_page)
+                self._show_page(self.upload_page)
 
             def _enter_result_page(self) -> None:
                 if self.session_state.upload_result is not None:
                     self.result_page.set_results(self.session_state.upload_result)
-                self.stack.setCurrentWidget(self.result_page)
+                self._show_page(self.result_page)
 
             def _restart_upload_flow(self) -> None:
                 self.session_state.validation_context = None
                 self.session_state.upload_result = None
                 self.upload_success_count = 0
                 self.upload_failed_count = 0
-                self.stack.setCurrentWidget(self.project_page)
+                self._show_page(self.project_page)
 
             def _on_prepare_mapping_context(self) -> None:
                 settings = self.session_state.settings
@@ -258,7 +344,7 @@ class MainWindow:
                     mapping_context.schema_df,
                     mapping_context.selected_mapping,
                 )
-                self.stack.setCurrentWidget(self.mapping_page)
+                self._show_page(self.mapping_page)
 
             def _validate_mapping(self, selected_mapping: dict[str, str]) -> None:
                 if self.session_state.mapping_context is None:
