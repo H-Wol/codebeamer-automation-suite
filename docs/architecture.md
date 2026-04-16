@@ -19,6 +19,7 @@
 
 - `cli_main.py`: 현재 권장 인터랙티브 CLI
 - `main.py`: 과거 엔트리 포인트, 현재 비권장
+- `gui_main.py`: PySide6 기반 GUI 엔트리 포인트
 
 ### 입력 reader
 
@@ -114,6 +115,26 @@
 - 프로젝트 단위 user lookup cache 유지
 - parent-first 순서로 업로드 수행
 - 실행 산출물 저장
+- GUI upload worker가 재사용할 progress/pause/cancel hook 제공
+
+### GUI 계층
+
+`src/gui/`
+
+주요 책임:
+- 단계형 화면 전환과 상태 유지
+- 설정 저장 및 암호화된 비밀번호 저장
+- 연결 테스트와 프로젝트/트래커 조회
+- Excel 시트/헤더/미리보기 표시
+- 매핑/검증/업로드/결과 화면 구성
+- upload worker를 통한 백그라운드 실행과 진행률 갱신
+
+주요 모듈:
+- `src/gui/main_window.py`
+- `src/gui/pages.py`
+- `src/gui/services.py`
+- `src/gui/settings_store.py`
+- `src/gui/worker.py`
 
 ### API 접근
 

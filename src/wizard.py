@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -1104,7 +1105,15 @@ class CodebeamerUploadWizard:
 
         return payload_row["payload_json"]
 
-    def upload(self, dry_run: bool = False, continue_on_error: bool = True) -> dict:
+    def upload(
+        self,
+        dry_run: bool = False,
+        continue_on_error: bool = True,
+        *,
+        event_callback=None,
+        cancel_requested=None,
+        pause_requested=None,
+    ) -> dict:
         """부모-자식 순서를 지키며 업로드를 실행하고 결과를 모아 돌려준다."""
         if self.state.tracker_id is None:
             raise ValueError("tracker_id is not set.")
@@ -1134,6 +1143,11 @@ class CodebeamerUploadWizard:
                 if row_id not in pending:
                     continue
 
+                while pause_requested is not None and pause_requested():
+                    time.sleep(0.1)
+                if cancel_requested is not None and cancel_requested():
+                    break
+
                 parent_row_id = row["parent_row_id"]
                 if parent_row_id is None or pd.isna(parent_row_id):
                     parent_item_id = None
@@ -1145,6 +1159,12 @@ class CodebeamerUploadWizard:
 
                 try:
                     payload = row["payload_json"]
+                    if event_callback is not None:
+                        event_callback({
+                            "type": "row_started",
+                            "row_id": row_id,
+                            "upload_name": row["upload_name"],
+                        })
 
                     if dry_run:
                         result = {"id": f"DRYRUN-{row_id}"}
@@ -1166,7 +1186,16 @@ class CodebeamerUploadWizard:
                         "created_item_id": result["id"],
                         "status": UploadStatus.SUCCESS.value,
                     })
-                    print(f"Row {row['upload_name']} uploaded successfully: item_id={result['id']}")
+                    message = f"Row {row['upload_name']} uploaded successfully: item_id={result['id']}"
+                    print(message)
+                    if event_callback is not None:
+                        event_callback({
+                            "type": "row_success",
+                            "row_id": row_id,
+                            "upload_name": row["upload_name"],
+                            "item_id": result["id"],
+                            "message": message,
+                        })
 
                 except Exception as exc:
                     error_status_code = self._http_status_code(exc)
@@ -1186,6 +1215,15 @@ class CodebeamerUploadWizard:
                         "error": error_message,
                         "status": UploadStatus.FAILED.value,
                     })
+                    if event_callback is not None:
+                        event_callback({
+                            "type": "row_failed",
+                            "row_id": row_id,
+                            "upload_name": row["upload_name"],
+                            "message": error_message,
+                            "status_code": error_status_code,
+                            "response_json": error_response_json,
+                        })
 
                     if not continue_on_error:
                         self.state.upload_result = {
@@ -1200,6 +1238,8 @@ class CodebeamerUploadWizard:
                     progress = True
 
             if not progress:
+                break
+            if cancel_requested is not None and cancel_requested():
                 break
 
         unresolved_df = ready_df[ready_df["_row_id"].isin(sorted(pending))].copy()

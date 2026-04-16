@@ -21,6 +21,10 @@ GUI 1차 스켈레톤 엔트리 포인트는 `gui_main.py` 입니다.
 - row별 payload cache 생성과 preview/upload 재사용
 - parent-first 순서 보장 업로드
 - 실행 결과와 중간 산출물 저장
+- PySide6 기반 GUI 스켈레톤
+- GUI 설정 저장 및 암호화된 비밀번호 저장
+- GUI에서 연결 테스트, 프로젝트/트래커 조회, Excel 시트/미리보기 조회
+- GUI에서 컬럼 매핑, 검증, 업로드, 결과 화면의 1차 연결
 
 ## 권장 실행 명령
 
@@ -34,6 +38,43 @@ GUI 스켈레톤 실행:
 py -3 gui_main.py
 ```
 
+## GUI 구현 현황
+
+현재 `feature/upload-gui` 브랜치 기준 GUI에서 실제로 연결된 범위는 다음과 같습니다.
+
+- 설정 화면
+  - 설정 불러오기/저장
+  - 비밀번호 저장 체크박스
+  - `cryptography` 기반 비밀번호 암호화 저장
+  - 연결 테스트
+  - 프로젝트/트래커 조회
+- 파일 선택 화면
+  - Excel 파일 선택
+  - 시트 목록 조회
+  - 헤더/미리보기 조회
+  - Summary 컬럼 자동 제안
+- 컬럼 매핑 화면
+  - 업로드 대상 컬럼 표시
+  - `id`, `parent` 제외
+  - 체크박스/콤보박스 기반 1차 매핑
+  - 검증 실행 연결
+- 검증 화면
+  - `comparison_df`, `option_check_df`, `payload_df` 실패 정보 표시
+- 업로드 화면
+  - worker 기반 실행
+  - progress 갱신
+  - pause / resume / cancel 플래그 처리
+  - 로그 및 실패 응답 JSON 표시
+- 결과 화면
+  - 성공 / 실패 / 미해결 결과 테이블 표시
+
+아직 남아 있는 항목:
+
+- 컬럼 매핑 UX 개선
+- 결과 화면 상세 상호작용 개선
+- 실제 GUI 수동 테스트와 예외 케이스 보강
+- `PyInstaller` 배포 스크립트 정리
+
 ## 프로젝트 구조
 
 - `cli_main.py`: 현재 권장 대화형 CLI
@@ -45,7 +86,7 @@ py -3 gui_main.py
 - `src/mapping_service.py`: schema flattening, 컬럼 비교, option/reference 처리
 - `src/wizard.py`: 업로드 오케스트레이션, preview, 업로드, 상태 저장
 - `src/models/`: reference, field value, tracker item, user info, wizard state 모델
-- `src/gui/`: PySide6 기반 단계형 GUI 스켈레톤과 설정 저장 계층
+- `src/gui/`: PySide6 기반 단계형 GUI, 서비스 계층, upload worker
 - `docs/`: 사용 가이드와 아키텍처 문서
 - `output/`: 실행 결과 산출물 저장 디렉터리
 
