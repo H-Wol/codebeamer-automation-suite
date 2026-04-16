@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable
 from typing import Any
 
 import pandas as pd
-from openpyxl import load_workbook
 
 from src.codebeamer_client import CodebeamerClient
 from src.excel_reader import ExcelReader
@@ -65,8 +62,9 @@ class GuiCodebeamerService:
 class GuiExcelService:
     """GUI 파일 선택 화면에서 사용하는 Excel 메타데이터와 미리보기를 제공한다."""
 
-    def __init__(self, logger=None) -> None:
+    def __init__(self, logger=None, *, reader_cls=ExcelReader) -> None:
         self.logger = logger
+        self.reader_cls = reader_cls
 
     @staticmethod
     def _normalize_headers(values: list[Any]) -> list[str]:
@@ -96,92 +94,42 @@ class GuiExcelService:
         header_row: int = 1,
         max_preview_rows: int = 10,
     ) -> PreviewData:
-        path = Path(file_path)
-        if not path.exists():
-            raise FileNotFoundError(f"Excel 파일을 찾을 수 없습니다: {file_path}")
         if header_row < 1:
             raise ValueError("header_row 는 1 이상이어야 합니다.")
 
-        workbook = load_workbook(path, read_only=True, data_only=True)
-        try:
-            sheet_names = workbook.sheetnames
-            if not sheet_names:
-                raise ValueError("시트가 없는 Excel 파일입니다.")
+        header_reader = self.reader_cls(header_row=header_row, summary_col="Summary", logger=self.logger)
+        sheet_names = header_reader.list_sheet_names(file_path)
+        if not sheet_names:
+            raise ValueError("시트가 없는 Excel 파일입니다.")
 
-            target_sheet_name = sheet_name or sheet_names[0]
-            if target_sheet_name not in sheet_names:
-                target_sheet_name = sheet_names[0]
+        target_sheet_name = sheet_name or sheet_names[0]
+        if target_sheet_name not in sheet_names:
+            target_sheet_name = sheet_names[0]
 
-            sheet = workbook[target_sheet_name]
-            rows_iter = sheet.iter_rows(values_only=True)
-            rows = list(rows_iter)
-            if len(rows) < header_row:
-                headers: list[str] = []
-                preview_rows: list[list[str]] = []
-            else:
-                headers = self._normalize_headers(list(rows[header_row - 1]))
-                preview_rows = []
-                for raw_row in rows[header_row:header_row + max_preview_rows]:
-                    normalized = list(raw_row)
-                    if len(normalized) < len(headers):
-                        normalized += [None] * (len(headers) - len(normalized))
-                    preview_rows.append(
-                        ["" if value is None else str(value) for value in normalized[:len(headers)]]
-                    )
-            return PreviewData(
-                sheet_names=sheet_names,
-                headers=headers,
-                rows=preview_rows,
-                suggested_summary=self._suggest_summary(headers),
-            )
-        finally:
-            workbook.close()
+        headers = header_reader.read_headers(file_path, target_sheet_name)
+        suggested_summary = self._suggest_summary(headers)
+        data_reader = self.reader_cls(
+            header_row=header_row,
+            summary_col=suggested_summary,
+            logger=self.logger,
+        )
+        raw_df = data_reader.read_excel(file_path=file_path, sheet_name=target_sheet_name)
 
-    def read_raw_dataframe(
-        self,
-        file_path: str,
-        *,
-        sheet_name: str | None = None,
-        header_row: int = 1,
-        summary_col: str = "Summary",
-    ) -> pd.DataFrame:
-        path = Path(file_path)
-        if not path.exists():
-            raise FileNotFoundError(f"Excel 파일을 찾을 수 없습니다: {file_path}")
-        workbook = load_workbook(path, read_only=False, data_only=True)
-        try:
-            target_sheet_name = sheet_name or workbook.sheetnames[0]
-            if target_sheet_name not in workbook.sheetnames:
-                target_sheet_name = workbook.sheetnames[0]
+        preview_headers = [header for header in headers if not str(header).startswith("_")]
+        preview_rows: list[list[str]] = []
+        if not raw_df.empty:
+            visible_df = raw_df[preview_headers].head(max_preview_rows)
+            for _, row in visible_df.iterrows():
+                preview_rows.append(
+                    ["" if value is None else str(value) for value in row.tolist()]
+                )
 
-            sheet = workbook[target_sheet_name]
-            rows = list(sheet.iter_rows())
-            if len(rows) < header_row:
-                return pd.DataFrame()
-
-            headers = self._normalize_headers([cell.value for cell in rows[header_row - 1]])
-            if summary_col not in headers:
-                raise ValueError(f"'{summary_col}' 컬럼을 찾을 수 없습니다.")
-
-            summary_index = headers.index(summary_col)
-            records: list[dict[str, Any]] = []
-            for row in rows[header_row:]:
-                values = [cell.value for cell in row[:len(headers)]]
-                if all(value is None or str(value).strip() == "" for value in values):
-                    continue
-                indent = 0
-                if summary_index < len(row):
-                    try:
-                        indent = int(row[summary_index].alignment.indent or 0)
-                    except Exception:
-                        indent = 0
-                record = {header: values[index] if index < len(values) else None for index, header in enumerate(headers)}
-                record["_excel_row"] = row[0].row if row else None
-                record["_summary_indent"] = indent
-                records.append(record)
-            return pd.DataFrame(records)
-        finally:
-            workbook.close()
+        return PreviewData(
+            sheet_names=sheet_names,
+            headers=preview_headers,
+            rows=preview_rows,
+            suggested_summary=suggested_summary,
+        )
 
 
 BLOCKING_OPTION_STATUSES = {
@@ -214,6 +162,7 @@ GUI_EXCLUDED_MAPPING_COLUMNS = {
     "_end_excel_row",
     "_excel_row",
 }
+GUI_EXCLUDED_TARGET_FIELDS = {"id", "parent"}
 
 
 @dataclass
@@ -230,16 +179,26 @@ class ValidationContext:
     comparison_df: pd.DataFrame
     option_check_df: pd.DataFrame
     converted_upload_df: pd.DataFrame
+    issue_df: pd.DataFrame
     has_blocking_issues: bool
 
 
 class GuiUploadPipelineService:
     """GUI 단계가 재사용할 업로드 파이프라인 래퍼다."""
 
-    def __init__(self, logger=None, *, client_factory=CodebeamerClient) -> None:
+    def __init__(
+        self,
+        logger=None,
+        *,
+        client_factory=CodebeamerClient,
+        excel_service: GuiExcelService | None = None,
+        reader_cls=ExcelReader,
+    ) -> None:
         self.logger = logger
         self.mapper = MappingService(logger=logger)
         self.client_factory = client_factory
+        self.excel_service = excel_service or GuiExcelService(logger=logger)
+        self.reader_cls = reader_cls
 
     def create_wizard(self, settings) -> CodebeamerUploadWizard:
         client = self.client_factory(
@@ -250,7 +209,7 @@ class GuiUploadPipelineService:
             rate_limit_retry_delay_seconds=settings.rate_limit_retry_delay_seconds,
             rate_limit_max_retries=settings.rate_limit_max_retries,
         )
-        reader = ExcelReader(
+        reader = self.reader_cls(
             header_row=settings.excel_header_row,
             summary_col=settings.summary_column,
             logger=self.logger,
@@ -267,6 +226,14 @@ class GuiUploadPipelineService:
             reader=reader,
             logger=self.logger,
         )
+
+    @staticmethod
+    def _is_gui_excluded_schema_field(row: pd.Series | dict[str, Any]) -> bool:
+        field_name = str((row.get("field_name") if isinstance(row, dict) else row.get("field_name")) or "").strip().lower()
+        tracker_item_field = str(
+            (row.get("tracker_item_field") if isinstance(row, dict) else row.get("tracker_item_field")) or ""
+        ).strip().lower()
+        return field_name in GUI_EXCLUDED_TARGET_FIELDS or tracker_item_field in GUI_EXCLUDED_TARGET_FIELDS
 
     @staticmethod
     def _auto_match_columns(
@@ -322,30 +289,36 @@ class GuiUploadPipelineService:
 
         schema = wizard.client.get_tracker_schema(wizard.state.tracker_id)
         schema_df = self.mapper.flatten_schema_fields(schema)
+        mappable_schema_df = schema_df[
+            ~schema_df.apply(self._is_gui_excluded_schema_field, axis=1)
+        ].reset_index(drop=True)
 
-        preview = GuiExcelService(logger=self.logger).load_preview(
+        preview = self.excel_service.load_preview(
             file_state["file_path"],
             sheet_name=file_state["sheet_name"],
             header_row=int(file_state["header_row"]),
         )
         headers = preview.headers
         table_field_names = set(
-            schema_df[
-                schema_df.get("is_table_field", False).fillna(False)
+            mappable_schema_df[
+                mappable_schema_df.get("is_table_field", False).fillna(False)
             ]["field_name"].dropna().astype(str).tolist()
         )
         raw_mapping = self._auto_match_columns(
             headers,
-            set(schema_df["field_name"].dropna().astype(str).str.strip()),
+            set(mappable_schema_df["field_name"].dropna().astype(str).str.strip()),
             table_field_names=table_field_names,
         )
-        list_cols = self.mapper.get_list_columns_for_mapping(raw_mapping, schema_df)
+        list_cols = self.mapper.get_list_columns_for_mapping(raw_mapping, mappable_schema_df)
 
-        raw_df = GuiExcelService(logger=self.logger).read_raw_dataframe(
+        reader = wizard.reader
+        if reader is None:
+            raise ValueError("wizard.reader 가 준비되지 않았습니다.")
+        reader.header_row = int(file_state["header_row"])
+        reader.summary_col = str(file_state["summary_column"])
+        raw_df = reader.read_excel(
             file_path=file_state["file_path"],
             sheet_name=file_state["sheet_name"],
-            header_row=int(file_state["header_row"]),
-            summary_col=str(file_state["summary_column"]),
         )
         wizard.load_raw_dataframe(raw_df, list_cols=list_cols)
         wizard.state.schema = schema
@@ -361,7 +334,7 @@ class GuiUploadPipelineService:
 
         return MappingContext(
             wizard=wizard,
-            schema_df=schema_df,
+            schema_df=mappable_schema_df,
             upload_columns=upload_columns,
             selected_mapping=selected_mapping,
             list_cols=list_cols,
@@ -392,9 +365,101 @@ class GuiUploadPipelineService:
         if not payload_df.empty and (payload_df["payload_status"] != "ready").any():
             has_blocking = True
 
+        issue_df = self._build_user_issue_df(comparison_df, option_check_df, payload_df)
+        if not issue_df.empty and issue_df["severity"].eq("오류").any():
+            has_blocking = True
+
         return ValidationContext(
             comparison_df=comparison_df,
             option_check_df=option_check_df,
             converted_upload_df=wizard.state.converted_upload_df,
+            issue_df=issue_df,
             has_blocking_issues=has_blocking,
         )
+
+    @staticmethod
+    def _message_from_option_status(row: pd.Series) -> tuple[str, str]:
+        status = str(row.get("status") or "")
+        field_name = str(row.get("schema_field") or "")
+        df_column = str(row.get("df_column") or "")
+        value = row.get("raw_value")
+
+        if status == OptionCheckStatus.FIELD_UNSUPPORTED.value:
+            return "오류", f"현재 GUI에서 지원하지 않는 필드입니다. 필드: {field_name}"
+        if status == OptionCheckStatus.LOOKUP_REQUIRED.value:
+            return "오류", f"추가 조회 로직이 필요한 필드입니다. 필드: {field_name}"
+        if status == OptionCheckStatus.OPTION_NOT_FOUND.value:
+            return "오류", f"선택값을 찾을 수 없습니다. 컬럼: {df_column}"
+        if status == OptionCheckStatus.DIRECT_PARSE_FAILED.value:
+            return "오류", f"아이디 형식으로 해석할 수 없습니다. 컬럼: {df_column}"
+        if status.endswith(("USER_LOOKUP_FAILED", "USER_LOOKUP_AMBIGUOUS", "USER_NOT_FOUND")):
+            return "오류", f"사용자를 찾지 못했습니다. 컬럼: {df_column}"
+        if status.endswith(("MEMBER_LOOKUP_FAILED", "MEMBER_LOOKUP_AMBIGUOUS", "MEMBER_NOT_FOUND")):
+            return "오류", f"담당자/역할/그룹을 찾지 못했습니다. 컬럼: {df_column}"
+        if status == OptionCheckStatus.PRECONSTRUCTION_REQUIRED.value:
+            return "안내", f"업로드 전에 내부 변환이 필요한 필드입니다. 필드: {field_name}"
+        return "안내", str(row.get("error") or row.get("detail") or status or value or "")
+
+    @classmethod
+    def _build_user_issue_df(
+        cls,
+        comparison_df: pd.DataFrame,
+        option_check_df: pd.DataFrame,
+        payload_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        issues: list[dict[str, str]] = []
+
+        if comparison_df is not None and not comparison_df.empty:
+            for _, row in comparison_df.iterrows():
+                status = str(row.get("status") or "")
+                if status in {"ok", "matched", ""}:
+                    continue
+                if status == "unmapped":
+                    issues.append({
+                        "severity": "오류",
+                        "category": "매핑",
+                        "column": str(row.get("df_column") or ""),
+                        "field": "",
+                        "message": "Codebeamer 필드에 연결되지 않은 컬럼입니다.",
+                    })
+                elif status == "schema_field_missing":
+                    issues.append({
+                        "severity": "오류",
+                        "category": "매핑",
+                        "column": str(row.get("df_column") or ""),
+                        "field": str(row.get("selected_schema_field") or ""),
+                        "message": "선택한 필드를 현재 트래커 스키마에서 찾을 수 없습니다.",
+                    })
+
+        if option_check_df is not None and not option_check_df.empty:
+            for _, row in option_check_df.iterrows():
+                severity, message = cls._message_from_option_status(row)
+                if not message:
+                    continue
+                issues.append({
+                    "severity": severity,
+                    "category": "값 검증",
+                    "column": str(row.get("df_column") or ""),
+                    "field": str(row.get("schema_field") or ""),
+                    "message": message,
+                })
+
+        if payload_df is not None and not payload_df.empty:
+            failed_df = payload_df[payload_df["payload_status"] != "ready"]
+            for _, row in failed_df.iterrows():
+                issues.append({
+                    "severity": "오류",
+                    "category": "Payload 생성",
+                    "column": "",
+                    "field": str(row.get("upload_name") or ""),
+                    "message": str(row.get("payload_error") or "Payload를 만들지 못했습니다."),
+                })
+
+        issue_df = pd.DataFrame(issues)
+        if issue_df.empty:
+            return issue_df
+        issue_df = issue_df.drop_duplicates().reset_index(drop=True)
+        severity_order = {"오류": 0, "안내": 1}
+        issue_df["_sort"] = issue_df["severity"].map(severity_order).fillna(99)
+        issue_df = issue_df.sort_values(by=["_sort", "category", "column", "field"]).drop(columns=["_sort"])
+        return issue_df

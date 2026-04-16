@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .pages import create_file_selection_page
 from .pages import create_mapping_page
+from .pages import create_project_selection_page
 from .pages import create_settings_page
 from .pages import create_validation_page
 from .pages import create_upload_page
@@ -85,6 +86,10 @@ class MainWindow:
                     self.settings_store,
                     self.session_state.settings,
                     self._on_settings_changed,
+                )
+                self.project_page = create_project_selection_page(
+                    self.session_state.settings,
+                    self._on_settings_changed,
                     self._test_connection,
                     self._load_trackers,
                 )
@@ -103,10 +108,15 @@ class MainWindow:
                 )
                 self.result_page = create_result_page()
 
-                self._attach_navigation(self.settings_page, next_page=self.file_page)
+                self._attach_navigation(self.settings_page, next_page=self.project_page)
+                self._attach_navigation(
+                    self.project_page,
+                    previous_page=self.settings_page,
+                    next_page=self.file_page,
+                )
                 self._attach_navigation(
                     self.file_page,
-                    previous_page=self.settings_page,
+                    previous_page=self.project_page,
                     next_handler=self._on_prepare_mapping_context,
                 )
                 self._attach_navigation(
@@ -135,6 +145,7 @@ class MainWindow:
 
                 for page in (
                     self.settings_page,
+                    self.project_page,
                     self.file_page,
                     self.mapping_page,
                     self.validation_page,
@@ -173,9 +184,12 @@ class MainWindow:
                 page.request_next = _go_next
                 page.request_restart = _restart
 
-            def _on_settings_changed(self, settings: GuiSettings) -> None:
+            def _on_settings_changed(self, settings: GuiSettings | None) -> GuiSettings:
+                if settings is None:
+                    return self.session_state.settings
                 self.session_state.settings = settings
                 self.statusBar().showMessage("설정 상태를 갱신했습니다.")
+                return settings
 
             def _on_file_state_changed(self, file_state: dict[str, object]) -> None:
                 self.session_state.file_state = file_state
@@ -228,7 +242,7 @@ class MainWindow:
                 self.session_state.upload_result = None
                 self.upload_success_count = 0
                 self.upload_failed_count = 0
-                self.stack.setCurrentWidget(self.file_page)
+                self.stack.setCurrentWidget(self.project_page)
 
             def _on_prepare_mapping_context(self) -> None:
                 settings = self.session_state.settings
@@ -256,9 +270,7 @@ class MainWindow:
                 self.session_state.validation_context = validation_context
                 payload_df = self.session_state.mapping_context.wizard.state.payload_df
                 self.validation_page.set_results(
-                    validation_context.comparison_df,
-                    validation_context.option_check_df,
-                    payload_df,
+                    validation_context.issue_df,
                     validation_context.has_blocking_issues,
                 )
 

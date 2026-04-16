@@ -9,6 +9,7 @@ def _require_qt():
         from PySide6.QtWidgets import QFileDialog
         from PySide6.QtWidgets import QFormLayout
         from PySide6.QtWidgets import QHBoxLayout
+        from PySide6.QtWidgets import QHeaderView
         from PySide6.QtWidgets import QLabel
         from PySide6.QtWidgets import QLineEdit
         from PySide6.QtWidgets import QPlainTextEdit
@@ -31,6 +32,7 @@ def _require_qt():
         "QFileDialog": QFileDialog,
         "QFormLayout": QFormLayout,
         "QHBoxLayout": QHBoxLayout,
+        "QHeaderView": QHeaderView,
         "QLabel": QLabel,
         "QLineEdit": QLineEdit,
         "QPlainTextEdit": QPlainTextEdit,
@@ -45,12 +47,28 @@ def _require_qt():
     }
 
 
+def _configure_table_columns(table, minimum_widths: list[int]) -> None:
+    qt = _require_qt()
+    QHeaderView = qt["QHeaderView"]
+    header = table.horizontalHeader()
+    header.setStretchLastSection(False)
+    header.setMinimumSectionSize(80)
+    for column_index in range(table.columnCount()):
+        header.setSectionResizeMode(column_index, QHeaderView.ResizeToContents)
+    table.resizeColumnsToContents()
+    for column_index, minimum_width in enumerate(minimum_widths):
+        if column_index >= table.columnCount():
+            break
+        if table.columnWidth(column_index) < minimum_width:
+            table.setColumnWidth(column_index, minimum_width)
+    if table.columnCount() > 0:
+        header.setSectionResizeMode(table.columnCount() - 1, QHeaderView.Stretch)
+
+
 def create_settings_page(
     settings_store,
     initial_settings,
     on_settings_changed,
-    on_connection_test,
-    on_project_selected,
 ):
     qt = _require_qt()
     QWidget = qt["QWidget"]
@@ -60,16 +78,12 @@ def create_settings_page(
     QLabel = qt["QLabel"]
     QLineEdit = qt["QLineEdit"]
     QCheckBox = qt["QCheckBox"]
-    QComboBox = qt["QComboBox"]
     QSpinBox = qt["QSpinBox"]
     QDoubleSpinBox = qt["QDoubleSpinBox"]
     QPushButton = qt["QPushButton"]
 
     page = QWidget()
     page.setObjectName("settings_page")
-    page.selected_project_id = initial_settings.default_project_id
-    page.selected_tracker_id = initial_settings.default_tracker_id
-
     layout = QVBoxLayout(page)
     title = QLabel("설정")
     title.setStyleSheet("font-size: 20px; font-weight: 600;")
@@ -82,10 +96,6 @@ def create_settings_page(
     password.setEchoMode(QLineEdit.EchoMode.Password)
     save_password = QCheckBox("비밀번호 저장")
     save_password.setChecked(initial_settings.save_password)
-    project_combo = QComboBox()
-    project_combo.setEnabled(False)
-    tracker_combo = QComboBox()
-    tracker_combo.setEnabled(False)
     header_row = QSpinBox()
     header_row.setMinimum(1)
     header_row.setValue(initial_settings.excel_header_row)
@@ -106,8 +116,6 @@ def create_settings_page(
     form.addRow("Username", username)
     form.addRow("Password", password)
     form.addRow("", save_password)
-    form.addRow("Project", project_combo)
-    form.addRow("Tracker", tracker_combo)
     form.addRow("Header Row", header_row)
     form.addRow("Summary Column", summary_column)
     form.addRow("Sheet Name", sheet_name)
@@ -135,8 +143,8 @@ def create_settings_page(
             username=username.text().strip(),
             password=password.text(),
             save_password=save_password.isChecked(),
-            default_project_id=str(project_combo.currentData() or page.selected_project_id or "").strip(),
-            default_tracker_id=str(tracker_combo.currentData() or page.selected_tracker_id or "").strip(),
+            default_project_id=initial_settings.default_project_id,
+            default_tracker_id=initial_settings.default_tracker_id,
             excel_header_row=header_row.value(),
             summary_column=summary_column.text().strip() or "Summary",
             excel_sheet_name=sheet_name.text().strip() or "0",
@@ -152,8 +160,6 @@ def create_settings_page(
         username.setText(loaded.username)
         password.setText(loaded.password)
         save_password.setChecked(loaded.save_password)
-        page.selected_project_id = loaded.default_project_id
-        page.selected_tracker_id = loaded.default_tracker_id
         header_row.setValue(loaded.excel_header_row)
         summary_column.setText(loaded.summary_column)
         sheet_name.setText(loaded.excel_sheet_name)
@@ -169,6 +175,70 @@ def create_settings_page(
         on_settings_changed(current)
         status_label.setText("설정을 저장했습니다.")
 
+    def _go_next():
+        current = _collect_settings()
+        if not current.base_url or not current.username or not current.password:
+            status_label.setText("Base URL, Username, Password 는 필수입니다.")
+            return
+        on_settings_changed(current)
+        page.request_next()
+
+    load_button.clicked.connect(_load)
+    save_button.clicked.connect(_save)
+    next_button.clicked.connect(_go_next)
+
+    return page
+
+
+def create_project_selection_page(
+    initial_settings,
+    on_settings_changed,
+    on_connection_test,
+    on_project_selected,
+):
+    qt = _require_qt()
+    QWidget = qt["QWidget"]
+    QVBoxLayout = qt["QVBoxLayout"]
+    QFormLayout = qt["QFormLayout"]
+    QHBoxLayout = qt["QHBoxLayout"]
+    QLabel = qt["QLabel"]
+    QComboBox = qt["QComboBox"]
+    QPushButton = qt["QPushButton"]
+
+    page = QWidget()
+    page.selected_project_id = initial_settings.default_project_id
+    page.selected_tracker_id = initial_settings.default_tracker_id
+
+    layout = QVBoxLayout(page)
+    title = QLabel("프로젝트 선택")
+    title.setStyleSheet("font-size: 20px; font-weight: 600;")
+    layout.addWidget(title)
+
+    description = QLabel("업로드 대상 프로젝트와 트래커를 선택합니다.")
+    layout.addWidget(description)
+
+    form = QFormLayout()
+    project_combo = QComboBox()
+    project_combo.setEnabled(False)
+    tracker_combo = QComboBox()
+    tracker_combo.setEnabled(False)
+    form.addRow("프로젝트", project_combo)
+    form.addRow("트래커", tracker_combo)
+    layout.addLayout(form)
+
+    status_label = QLabel("연결 테스트를 실행하면 프로젝트 목록을 불러옵니다.")
+    layout.addWidget(status_label)
+
+    buttons = QHBoxLayout()
+    previous_button = QPushButton("이전")
+    refresh_button = QPushButton("프로젝트 불러오기")
+    next_button = QPushButton("다음")
+    buttons.addWidget(previous_button)
+    buttons.addWidget(refresh_button)
+    buttons.addStretch(1)
+    buttons.addWidget(next_button)
+    layout.addLayout(buttons)
+
     def _set_items(combo, items: list[dict], selected_id: str) -> None:
         combo.blockSignals(True)
         combo.clear()
@@ -181,22 +251,47 @@ def create_settings_page(
                 combo.setCurrentIndex(index)
         combo.blockSignals(False)
 
+    def _current_settings():
+        settings = on_settings_changed(None)
+        return settings
+
+    def _refresh_projects() -> None:
+        settings = _current_settings()
+        try:
+            projects = on_connection_test(settings)
+        except Exception as exc:
+            status_label.setText(f"프로젝트 조회 실패: {exc}")
+            project_combo.clear()
+            tracker_combo.clear()
+            project_combo.setEnabled(False)
+            tracker_combo.setEnabled(False)
+            return
+        _set_items(project_combo, projects, page.selected_project_id)
+        status_label.setText("프로젝트 목록을 불러왔습니다.")
+        if project_combo.count() > 0:
+            selected_index = project_combo.currentIndex()
+            if selected_index < 0:
+                selected_index = 0
+                project_combo.setCurrentIndex(0)
+            _handle_project_changed(selected_index)
+
     def _handle_project_changed(index: int) -> None:
         project_id = project_combo.itemData(index)
-        current = _collect_settings()
         if project_id in (None, ""):
             tracker_combo.clear()
             tracker_combo.setEnabled(False)
             return
         page.selected_project_id = str(project_id)
+        settings = _current_settings()
+        settings.default_project_id = page.selected_project_id
         try:
-            trackers = on_project_selected(current, int(project_id))
+            trackers = on_project_selected(settings, int(project_id))
         except Exception as exc:
             status_label.setText(f"트래커 조회 실패: {exc}")
             tracker_combo.clear()
             tracker_combo.setEnabled(False)
             return
-        _set_items(tracker_combo, trackers, current.default_tracker_id)
+        _set_items(tracker_combo, trackers, page.selected_tracker_id)
         if tracker_combo.currentData() not in (None, ""):
             page.selected_tracker_id = str(tracker_combo.currentData())
         status_label.setText(f"프로젝트 {project_combo.currentText()}의 트래커를 불러왔습니다.")
@@ -206,48 +301,21 @@ def create_settings_page(
         if tracker_id not in (None, ""):
             page.selected_tracker_id = str(tracker_id)
 
-    def _test_connection() -> None:
-        current = _collect_settings()
-        if not current.base_url or not current.username or not current.password:
-            status_label.setText("연결 테스트에는 Base URL, Username, Password 가 필요합니다.")
+    def _go_next() -> None:
+        if not page.selected_project_id or not page.selected_tracker_id:
+            status_label.setText("프로젝트와 트래커를 모두 선택해야 합니다.")
             return
-        try:
-            projects = on_connection_test(current)
-        except Exception as exc:
-            status_label.setText(f"연결 실패: {exc}")
-            project_combo.clear()
-            tracker_combo.clear()
-            project_combo.setEnabled(False)
-            tracker_combo.setEnabled(False)
-            return
-        _set_items(project_combo, projects, current.default_project_id)
-        status_label.setText("연결에 성공했습니다. 프로젝트 목록을 불러왔습니다.")
-        if project_combo.count() > 0:
-            selected_index = project_combo.currentIndex()
-            if selected_index < 0:
-                selected_index = 0
-                project_combo.setCurrentIndex(0)
-            _handle_project_changed(selected_index)
-
-    def _go_next():
-        current = _collect_settings()
-        if not current.base_url or not current.username:
-            status_label.setText("Base URL 과 Username 은 필수입니다.")
-            return
-        on_settings_changed(current)
+        settings = _current_settings()
+        settings.default_project_id = page.selected_project_id
+        settings.default_tracker_id = page.selected_tracker_id
+        on_settings_changed(settings)
         page.request_next()
 
-    load_button.clicked.connect(_load)
-    save_button.clicked.connect(_save)
+    previous_button.clicked.connect(lambda: page.request_previous())
+    refresh_button.clicked.connect(_refresh_projects)
+    next_button.clicked.connect(_go_next)
     project_combo.currentIndexChanged.connect(_handle_project_changed)
     tracker_combo.currentIndexChanged.connect(_handle_tracker_changed)
-    next_button.clicked.connect(_go_next)
-    test_button = QPushButton("연결 테스트")
-    buttons.insertWidget(2, test_button)
-    test_button.clicked.connect(_test_connection)
-
-    page.set_projects = lambda items, selected_id="": _set_items(project_combo, items, selected_id)
-    page.set_trackers = lambda items, selected_id="": _set_items(tracker_combo, items, selected_id)
 
     return page
 
@@ -305,6 +373,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     preview_table.setItem(0, 1, QTableWidgetItem("담당자"))
     preview_table.setItem(1, 0, QTableWidgetItem("REQ-001"))
     preview_table.setItem(1, 1, QTableWidgetItem("홍길동"))
+    _configure_table_columns(preview_table, [180, 180, 160, 160])
     layout.addWidget(preview_table)
 
     status_label = QLabel("Excel 파일을 선택하면 시트 목록과 미리보기를 불러옵니다.")
@@ -334,6 +403,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         for row_index, row in enumerate(rows):
             for col_index, value in enumerate(row):
                 preview_table.setItem(row_index, col_index, QTableWidgetItem(value))
+        _configure_table_columns(preview_table, [180] * max(len(headers), 1))
         if suggested_summary:
             if summary_column.findText(suggested_summary) < 0:
                 summary_column.addItem(suggested_summary)
@@ -456,6 +526,7 @@ def create_mapping_page(on_validate_requested):
 
     table = QTableWidget(0, 6)
     table.setHorizontalHeaderLabels(["사용", "Excel 컬럼", "Codebeamer 필드", "타입", "다중값", "지원 여부"])
+    _configure_table_columns(table, [90, 240, 240, 180, 100, 100])
     layout.addWidget(table)
 
     status_label = QLabel("")
@@ -515,6 +586,7 @@ def create_mapping_page(on_validate_requested):
 
             combo.currentTextChanged.connect(_on_combo_changed)
             enabled_widget.toggled.connect(lambda _checked: next_button.setEnabled(False))
+        _configure_table_columns(table, [90, 240, 240, 180, 100, 100])
         info_label.setText(f"매핑 대상 컬럼 {len(upload_columns)}개. id, parent 는 제외됩니다.")
         status_label.setText("")
 
@@ -580,8 +652,9 @@ def create_validation_page():
     summary_label = QLabel("")
     layout.addWidget(summary_label)
 
-    table = QTableWidget(0, 5)
-    table.setHorizontalHeaderLabels(["구분", "컬럼", "필드", "상태", "메시지"])
+    table = QTableWidget(0, 4)
+    table.setHorizontalHeaderLabels(["구분", "컬럼", "필드", "안내"])
+    _configure_table_columns(table, [120, 220, 220, 420])
     layout.addWidget(table)
 
     status_label = QLabel("")
@@ -597,51 +670,32 @@ def create_validation_page():
 
     page.has_blocking_issues = True
 
-    def set_results(comparison_df, option_check_df, payload_df, has_blocking_issues: bool) -> None:
+    def set_results(issue_df, has_blocking_issues: bool) -> None:
         rows: list[list[str]] = []
-        if comparison_df is not None and not comparison_df.empty:
-            for _, row in comparison_df.iterrows():
+        if issue_df is not None and not issue_df.empty:
+            for _, row in issue_df.iterrows():
                 rows.append([
-                    "schema",
-                    str(row.get("df_column") or ""),
-                    str(row.get("selected_schema_field") or ""),
-                    str(row.get("status") or ""),
-                    str(row.get("unsupported_reason") or ""),
+                    str(row.get("category") or ""),
+                    str(row.get("column") or ""),
+                    str(row.get("field") or ""),
+                    str(row.get("message") or ""),
                 ])
-        if option_check_df is not None and not option_check_df.empty:
-            for _, row in option_check_df.iterrows():
-                rows.append([
-                    "option",
-                    str(row.get("df_column") or ""),
-                    str(row.get("schema_field") or ""),
-                    str(row.get("status") or ""),
-                    str(row.get("error") or row.get("detail") or ""),
-                ])
-        if payload_df is not None and not payload_df.empty:
-            failed_df = payload_df[payload_df["payload_status"] != "ready"]
-            for _, row in failed_df.iterrows():
-                rows.append([
-                    "payload",
-                    str(row.get("upload_name") or ""),
-                    "",
-                    str(row.get("payload_status") or ""),
-                    str(row.get("payload_error") or ""),
-                ])
-
         table.setRowCount(len(rows))
         for row_index, values in enumerate(rows):
             for col_index, value in enumerate(values):
                 table.setItem(row_index, col_index, QTableWidgetItem(value))
+        _configure_table_columns(table, [120, 220, 220, 420])
 
-        blocking_count = sum(1 for row in rows if row[3] not in {"matched", "PRECONSTRUCTION_REQUIRED", ""})
-        summary_label.setText(
-            f"검증 결과 {len(rows)}건, 차단 이슈 {'있음' if has_blocking_issues else '없음'}, 표시 행 {len(rows)}"
-        )
+        error_count = 0 if issue_df is None or issue_df.empty else int(issue_df["severity"].eq("오류").sum())
+        info_count = 0 if issue_df is None or issue_df.empty else int(issue_df["severity"].eq("안내").sum())
+        summary_label.setText(f"확인할 항목 {len(rows)}건, 오류 {error_count}건, 안내 {info_count}건")
         page.has_blocking_issues = has_blocking_issues
         if has_blocking_issues:
-            status_label.setText("차단 이슈가 있어 업로드 단계로 이동할 수 없습니다.")
+            status_label.setText("수정이 필요한 항목이 있어 업로드를 시작할 수 없습니다.")
+        elif not rows:
+            status_label.setText("문제가 있는 항목이 없습니다. 바로 업로드할 수 있습니다.")
         else:
-            status_label.setText("검증을 통과했습니다.")
+            status_label.setText("업로드 전 확인할 안내 항목만 남아 있습니다.")
 
     def _go_next():
         if page.has_blocking_issues:
