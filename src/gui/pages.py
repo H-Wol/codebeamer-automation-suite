@@ -7,6 +7,7 @@ def _require_qt():
         from PySide6.QtWidgets import QComboBox
         from PySide6.QtWidgets import QDoubleSpinBox
         from PySide6.QtWidgets import QFileDialog
+        from PySide6.QtWidgets import QFrame
         from PySide6.QtWidgets import QFormLayout
         from PySide6.QtWidgets import QHBoxLayout
         from PySide6.QtWidgets import QHeaderView
@@ -15,10 +16,12 @@ def _require_qt():
         from PySide6.QtWidgets import QPlainTextEdit
         from PySide6.QtWidgets import QProgressBar
         from PySide6.QtWidgets import QPushButton
+        from PySide6.QtWidgets import QSizePolicy
         from PySide6.QtWidgets import QSpinBox
         from PySide6.QtWidgets import QTabWidget
         from PySide6.QtWidgets import QTableWidget
         from PySide6.QtWidgets import QTableWidgetItem
+        from PySide6.QtWidgets import QToolButton
         from PySide6.QtWidgets import QVBoxLayout
         from PySide6.QtWidgets import QWidget
     except ImportError as exc:
@@ -30,6 +33,7 @@ def _require_qt():
         "QComboBox": QComboBox,
         "QDoubleSpinBox": QDoubleSpinBox,
         "QFileDialog": QFileDialog,
+        "QFrame": QFrame,
         "QFormLayout": QFormLayout,
         "QHBoxLayout": QHBoxLayout,
         "QHeaderView": QHeaderView,
@@ -38,10 +42,12 @@ def _require_qt():
         "QPlainTextEdit": QPlainTextEdit,
         "QProgressBar": QProgressBar,
         "QPushButton": QPushButton,
+        "QSizePolicy": QSizePolicy,
         "QSpinBox": QSpinBox,
         "QTabWidget": QTabWidget,
         "QTableWidget": QTableWidget,
         "QTableWidgetItem": QTableWidgetItem,
+        "QToolButton": QToolButton,
         "QVBoxLayout": QVBoxLayout,
         "QWidget": QWidget,
     }
@@ -65,6 +71,32 @@ def _configure_table_columns(table, minimum_widths: list[int]) -> None:
         header.setSectionResizeMode(table.columnCount() - 1, QHeaderView.Stretch)
 
 
+def _configure_form_layout(form) -> None:
+    qt = _require_qt()
+    Qt = qt["Qt"]
+    QFormLayout = qt["QFormLayout"]
+
+    form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+    form.setFormAlignment(
+        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+    )
+    form.setLabelAlignment(
+        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+    )
+    form.setHorizontalSpacing(14)
+    form.setVerticalSpacing(8)
+
+
+def _configure_form_field(widget, *, minimum_width: int = 240) -> None:
+    qt = _require_qt()
+    QSizePolicy = qt["QSizePolicy"]
+    widget.setMinimumWidth(minimum_width)
+    widget.setSizePolicy(
+        QSizePolicy.Policy.Expanding,
+        QSizePolicy.Policy.Fixed,
+    )
+
+
 def create_settings_page(
     settings_store,
     initial_settings,
@@ -77,23 +109,23 @@ def create_settings_page(
     QHBoxLayout = qt["QHBoxLayout"]
     QLabel = qt["QLabel"]
     QLineEdit = qt["QLineEdit"]
+    QFrame = qt["QFrame"]
     QCheckBox = qt["QCheckBox"]
     QSpinBox = qt["QSpinBox"]
     QDoubleSpinBox = qt["QDoubleSpinBox"]
     QPushButton = qt["QPushButton"]
+    QToolButton = qt["QToolButton"]
+    Qt = qt["Qt"]
 
     page = QWidget()
     page.setObjectName("settings_page")
     layout = QVBoxLayout(page)
-    title = QLabel("설정")
-    title.setObjectName("page_title")
-    title.setStyleSheet("font-size: 20px; font-weight: 600;")
-    layout.addWidget(title)
-    description = QLabel("연결 정보와 기본 업로드 옵션을 설정합니다.")
-    description.setObjectName("section_label")
-    layout.addWidget(description)
+    layout.setContentsMargins(6, 6, 6, 6)
+    layout.setSpacing(10)
+    layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
     form = QFormLayout()
+    _configure_form_layout(form)
     base_url = QLineEdit(initial_settings.base_url)
     username = QLineEdit(initial_settings.username)
     password = QLineEdit(initial_settings.password)
@@ -116,20 +148,66 @@ def create_settings_page(
     retry_count.setValue(initial_settings.rate_limit_max_retries)
     output_dir = QLineEdit(initial_settings.output_dir)
 
+    for field_widget in (
+        base_url,
+        username,
+        password,
+    ):
+        _configure_form_field(field_widget)
+
     form.addRow("Base URL", base_url)
     form.addRow("Username", username)
     form.addRow("Password", password)
     form.addRow("", save_password)
-    form.addRow("Header Row", header_row)
-    form.addRow("Summary Column", summary_column)
-    form.addRow("Sheet Name", sheet_name)
-    form.addRow("Retry Delay", retry_delay)
-    form.addRow("Max Retries", retry_count)
-    form.addRow("Output Directory", output_dir)
     layout.addLayout(form)
+
+    advanced_toggle = QToolButton()
+    advanced_toggle.setObjectName("section_toggle")
+    advanced_toggle.setText("추가 설정")
+    advanced_toggle.setCheckable(True)
+    advanced_toggle.setChecked(False)
+    advanced_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+    advanced_toggle.setArrowType(Qt.ArrowType.RightArrow)
+    advanced_toggle.setAutoRaise(True)
+    layout.addWidget(advanced_toggle)
+
+    advanced_card = QFrame()
+    advanced_card.setObjectName("advanced_card")
+    advanced_card.hide()
+    advanced_layout = QVBoxLayout(advanced_card)
+    advanced_layout.setContentsMargins(14, 12, 14, 12)
+    advanced_layout.setSpacing(8)
+
+    advanced_description = QLabel("자주 바꾸지 않는 업로드 옵션입니다.")
+    advanced_description.setObjectName("section_label")
+    advanced_layout.addWidget(advanced_description)
+
+    advanced_form = QFormLayout()
+    _configure_form_layout(advanced_form)
+    advanced_form.setContentsMargins(0, 0, 0, 0)
+
+    for field_widget in (
+        header_row,
+        summary_column,
+        sheet_name,
+        retry_delay,
+        retry_count,
+        output_dir,
+    ):
+        _configure_form_field(field_widget)
+
+    advanced_form.addRow("Header Row", header_row)
+    advanced_form.addRow("Summary Column", summary_column)
+    advanced_form.addRow("Sheet Name", sheet_name)
+    advanced_form.addRow("Retry Delay", retry_delay)
+    advanced_form.addRow("Max Retries", retry_count)
+    advanced_form.addRow("Output Directory", output_dir)
+    advanced_layout.addLayout(advanced_form)
+    layout.addWidget(advanced_card)
 
     status_label = QLabel("")
     status_label.setObjectName("status_label")
+    status_label.hide()
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
@@ -137,11 +215,20 @@ def create_settings_page(
     save_button = QPushButton("저장")
     next_button = QPushButton("다음")
     next_button.setObjectName("primary_button")
+    next_button.setEnabled(
+        bool(initial_settings.base_url and initial_settings.username and initial_settings.password)
+    )
     buttons.addWidget(load_button)
     buttons.addWidget(save_button)
     buttons.addStretch(1)
     buttons.addWidget(next_button)
     layout.addLayout(buttons)
+    layout.addStretch(1)
+
+    def _update_next_button_state() -> None:
+        next_button.setEnabled(
+            bool(base_url.text().strip() and username.text().strip() and password.text())
+        )
 
     def _collect_settings():
         return type(initial_settings)(
@@ -160,6 +247,13 @@ def create_settings_page(
             last_file_path=initial_settings.last_file_path,
         )
 
+    def _set_status(message: str) -> None:
+        status_label.setVisible(bool(message))
+        status_label.setText(message)
+        request_content_reflow = getattr(page, "request_content_reflow", None)
+        if callable(request_content_reflow):
+            request_content_reflow(allow_grow=bool(message))
+
     def _load():
         loaded = settings_store.load()
         base_url.setText(loaded.base_url)
@@ -172,19 +266,20 @@ def create_settings_page(
         retry_delay.setValue(loaded.rate_limit_retry_delay_seconds)
         retry_count.setValue(loaded.rate_limit_max_retries)
         output_dir.setText(loaded.output_dir)
+        _update_next_button_state()
         on_settings_changed(loaded)
-        status_label.setText("설정을 불러왔습니다.")
+        _set_status("설정을 불러왔습니다.")
 
     def _save():
         current = _collect_settings()
         settings_store.save(current)
         on_settings_changed(current)
-        status_label.setText("설정을 저장했습니다.")
+        _set_status("설정을 저장했습니다.")
 
     def _go_next():
         current = _collect_settings()
         if not current.base_url or not current.username or not current.password:
-            status_label.setText("Base URL, Username, Password 는 필수입니다.")
+            _set_status("Base URL, Username, Password 는 필수입니다.")
             return
         on_settings_changed(current)
         page.request_next()
@@ -192,6 +287,18 @@ def create_settings_page(
     load_button.clicked.connect(_load)
     save_button.clicked.connect(_save)
     next_button.clicked.connect(_go_next)
+    base_url.textChanged.connect(lambda _: _update_next_button_state())
+    username.textChanged.connect(lambda _: _update_next_button_state())
+    password.textChanged.connect(lambda _: _update_next_button_state())
+    advanced_toggle.toggled.connect(
+        lambda checked: (
+            advanced_card.setVisible(checked),
+            advanced_toggle.setArrowType(
+                Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
+            ),
+            getattr(page, "request_content_reflow", lambda **_: None)(allow_grow=checked),
+        )
+    )
 
     return page
 
@@ -210,26 +317,25 @@ def create_project_selection_page(
     QLabel = qt["QLabel"]
     QComboBox = qt["QComboBox"]
     QPushButton = qt["QPushButton"]
+    Qt = qt["Qt"]
 
     page = QWidget()
     page.selected_project_id = initial_settings.default_project_id
     page.selected_tracker_id = initial_settings.default_tracker_id
 
     layout = QVBoxLayout(page)
-    title = QLabel("프로젝트 선택")
-    title.setObjectName("page_title")
-    title.setStyleSheet("font-size: 20px; font-weight: 600;")
-    layout.addWidget(title)
-
-    description = QLabel("업로드 대상 프로젝트와 트래커를 선택합니다.")
-    description.setObjectName("section_label")
-    layout.addWidget(description)
+    layout.setContentsMargins(6, 6, 6, 6)
+    layout.setSpacing(10)
+    layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
     form = QFormLayout()
+    _configure_form_layout(form)
     project_combo = QComboBox()
     project_combo.setEnabled(False)
     tracker_combo = QComboBox()
     tracker_combo.setEnabled(False)
+    _configure_form_field(project_combo)
+    _configure_form_field(tracker_combo)
     form.addRow("프로젝트", project_combo)
     form.addRow("트래커", tracker_combo)
     layout.addLayout(form)
@@ -244,11 +350,16 @@ def create_project_selection_page(
     next_button = QPushButton("다음")
     refresh_button.setObjectName("primary_button")
     next_button.setObjectName("primary_button")
+    next_button.setEnabled(bool(page.selected_project_id and page.selected_tracker_id))
     buttons.addWidget(previous_button)
     buttons.addWidget(refresh_button)
     buttons.addStretch(1)
     buttons.addWidget(next_button)
     layout.addLayout(buttons)
+    layout.addStretch(1)
+
+    def _update_next_button_state() -> None:
+        next_button.setEnabled(bool(page.selected_project_id and page.selected_tracker_id))
 
     def _set_items(combo, items: list[dict], selected_id: str) -> None:
         combo.blockSignals(True)
@@ -276,6 +387,9 @@ def create_project_selection_page(
             tracker_combo.clear()
             project_combo.setEnabled(False)
             tracker_combo.setEnabled(False)
+            page.selected_project_id = ""
+            page.selected_tracker_id = ""
+            _update_next_button_state()
             return
         _set_items(project_combo, projects, page.selected_project_id)
         status_label.setText("프로젝트 목록을 불러왔습니다.")
@@ -291,8 +405,13 @@ def create_project_selection_page(
         if project_id in (None, ""):
             tracker_combo.clear()
             tracker_combo.setEnabled(False)
+            page.selected_project_id = ""
+            page.selected_tracker_id = ""
+            _update_next_button_state()
             return
         page.selected_project_id = str(project_id)
+        page.selected_tracker_id = ""
+        _update_next_button_state()
         settings = _current_settings()
         settings.default_project_id = page.selected_project_id
         try:
@@ -301,16 +420,21 @@ def create_project_selection_page(
             status_label.setText(f"트래커 조회 실패: {exc}")
             tracker_combo.clear()
             tracker_combo.setEnabled(False)
+            _update_next_button_state()
             return
         _set_items(tracker_combo, trackers, page.selected_tracker_id)
         if tracker_combo.currentData() not in (None, ""):
             page.selected_tracker_id = str(tracker_combo.currentData())
+        _update_next_button_state()
         status_label.setText(f"프로젝트 {project_combo.currentText()}의 트래커를 불러왔습니다.")
 
     def _handle_tracker_changed(index: int) -> None:
         tracker_id = tracker_combo.itemData(index)
         if tracker_id not in (None, ""):
             page.selected_tracker_id = str(tracker_id)
+        else:
+            page.selected_tracker_id = ""
+        _update_next_button_state()
 
     def _go_next() -> None:
         if not page.selected_project_id or not page.selected_tracker_id:
@@ -349,20 +473,17 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     page = QWidget()
     page.setObjectName("file_selection_page")
     layout = QVBoxLayout(page)
-    title = QLabel("파일 선택")
-    title.setObjectName("page_title")
-    title.setStyleSheet("font-size: 20px; font-weight: 600;")
-    layout.addWidget(title)
-    description = QLabel("Excel 파일과 시트, 헤더를 확인하고 미리보기를 봅니다.")
-    description.setObjectName("section_label")
-    layout.addWidget(description)
+    layout.setContentsMargins(6, 6, 6, 6)
+    layout.setSpacing(10)
 
     form = QFormLayout()
+    _configure_form_layout(form)
     file_path = QLineEdit(initial_settings.last_file_path)
     file_button = QPushButton("파일 선택")
     file_row_widget = QWidget()
     file_row = QHBoxLayout(file_row_widget)
     file_row.setContentsMargins(0, 0, 0, 0)
+    file_row.setSpacing(8)
     file_row.addWidget(file_path)
     file_row.addWidget(file_button)
     sheet_name = QComboBox()
@@ -374,6 +495,11 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     summary_column.setEditable(True)
     summary_column.addItems(["Summary", "요약"])
     summary_column.setCurrentText(initial_settings.summary_column)
+    _configure_form_field(file_path)
+    _configure_form_field(file_row_widget, minimum_width=320)
+    _configure_form_field(sheet_name)
+    _configure_form_field(header_row)
+    _configure_form_field(summary_column)
     form.addRow("Excel 파일", file_row_widget)
     form.addRow("시트", sheet_name)
     form.addRow("헤더 행", header_row)
@@ -401,10 +527,16 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     previous_button = QPushButton("이전")
     next_button = QPushButton("다음")
     next_button.setObjectName("primary_button")
+    next_button.setEnabled(False)
     buttons.addWidget(previous_button)
     buttons.addStretch(1)
     buttons.addWidget(next_button)
     layout.addLayout(buttons)
+
+    page._preview_ready = False
+
+    def _update_next_button_state() -> None:
+        next_button.setEnabled(bool(file_path.text().strip()) and page._preview_ready)
 
     def _collect_state():
         return {
@@ -440,6 +572,8 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
 
     def _refresh_preview() -> None:
         state = _collect_state()
+        page._preview_ready = False
+        _update_next_button_state()
         if not state["file_path"]:
             return
         try:
@@ -453,6 +587,8 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
             return
         _set_sheet_names(preview.sheet_names, state["sheet_name"])
         _set_preview(preview.headers, preview.rows, preview.suggested_summary)
+        page._preview_ready = True
+        _update_next_button_state()
         status_label.setText("시트 목록과 미리보기를 갱신했습니다.")
         on_file_state_changed(_collect_state())
 
@@ -479,6 +615,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         page.request_next()
 
     file_button.clicked.connect(_choose_file)
+    file_path.textChanged.connect(lambda _: (setattr(page, "_preview_ready", False), _update_next_button_state()))
     sheet_name.currentTextChanged.connect(lambda _: _refresh_preview())
     header_row.valueChanged.connect(lambda _: _refresh_preview())
     previous_button.clicked.connect(_go_previous)
@@ -500,9 +637,8 @@ def create_placeholder_page(title_text: str, description: str):
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    title = QLabel(title_text)
-    title.setStyleSheet("font-size: 20px; font-weight: 600;")
-    layout.addWidget(title)
+    layout.setContentsMargins(6, 6, 6, 6)
+    layout.setSpacing(10)
 
     body = QPlainTextEdit()
     body.setReadOnly(True)
@@ -536,11 +672,8 @@ def create_mapping_page(on_validate_requested):
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    title = QLabel("컬럼 매핑")
-    title.setObjectName("page_title")
-    title.setStyleSheet("font-size: 20px; font-weight: 600;")
-    layout.addWidget(title)
-
+    layout.setContentsMargins(6, 6, 6, 6)
+    layout.setSpacing(10)
     info_label = QLabel("")
     info_label.setObjectName("section_label")
     layout.addWidget(info_label)
@@ -670,11 +803,8 @@ def create_validation_page():
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    title = QLabel("검증")
-    title.setObjectName("page_title")
-    title.setStyleSheet("font-size: 20px; font-weight: 600;")
-    layout.addWidget(title)
-
+    layout.setContentsMargins(6, 6, 6, 6)
+    layout.setSpacing(10)
     summary_label = QLabel("")
     summary_label.setObjectName("summary_label")
     layout.addWidget(summary_label)
@@ -693,6 +823,7 @@ def create_validation_page():
     previous_button = QPushButton("이전")
     next_button = QPushButton("다음")
     next_button.setObjectName("primary_button")
+    next_button.setEnabled(False)
     buttons.addWidget(previous_button)
     buttons.addStretch(1)
     buttons.addWidget(next_button)
@@ -720,6 +851,7 @@ def create_validation_page():
         info_count = 0 if issue_df is None or issue_df.empty else int(issue_df["severity"].eq("안내").sum())
         summary_label.setText(f"확인할 항목 {len(rows)}건, 오류 {error_count}건, 안내 {info_count}건")
         page.has_blocking_issues = has_blocking_issues
+        next_button.setEnabled(not has_blocking_issues)
         if has_blocking_issues:
             status_label.setText("수정이 필요한 항목이 있어 업로드를 시작할 수 없습니다.")
         elif not rows:
@@ -752,13 +884,8 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    title = QLabel("업로드")
-    title.setObjectName("page_title")
-    title.setStyleSheet("font-size: 20px; font-weight: 600;")
-    layout.addWidget(title)
-    description = QLabel("진행률과 서버 응답을 확인하면서 업로드를 제어합니다.")
-    description.setObjectName("section_label")
-    layout.addWidget(description)
+    layout.setContentsMargins(6, 6, 6, 6)
+    layout.setSpacing(10)
 
     page.progress_bar = QProgressBar()
     layout.addWidget(page.progress_bar)
@@ -846,13 +973,8 @@ def create_result_page():
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    title = QLabel("결과")
-    title.setObjectName("page_title")
-    title.setStyleSheet("font-size: 20px; font-weight: 600;")
-    layout.addWidget(title)
-    description = QLabel("업로드 결과를 요약해서 보고 실패 항목의 응답을 확인합니다.")
-    description.setObjectName("section_label")
-    layout.addWidget(description)
+    layout.setContentsMargins(6, 6, 6, 6)
+    layout.setSpacing(10)
 
     tabs = QTabWidget()
     page.tables = {}

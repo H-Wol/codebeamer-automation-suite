@@ -8,8 +8,10 @@ import pandas as pd
 from src.codebeamer_client import CodebeamerClient
 from src.excel_reader import ExcelReader
 from src.hierarchy_processor import HierarchyProcessor
+from src.models import MappingStatus
 from src.mapping_service import MappingService
 from src.models import OptionCheckStatus
+from src.models import PayloadStatus
 from src.upload_pipeline import load_tracker_schema_df
 from src.upload_pipeline import prepare_upload_dataframe
 from src.upload_pipeline import run_validation_pipeline
@@ -330,7 +332,7 @@ class GuiUploadPipelineService:
             )
 
         payload_df = validation_result.payload_df
-        if not payload_df.empty and (payload_df["payload_status"] != "ready").any():
+        if not payload_df.empty and (payload_df["payload_status"] != PayloadStatus.READY.value).any():
             has_blocking = True
 
         issue_df = self._build_user_issue_df(comparison_df, option_check_df, payload_df)
@@ -438,18 +440,13 @@ class GuiUploadPipelineService:
 
         if comparison_df is not None and not comparison_df.empty:
             for _, row in comparison_df.iterrows():
-                status = str(row.get("status") or "")
-                if status in {"ok", "matched", ""}:
+                status = str(row.get("status") or "").strip()
+                if status in {MappingStatus.OK.value, "ok", "matched", ""}:
                     continue
-                if status == "unmapped":
-                    issues.append({
-                        "severity": "오류",
-                        "category": "매핑",
-                        "column": str(row.get("df_column") or ""),
-                        "field": "",
-                        "message": "Codebeamer 필드에 연결되지 않은 컬럼입니다.",
-                    })
-                elif status == "schema_field_missing":
+                if status in {MappingStatus.UNMAPPED.value, "unmapped"}:
+                    # GUI의 `사용` 체크박스로 제외한 컬럼은 업로드 대상이 아니므로 차단하지 않는다.
+                    continue
+                if status in {MappingStatus.SCHEMA_FIELD_MISSING.value, "schema_field_missing"}:
                     issues.append({
                         "severity": "오류",
                         "category": "매핑",
@@ -474,7 +471,7 @@ class GuiUploadPipelineService:
                 })
 
         if payload_df is not None and not payload_df.empty:
-            failed_df = payload_df[payload_df["payload_status"] != "ready"]
+            failed_df = payload_df[payload_df["payload_status"] != PayloadStatus.READY.value]
             for _, row in failed_df.iterrows():
                 column, field, message = cls._message_from_payload_error(row)
                 issues.append({

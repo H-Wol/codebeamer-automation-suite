@@ -15,17 +15,22 @@ from .services import GuiExcelService
 from .services import GuiUploadPipelineService
 from .settings_store import GuiSettings
 from .settings_store import GuiSettingsStore
+from .worker import BackgroundTask
 from .worker import UploadWorker
 
 
 def _require_qt():
     try:
+        from PySide6.QtCore import QEventLoop
         from PySide6.QtCore import QSize
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication
         from PySide6.QtWidgets import QFrame
         from PySide6.QtWidgets import QHBoxLayout
         from PySide6.QtWidgets import QLabel
         from PySide6.QtWidgets import QMainWindow
         from PySide6.QtWidgets import QMessageBox
+        from PySide6.QtWidgets import QProgressBar
         from PySide6.QtWidgets import QStackedWidget
         from PySide6.QtWidgets import QStatusBar
         from PySide6.QtWidgets import QVBoxLayout
@@ -34,14 +39,18 @@ def _require_qt():
         raise RuntimeError("GUI 실행에는 PySide6 패키지가 필요합니다.") from exc
 
     return {
+        "QApplication": QApplication,
+        "QEventLoop": QEventLoop,
         "QFrame": QFrame,
         "QHBoxLayout": QHBoxLayout,
         "QLabel": QLabel,
         "QMainWindow": QMainWindow,
         "QMessageBox": QMessageBox,
+        "QProgressBar": QProgressBar,
         "QSize": QSize,
         "QStackedWidget": QStackedWidget,
         "QStatusBar": QStatusBar,
+        "Qt": Qt,
         "QVBoxLayout": QVBoxLayout,
         "QWidget": QWidget,
     }
@@ -83,10 +92,12 @@ class MainWindow:
                 self.excel_service = GuiExcelService()
                 self.pipeline_service = GuiUploadPipelineService()
                 self.upload_worker = None
+                self.busy_task = None
                 self.upload_success_count = 0
                 self.upload_failed_count = 0
                 self.setWindowTitle("Codebeamer Upload GUI")
-                self.resize(qt["QSize"](1160, 780))
+                self.resize(qt["QSize"](920, 500))
+                self.setMinimumSize(qt["QSize"](760, 400))
                 self._build_shell()
                 self.setStatusBar(qt["QStatusBar"]())
                 self._build_pages()
@@ -96,19 +107,22 @@ class MainWindow:
                 QVBoxLayout = self.qt["QVBoxLayout"]
                 QHBoxLayout = self.qt["QHBoxLayout"]
                 QLabel = self.qt["QLabel"]
+                QProgressBar = self.qt["QProgressBar"]
+                Qt = self.qt["Qt"]
                 QFrame = self.qt["QFrame"]
 
                 root = QWidget()
                 root.setObjectName("app_root")
+                self.root_widget = root
                 root_layout = QVBoxLayout(root)
-                root_layout.setContentsMargins(18, 16, 18, 16)
-                root_layout.setSpacing(12)
+                root_layout.setContentsMargins(14, 12, 14, 12)
+                root_layout.setSpacing(10)
 
                 header_card = QFrame()
                 header_card.setObjectName("header_card")
                 header_layout = QVBoxLayout(header_card)
-                header_layout.setContentsMargins(18, 14, 18, 14)
-                header_layout.setSpacing(8)
+                header_layout.setContentsMargins(14, 12, 14, 12)
+                header_layout.setSpacing(6)
 
                 title = QLabel("Codebeamer Upload Studio")
                 title.setObjectName("app_title")
@@ -138,14 +152,151 @@ class MainWindow:
                 self.stack_card = QFrame()
                 self.stack_card.setObjectName("page_card")
                 stack_layout = QVBoxLayout(self.stack_card)
-                stack_layout.setContentsMargins(14, 14, 14, 14)
+                stack_layout.setContentsMargins(8, 8, 8, 8)
                 stack_layout.setSpacing(0)
                 self.stack = self.qt["QStackedWidget"]()
                 stack_layout.addWidget(self.stack)
 
                 root_layout.addWidget(header_card)
                 root_layout.addWidget(self.stack_card, 1)
+
+                self.busy_overlay = QWidget(root)
+                self.busy_overlay.setObjectName("busy_overlay")
+                self.busy_overlay.hide()
+                overlay_layout = QVBoxLayout(self.busy_overlay)
+                overlay_layout.setContentsMargins(0, 0, 0, 0)
+                overlay_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+                busy_card = QFrame(self.busy_overlay)
+                busy_card.setObjectName("busy_card")
+                busy_card_layout = QVBoxLayout(busy_card)
+                busy_card_layout.setContentsMargins(22, 20, 22, 18)
+                busy_card_layout.setSpacing(10)
+
+                busy_title = QLabel("작업 중")
+                busy_title.setObjectName("busy_title")
+                self.busy_message_label = QLabel("잠시만 기다려 주세요.")
+                self.busy_message_label.setObjectName("busy_message")
+                self.busy_message_label.setWordWrap(True)
+                self.busy_progress = QProgressBar()
+                self.busy_progress.setObjectName("busy_progress")
+                self.busy_progress.setRange(0, 0)
+                self.busy_progress.setTextVisible(False)
+
+                busy_card_layout.addWidget(busy_title)
+                busy_card_layout.addWidget(self.busy_message_label)
+                busy_card_layout.addWidget(self.busy_progress)
+                overlay_layout.addWidget(busy_card)
+
                 self.setCentralWidget(root)
+                self._update_busy_overlay_geometry()
+
+            def _content_height_for_page(self, page) -> int:
+                if page is None:
+                    return self.height()
+
+                root_layout = self.root_widget.layout()
+                stack_layout = self.stack_card.layout()
+                header_item = root_layout.itemAt(0)
+                header_widget = None if header_item is None else header_item.widget()
+                header_height = 0 if header_widget is None else header_widget.sizeHint().height()
+
+                page_layout = page.layout()
+                if page_layout is not None:
+                    page_layout.invalidate()
+                    page_layout.activate()
+                page.adjustSize()
+
+                root_margins = root_layout.contentsMargins()
+                stack_margins = stack_layout.contentsMargins()
+                status_height = 0 if self.statusBar() is None else self.statusBar().sizeHint().height()
+                stack_frame_height = self.stack_card.frameWidth() * 2
+
+                return (
+                    root_margins.top()
+                    + header_height
+                    + root_layout.spacing()
+                    + stack_frame_height
+                    + stack_margins.top()
+                    + page.sizeHint().height()
+                    + stack_margins.bottom()
+                    + root_margins.bottom()
+                    + status_height
+                )
+
+            def _fit_window_to_current_page(self, *, allow_grow: bool) -> None:
+                page = self.stack.currentWidget() if hasattr(self, "stack") else None
+                if page is None:
+                    return
+
+                target_height = max(self.minimumHeight(), self._content_height_for_page(page))
+                if not allow_grow and target_height >= self.height():
+                    return
+
+                self.resize(self.width(), target_height)
+                self.updateGeometry()
+
+            def _update_busy_overlay_geometry(self) -> None:
+                if hasattr(self, "busy_overlay") and hasattr(self, "root_widget"):
+                    self.busy_overlay.setGeometry(self.root_widget.rect())
+                    self.busy_overlay.raise_()
+
+            def resizeEvent(self, event) -> None:
+                super().resizeEvent(event)
+                self._update_busy_overlay_geometry()
+
+            def _set_busy(self, busy: bool, message: str = "") -> None:
+                QApplication = self.qt["QApplication"]
+                Qt = self.qt["Qt"]
+
+                if busy:
+                    self.busy_message_label.setText(message or "잠시만 기다려 주세요.")
+                    self._update_busy_overlay_geometry()
+                    self.busy_overlay.show()
+                    self.busy_overlay.raise_()
+                    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+                    QApplication.processEvents()
+                    return
+
+                self.busy_overlay.hide()
+                QApplication.restoreOverrideCursor()
+                QApplication.processEvents()
+
+            def _run_with_busy(self, message: str, func, *args, **kwargs):
+                QEventLoop = self.qt["QEventLoop"]
+                loop = QEventLoop(self)
+                task = BackgroundTask(func, *args, **kwargs)
+                result_box: dict[str, object] = {}
+
+                def _on_completed(result: object) -> None:
+                    result_box["result"] = result
+                    loop.quit()
+
+                def _on_failed(error: object) -> None:
+                    result_box["error"] = error
+                    loop.quit()
+
+                task.completed.connect(_on_completed)
+                task.failed.connect(_on_failed)
+                self.busy_task = task
+                self._set_busy(True, message)
+                task.start()
+
+                try:
+                    loop.exec()
+                finally:
+                    task.wait()
+                    task.deleteLater()
+                    self.busy_task = None
+                    self._set_busy(False)
+
+                if "error" in result_box:
+                    error = result_box["error"]
+                    if isinstance(error, Exception):
+                        raise error
+                    raise RuntimeError(str(error))
+
+                return result_box.get("result")
 
             def _build_pages(self) -> None:
                 self.settings_page = create_settings_page(
@@ -229,6 +380,16 @@ class MainWindow:
                     self.upload_page: ("업로드", "진행 상황을 확인하면서 업로드를 제어합니다.", 5),
                     self.result_page: ("결과", "성공, 실패, 미해결 항목을 정리해서 확인합니다.", 6),
                 }
+                for page in (
+                    self.settings_page,
+                    self.project_page,
+                    self.file_page,
+                    self.mapping_page,
+                    self.validation_page,
+                    self.upload_page,
+                    self.result_page,
+                ):
+                    page.request_content_reflow = self._fit_window_to_current_page
                 self._show_page(self.settings_page)
                 self.statusBar().showMessage("GUI 스켈레톤이 준비되었습니다.")
 
@@ -242,6 +403,7 @@ class MainWindow:
                     label.setProperty("complete", active_index >= 0 and index < active_index)
                     label.style().unpolish(label)
                     label.style().polish(label)
+                self._fit_window_to_current_page(allow_grow=True)
 
             def _attach_navigation(
                 self,
@@ -282,21 +444,32 @@ class MainWindow:
                 self.statusBar().showMessage("파일 선택 상태를 갱신했습니다.")
 
             def _test_connection(self, settings: GuiSettings) -> list[dict[str, object]]:
-                projects = self.codebeamer_service.test_connection_and_load_projects(settings)
+                projects = self._run_with_busy(
+                    "프로젝트 목록을 불러오는 중입니다.",
+                    self.codebeamer_service.test_connection_and_load_projects,
+                    settings,
+                )
                 self.session_state.settings = settings
                 self.session_state.projects = projects
                 self.statusBar().showMessage("연결 테스트와 프로젝트 조회가 완료되었습니다.")
                 return projects
 
             def _load_trackers(self, settings: GuiSettings, project_id: int) -> list[dict[str, object]]:
-                trackers = self.codebeamer_service.load_trackers(settings, project_id)
+                trackers = self._run_with_busy(
+                    "트래커 목록을 불러오는 중입니다.",
+                    self.codebeamer_service.load_trackers,
+                    settings,
+                    project_id,
+                )
                 self.session_state.settings = settings
                 self.session_state.trackers = trackers
                 self.statusBar().showMessage("트래커 목록을 불러왔습니다.")
                 return trackers
 
             def _load_file_preview(self, file_path: str, *, sheet_name: str, header_row: int):
-                preview = self.excel_service.load_preview(
+                preview = self._run_with_busy(
+                    "Excel 시트와 미리보기를 불러오는 중입니다.",
+                    self.excel_service.load_preview,
                     file_path,
                     sheet_name=sheet_name,
                     header_row=header_row,
@@ -334,7 +507,9 @@ class MainWindow:
                 settings = self.session_state.settings
                 if not settings.default_project_id or not settings.default_tracker_id:
                     raise ValueError("프로젝트와 트래커를 먼저 선택해야 합니다.")
-                mapping_context = self.pipeline_service.prepare_mapping_context(
+                mapping_context = self._run_with_busy(
+                    "매핑 대상 컬럼과 스키마를 준비하는 중입니다.",
+                    self.pipeline_service.prepare_mapping_context,
                     settings,
                     self.session_state.file_state,
                 )
@@ -349,12 +524,13 @@ class MainWindow:
             def _validate_mapping(self, selected_mapping: dict[str, str]) -> None:
                 if self.session_state.mapping_context is None:
                     raise ValueError("매핑 컨텍스트가 준비되지 않았습니다.")
-                validation_context = self.pipeline_service.validate_mapping(
+                validation_context = self._run_with_busy(
+                    "매핑을 검증하고 payload를 준비하는 중입니다.",
+                    self.pipeline_service.validate_mapping,
                     self.session_state.mapping_context,
                     selected_mapping,
                 )
                 self.session_state.validation_context = validation_context
-                payload_df = self.session_state.mapping_context.wizard.state.payload_df
                 self.validation_page.set_results(
                     validation_context.issue_df,
                     validation_context.has_blocking_issues,

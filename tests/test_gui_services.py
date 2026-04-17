@@ -11,6 +11,8 @@ from src.gui.services import GuiCodebeamerService
 from src.gui.services import GuiExcelService
 from src.gui.services import GuiUploadPipelineService
 from src.gui.settings_store import GuiSettings
+from src.models import MappingStatus
+from src.models import PayloadStatus
 
 
 class FakeExcelReader:
@@ -234,15 +236,19 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
     def test_build_user_issue_df_keeps_only_user_visible_issues(self) -> None:
         service = GuiUploadPipelineService(client_factory=FakeClient)
         comparison_df = pd.DataFrame([
-            {"df_column": "_row_id", "selected_schema_field": "", "status": "unmapped"},
-            {"df_column": "담당자", "selected_schema_field": "", "status": "unmapped"},
+            {"df_column": "_row_id", "selected_schema_field": "", "status": MappingStatus.UNMAPPED.value},
+            {"df_column": "담당자", "selected_schema_field": "", "status": MappingStatus.UNMAPPED.value},
         ])
         option_check_df = pd.DataFrame([
             {"df_column": "담당자", "schema_field": "담당자", "status": "USER_NOT_FOUND"},
             {"df_column": "상태", "schema_field": "Status", "status": "PRECONSTRUCTION_REQUIRED"},
         ])
         payload_df = pd.DataFrame([
-            {"upload_name": "REQ-001", "payload_status": "failed", "payload_error": "payload error"},
+            {
+                "upload_name": "REQ-001",
+                "payload_status": PayloadStatus.FAILED.value,
+                "payload_error": "payload error",
+            },
         ])
 
         visible_comparison_df = service._gui_visible_comparison_df(comparison_df)
@@ -262,7 +268,7 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             pd.DataFrame([
                 {
                     "upload_name": "REQ-001",
-                    "payload_status": "failed",
+                    "payload_status": PayloadStatus.FAILED.value,
                     "payload_error": "[LOOKUP_REQUIRED] field='담당자' df_column='담당자' _row_id=1 lookup_target='user'",
                 }
             ]),
@@ -271,3 +277,51 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
         self.assertEqual(issue_df.iloc[0]["column"], "담당자")
         self.assertEqual(issue_df.iloc[0]["field"], "담당자")
         self.assertIn("필요한 값을 찾지 못해 업로드용 데이터를 만들 수 없습니다.", issue_df.iloc[0]["message"])
+
+    def test_validate_mapping_does_not_block_when_payload_is_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary", "담당자", "비고"])
+            sheet.append(["REQ-001", "홍길동", "메모"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                },
+            )
+
+            validation_context = service.validate_mapping(
+                mapping_context,
+                {"Summary": "Summary"},
+            )
+
+            self.assertFalse(validation_context.has_blocking_issues)
+            self.assertTrue(validation_context.issue_df.empty)
+            self.assertEqual(
+                list(mapping_context.wizard.state.payload_df["payload_status"]),
+                [PayloadStatus.READY.value],
+            )

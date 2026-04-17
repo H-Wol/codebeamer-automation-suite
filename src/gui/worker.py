@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import time
 
+from src.models import PayloadStatus
+
 
 def _require_qt():
     try:
@@ -47,7 +49,11 @@ class UploadWorker:
             def run(self) -> None:
                 try:
                     payload_df = self.wizard.build_payloads()
-                    total_count = int((payload_df["payload_status"] == "ready").sum()) if not payload_df.empty else 0
+                    total_count = (
+                        int((payload_df["payload_status"] == PayloadStatus.READY.value).sum())
+                        if not payload_df.empty
+                        else 0
+                    )
                     progress_state = {"completed": 0}
 
                     def _event_callback(event: dict[str, object]) -> None:
@@ -96,3 +102,31 @@ class UploadWorker:
                     self.upload_failed.emit(str(exc))
 
         return _UploadWorker(wizard, dry_run=dry_run, continue_on_error=continue_on_error, output_dir=output_dir)
+
+
+class BackgroundTask:
+    """짧은 GUI 보조 작업을 백그라운드에서 실행하는 범용 worker다."""
+
+    def __new__(cls, func, *args, **kwargs):
+        qt = _require_qt()
+        base_cls = qt["QThread"]
+        Signal = qt["Signal"]
+
+        class _BackgroundTask(base_cls):
+            completed = Signal(object)
+            failed = Signal(object)
+
+            def __init__(self, func, args, kwargs) -> None:
+                super().__init__()
+                self.func = func
+                self.args = args
+                self.kwargs = kwargs
+
+            def run(self) -> None:
+                try:
+                    result = self.func(*self.args, **self.kwargs)
+                    self.completed.emit(result)
+                except Exception as exc:
+                    self.failed.emit(exc)
+
+        return _BackgroundTask(func, args, kwargs)
