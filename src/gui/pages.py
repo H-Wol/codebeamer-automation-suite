@@ -1,5 +1,28 @@
 from __future__ import annotations
 
+from .qt import QCheckBox
+from .qt import QComboBox
+from .qt import QDoubleSpinBox
+from .qt import QFileDialog
+from .qt import QFormLayout
+from .qt import QFrame
+from .qt import QHBoxLayout
+from .qt import QHeaderView
+from .qt import QLabel
+from .qt import QLineEdit
+from .qt import QPlainTextEdit
+from .qt import QProgressBar
+from .qt import QPushButton
+from .qt import QSizePolicy
+from .qt import QSpinBox
+from .qt import QTabWidget
+from .qt import QTableWidget
+from .qt import QTableWidgetItem
+from .qt import QToolButton
+from .qt import QVBoxLayout
+from .qt import QWidget
+from .qt import Qt
+
 
 USER_HIDDEN_TABLE_COLUMNS = {
     "_row_id",
@@ -28,62 +51,7 @@ def _is_hidden_user_table_column(column_name: object) -> bool:
         return True
     return False
 
-def _require_qt():
-    try:
-        from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QCheckBox
-        from PySide6.QtWidgets import QComboBox
-        from PySide6.QtWidgets import QDoubleSpinBox
-        from PySide6.QtWidgets import QFileDialog
-        from PySide6.QtWidgets import QFrame
-        from PySide6.QtWidgets import QFormLayout
-        from PySide6.QtWidgets import QHBoxLayout
-        from PySide6.QtWidgets import QHeaderView
-        from PySide6.QtWidgets import QLabel
-        from PySide6.QtWidgets import QLineEdit
-        from PySide6.QtWidgets import QPlainTextEdit
-        from PySide6.QtWidgets import QProgressBar
-        from PySide6.QtWidgets import QPushButton
-        from PySide6.QtWidgets import QSizePolicy
-        from PySide6.QtWidgets import QSpinBox
-        from PySide6.QtWidgets import QTabWidget
-        from PySide6.QtWidgets import QTableWidget
-        from PySide6.QtWidgets import QTableWidgetItem
-        from PySide6.QtWidgets import QToolButton
-        from PySide6.QtWidgets import QVBoxLayout
-        from PySide6.QtWidgets import QWidget
-    except ImportError as exc:
-        raise RuntimeError("GUI 실행에는 PySide6 패키지가 필요합니다.") from exc
-
-    return {
-        "Qt": Qt,
-        "QCheckBox": QCheckBox,
-        "QComboBox": QComboBox,
-        "QDoubleSpinBox": QDoubleSpinBox,
-        "QFileDialog": QFileDialog,
-        "QFrame": QFrame,
-        "QFormLayout": QFormLayout,
-        "QHBoxLayout": QHBoxLayout,
-        "QHeaderView": QHeaderView,
-        "QLabel": QLabel,
-        "QLineEdit": QLineEdit,
-        "QPlainTextEdit": QPlainTextEdit,
-        "QProgressBar": QProgressBar,
-        "QPushButton": QPushButton,
-        "QSizePolicy": QSizePolicy,
-        "QSpinBox": QSpinBox,
-        "QTabWidget": QTabWidget,
-        "QTableWidget": QTableWidget,
-        "QTableWidgetItem": QTableWidgetItem,
-        "QToolButton": QToolButton,
-        "QVBoxLayout": QVBoxLayout,
-        "QWidget": QWidget,
-    }
-
-
 def _configure_table_columns(table, minimum_widths: list[int]) -> None:
-    qt = _require_qt()
-    QHeaderView = qt["QHeaderView"]
     header = table.horizontalHeader()
     header.setStretchLastSection(False)
     header.setMinimumSectionSize(80)
@@ -100,10 +68,6 @@ def _configure_table_columns(table, minimum_widths: list[int]) -> None:
 
 
 def _configure_form_layout(form) -> None:
-    qt = _require_qt()
-    Qt = qt["Qt"]
-    QFormLayout = qt["QFormLayout"]
-
     form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
     form.setFormAlignment(
         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
@@ -116,8 +80,6 @@ def _configure_form_layout(form) -> None:
 
 
 def _configure_form_field(widget, *, minimum_width: int = 240) -> None:
-    qt = _require_qt()
-    QSizePolicy = qt["QSizePolicy"]
     widget.setMinimumWidth(minimum_width)
     widget.setSizePolicy(
         QSizePolicy.Policy.Expanding,
@@ -130,21 +92,6 @@ def create_settings_page(
     initial_settings,
     on_settings_changed,
 ):
-    qt = _require_qt()
-    QWidget = qt["QWidget"]
-    QVBoxLayout = qt["QVBoxLayout"]
-    QFormLayout = qt["QFormLayout"]
-    QHBoxLayout = qt["QHBoxLayout"]
-    QLabel = qt["QLabel"]
-    QLineEdit = qt["QLineEdit"]
-    QFrame = qt["QFrame"]
-    QCheckBox = qt["QCheckBox"]
-    QSpinBox = qt["QSpinBox"]
-    QDoubleSpinBox = qt["QDoubleSpinBox"]
-    QPushButton = qt["QPushButton"]
-    QToolButton = qt["QToolButton"]
-    Qt = qt["Qt"]
-
     page = QWidget()
     page.setObjectName("settings_page")
     layout = QVBoxLayout(page)
@@ -337,16 +284,6 @@ def create_project_selection_page(
     on_connection_test,
     on_project_selected,
 ):
-    qt = _require_qt()
-    QWidget = qt["QWidget"]
-    QVBoxLayout = qt["QVBoxLayout"]
-    QFormLayout = qt["QFormLayout"]
-    QHBoxLayout = qt["QHBoxLayout"]
-    QLabel = qt["QLabel"]
-    QComboBox = qt["QComboBox"]
-    QPushButton = qt["QPushButton"]
-    Qt = qt["Qt"]
-
     page = QWidget()
     page.selected_project_id = initial_settings.default_project_id
     page.selected_tracker_id = initial_settings.default_tracker_id
@@ -484,20 +421,6 @@ def create_project_selection_page(
 
 
 def create_file_selection_page(initial_settings, on_file_state_changed, on_file_preview_requested):
-    qt = _require_qt()
-    QWidget = qt["QWidget"]
-    QVBoxLayout = qt["QVBoxLayout"]
-    QFormLayout = qt["QFormLayout"]
-    QHBoxLayout = qt["QHBoxLayout"]
-    QLabel = qt["QLabel"]
-    QLineEdit = qt["QLineEdit"]
-    QPushButton = qt["QPushButton"]
-    QSpinBox = qt["QSpinBox"]
-    QComboBox = qt["QComboBox"]
-    QTableWidget = qt["QTableWidget"]
-    QTableWidgetItem = qt["QTableWidgetItem"]
-    QFileDialog = qt["QFileDialog"]
-
     page = QWidget()
     page.setObjectName("file_selection_page")
     layout = QVBoxLayout(page)
@@ -655,14 +578,6 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
 
 
 def create_placeholder_page(title_text: str, description: str):
-    qt = _require_qt()
-    QWidget = qt["QWidget"]
-    QVBoxLayout = qt["QVBoxLayout"]
-    QHBoxLayout = qt["QHBoxLayout"]
-    QLabel = qt["QLabel"]
-    QPushButton = qt["QPushButton"]
-    QPlainTextEdit = qt["QPlainTextEdit"]
-
     page = QWidget()
     layout = QVBoxLayout(page)
     layout.setContentsMargins(6, 6, 6, 6)
@@ -687,17 +602,6 @@ def create_placeholder_page(title_text: str, description: str):
 
 
 def create_mapping_page(on_validate_requested):
-    qt = _require_qt()
-    QWidget = qt["QWidget"]
-    QVBoxLayout = qt["QVBoxLayout"]
-    QHBoxLayout = qt["QHBoxLayout"]
-    QLabel = qt["QLabel"]
-    QPushButton = qt["QPushButton"]
-    QTableWidget = qt["QTableWidget"]
-    QTableWidgetItem = qt["QTableWidgetItem"]
-    QCheckBox = qt["QCheckBox"]
-    QComboBox = qt["QComboBox"]
-
     page = QWidget()
     layout = QVBoxLayout(page)
     layout.setContentsMargins(6, 6, 6, 6)
@@ -884,15 +788,6 @@ def create_mapping_page(on_validate_requested):
 
 
 def create_validation_page():
-    qt = _require_qt()
-    QWidget = qt["QWidget"]
-    QVBoxLayout = qt["QVBoxLayout"]
-    QHBoxLayout = qt["QHBoxLayout"]
-    QLabel = qt["QLabel"]
-    QPushButton = qt["QPushButton"]
-    QTableWidget = qt["QTableWidget"]
-    QTableWidgetItem = qt["QTableWidgetItem"]
-
     page = QWidget()
     layout = QVBoxLayout(page)
     layout.setContentsMargins(6, 6, 6, 6)
@@ -983,16 +878,6 @@ def create_validation_page():
 
 
 def create_upload_page(on_start_requested, on_pause_requested, on_resume_requested, on_cancel_requested):
-    qt = _require_qt()
-    QWidget = qt["QWidget"]
-    QVBoxLayout = qt["QVBoxLayout"]
-    QHBoxLayout = qt["QHBoxLayout"]
-    QLabel = qt["QLabel"]
-    QPushButton = qt["QPushButton"]
-    QPlainTextEdit = qt["QPlainTextEdit"]
-    QProgressBar = qt["QProgressBar"]
-    QCheckBox = qt["QCheckBox"]
-
     page = QWidget()
     layout = QVBoxLayout(page)
     layout.setContentsMargins(6, 6, 6, 6)
@@ -1071,17 +956,6 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
 
 
 def create_result_page():
-    qt = _require_qt()
-    QWidget = qt["QWidget"]
-    QVBoxLayout = qt["QVBoxLayout"]
-    QHBoxLayout = qt["QHBoxLayout"]
-    QLabel = qt["QLabel"]
-    QPushButton = qt["QPushButton"]
-    QPlainTextEdit = qt["QPlainTextEdit"]
-    QTableWidget = qt["QTableWidget"]
-    QTableWidgetItem = qt["QTableWidgetItem"]
-    QTabWidget = qt["QTabWidget"]
-
     page = QWidget()
     layout = QVBoxLayout(page)
     layout.setContentsMargins(6, 6, 6, 6)
