@@ -1,0 +1,24 @@
+{
+  "user_reference": {
+    "strategy": "findByName_then_id_fallback",
+    "cache_scope": "per_project"
+  },
+  "member_reference": {
+    "user_source": "user lookup reuse",
+    "role_source": "GET /v3/trackers/{trackerId}/fields/{fieldId}/permissions",
+    "group_source": "GET /v3/users/groups",
+    "ambiguity_policy": "fail_fast"
+  },
+  "tracker_item_reference": {
+    "strategy": "direct_parse",
+    "patterns": [
+      "[REQ:123]",
+      "[123]",
+      "123",
+      "123.0"
+    ]
+  },
+  "generic_reference": {
+    "strategy": "unsupported_until_resolver_is_defined"
+  }
+}

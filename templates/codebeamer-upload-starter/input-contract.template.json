@@ -1,0 +1,11 @@
+{
+  "input_format": "excel",
+  "summary_column": "Summary",
+  "header_row": 1,
+  "sheet_name": 0,
+  "indent_source": "Excel IndentLevel with leading-spaces fallback",
+  "multiline_record_start_rule": "summary column becomes non-empty",
+  "list_columns_are_schema_driven": true,
+  "table_field_header_pattern": "TableFieldName.ColumnName",
+  "sample_input_file": "sample-input.xlsx"
+}
