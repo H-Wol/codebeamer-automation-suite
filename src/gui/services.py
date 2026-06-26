@@ -169,6 +169,21 @@ GUI_EXCLUDED_MAPPING_COLUMNS = {
     "_excel_row",
 }
 GUI_EXCLUDED_TARGET_FIELDS = {"id", "parent"}
+DEFAULT_VALUE_COLUMN_LABEL = "(기본값)"
+GUI_HIDDEN_USER_COLUMNS = GUI_EXCLUDED_MAPPING_COLUMNS | {
+    "payload_json",
+    "payload_status",
+    "payload_error",
+    "error_response_json",
+}
+
+
+@dataclass
+class DefaultValueCandidate:
+    schema_field: str
+    field_type: str
+    options: list[str]
+    mandatory: bool
 
 
 @dataclass
@@ -177,6 +192,8 @@ class MappingContext:
     schema_df: pd.DataFrame
     upload_columns: list[str]
     selected_mapping: dict[str, str]
+    default_value_candidates: list[DefaultValueCandidate]
+    selected_default_values: dict[str, str]
     list_cols: list[str]
 
 
@@ -263,6 +280,33 @@ class GuiUploadPipelineService:
         mask &= ~work["df_column"].astype(str).str.startswith("_")
         return work[mask].reset_index(drop=True)
 
+    @staticmethod
+    def _is_hidden_user_column(column_name: Any) -> bool:
+        text = str(column_name or "").strip()
+        if not text:
+            return False
+        if text in GUI_HIDDEN_USER_COLUMNS:
+            return True
+        if text.startswith("_"):
+            return True
+        if "__" in text:
+            return True
+        return False
+
+    def _build_default_value_candidates(
+        self,
+        schema_df: pd.DataFrame,
+    ) -> list[DefaultValueCandidate]:
+        candidates: list[DefaultValueCandidate] = []
+        for candidate in self.mapper.get_default_value_candidates(schema_df):
+            candidates.append(DefaultValueCandidate(
+                schema_field=str(candidate.get("field_name") or ""),
+                field_type=str(candidate.get("field_type") or ""),
+                options=list(candidate.get("options") or []),
+                mandatory=bool(candidate.get("mandatory", False)),
+            ))
+        return candidates
+
     def prepare_mapping_context(self, settings, file_state: dict[str, Any]) -> MappingContext:
         wizard = self.create_wizard(settings)
         wizard.select_project(int(settings.default_project_id))
@@ -297,12 +341,15 @@ class GuiUploadPipelineService:
             for column, schema_field in raw_mapping.items()
             if column in upload_columns
         }
+        default_value_candidates = self._build_default_value_candidates(mappable_schema_df)
 
         return MappingContext(
             wizard=wizard,
             schema_df=mappable_schema_df,
             upload_columns=upload_columns,
             selected_mapping=selected_mapping,
+            default_value_candidates=default_value_candidates,
+            selected_default_values={},
             list_cols=list_cols,
         )
 
@@ -310,11 +357,23 @@ class GuiUploadPipelineService:
         self,
         mapping_context: MappingContext,
         selected_mapping: dict[str, str],
+        selected_default_values: dict[str, str] | None = None,
     ) -> ValidationContext:
         wizard = mapping_context.wizard
         list_cols = self.mapper.get_list_columns_for_mapping(selected_mapping, mapping_context.schema_df)
         wizard.load_raw_dataframe(wizard.state.raw_df.copy(), list_cols=list_cols)
-        validation_result = run_validation_pipeline(wizard, selected_mapping)
+        normalized_default_values = {
+            str(field_name).strip(): str(raw_value).strip()
+            for field_name, raw_value in (selected_default_values or {}).items()
+            if str(field_name).strip() and str(raw_value).strip()
+        }
+        mapping_context.selected_mapping = selected_mapping
+        mapping_context.selected_default_values = normalized_default_values
+        validation_result = run_validation_pipeline(
+            wizard,
+            selected_mapping,
+            selected_default_values=normalized_default_values,
+        )
         comparison_df = validation_result.comparison_df
         comparison_df = self._gui_visible_comparison_df(comparison_df)
         option_check_df = (
@@ -353,15 +412,31 @@ class GuiUploadPipelineService:
         field_name = str(row.get("schema_field") or "")
         df_column = str(row.get("df_column") or "")
         value = row.get("raw_value")
+        is_default_value = (
+            str(row.get("value_source") or "") == "default"
+            or df_column == DEFAULT_VALUE_COLUMN_LABEL
+        )
 
         if status == OptionCheckStatus.FIELD_UNSUPPORTED.value:
+            if is_default_value:
+                return "오류", f"이 필드는 공통 기본값으로 바로 넣을 수 없습니다. 필드: {field_name}"
             return "오류", f"현재 GUI에서 지원하지 않는 필드입니다. 필드: {field_name}"
         if status == OptionCheckStatus.LOOKUP_REQUIRED.value:
+            if is_default_value:
+                return "오류", f"기본값으로 쓰려면 추가 조회 로직이 필요합니다. 필드: {field_name}"
             return "오류", f"추가 조회 로직이 필요한 필드입니다. 필드: {field_name}"
         if status == OptionCheckStatus.OPTION_NOT_FOUND.value:
+            if is_default_value:
+                return "오류", f"선택한 기본값이 스키마 option에 없습니다. 필드: {field_name}"
             return "오류", f"선택값을 찾을 수 없습니다. 컬럼: {df_column}"
         if status == OptionCheckStatus.DIRECT_PARSE_FAILED.value:
+            if is_default_value:
+                return "오류", f"선택한 기본값을 아이디 형식으로 해석할 수 없습니다. 필드: {field_name}"
             return "오류", f"아이디 형식으로 해석할 수 없습니다. 컬럼: {df_column}"
+        if status == "SCHEMA_FIELD_MISSING":
+            return "오류", str(row.get("error") or "선택한 기본값 필드를 현재 스키마에서 찾을 수 없습니다.")
+        if status == "OPTION_MAP_MISSING":
+            return "오류", str(row.get("error") or "기본값 검증에 필요한 option map을 만들 수 없습니다.")
         if status.endswith(("USER_LOOKUP_FAILED", "USER_LOOKUP_AMBIGUOUS", "USER_NOT_FOUND")):
             return "오류", f"사용자를 찾지 못했습니다. 컬럼: {df_column}"
         if status.endswith(("MEMBER_LOOKUP_FAILED", "MEMBER_LOOKUP_AMBIGUOUS", "MEMBER_NOT_FOUND")):
@@ -457,6 +532,8 @@ class GuiUploadPipelineService:
 
         if option_check_df is not None and not option_check_df.empty:
             for _, row in option_check_df.iterrows():
+                if cls._is_hidden_user_column(row.get("df_column")):
+                    continue
                 severity, message = cls._message_from_option_status(row)
                 if not message:
                     continue

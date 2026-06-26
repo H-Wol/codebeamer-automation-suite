@@ -59,6 +59,43 @@ class MappingServiceTest(unittest.TestCase):
 
         self.assertEqual(list_columns, [])
 
+    def test_get_default_value_candidates_returns_single_static_option_fields_only(self) -> None:
+        """공통 기본값 후보는 단일 static option 필드만 포함해야 한다."""
+        schema_df = self.service.flatten_schema_fields([
+            {
+                "id": 1,
+                "name": "Status",
+                "type": "OptionChoiceField",
+                "trackerItemField": "status",
+                "options": [
+                    {"id": 11, "name": "Open"},
+                    {"id": 12, "name": "Review"},
+                ],
+                "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+            },
+            {
+                "id": 2,
+                "name": "Phase",
+                "type": "OptionChoiceField",
+                "multipleValues": True,
+                "options": [{"id": 21, "name": "Draft"}],
+                "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+            },
+            {
+                "id": 3,
+                "name": "Owner",
+                "type": "ReferenceField",
+                "referenceType": "UserReference",
+                "valueModel": "ChoiceFieldValue<UserReference>",
+            },
+        ])
+
+        candidates = self.service.get_default_value_candidates(schema_df)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["field_name"], "Status")
+        self.assertEqual(candidates[0]["options"], ["Open", "Review"])
+
     def test_flatten_schema_fields_resolves_field_kind_and_preconstruction(self) -> None:
         """서로 다른 schema type이 올바른 내부 분류와 선구성 규칙으로 해석되는지 본다."""
         schema = [

@@ -312,6 +312,72 @@ class WizardPayloadResolutionTest(unittest.TestCase):
             ["UserReference", "RoleReference", "GroupReference"],
         )
 
+    def test_preview_payload_applies_default_status_when_row_value_is_missing(self) -> None:
+        """행 값이 없으면 선택한 공통 기본값으로 Status를 채워야 한다."""
+        self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
+            {
+                "id": 1,
+                "name": "Summary",
+                "type": "TextField",
+                "trackerItemField": "name",
+                "valueModel": "TextFieldValue",
+            },
+            {
+                "id": 2,
+                "name": "Status",
+                "type": "OptionChoiceField",
+                "trackerItemField": "status",
+                "options": [{"id": 11, "name": "Open"}],
+                "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+            },
+        ])
+        self.wizard.state.selected_mapping = {"summary": "Summary"}
+        self.wizard.state.upload_df = pd.DataFrame([
+            {"_row_id": 1, "upload_name": "REQ-1", "summary": "REQ-1"}
+        ])
+        self.wizard.process_option_mapping(
+            self.wizard.state.selected_mapping,
+            selected_default_values={"Status": "Open"},
+        )
+
+        payload = self.wizard.preview_payload(1)
+
+        self.assertEqual(payload["name"], "REQ-1")
+        self.assertEqual(payload["status"]["name"], "Open")
+
+    def test_process_option_mapping_reports_invalid_default_status_value(self) -> None:
+        """잘못된 기본값은 option 검증 단계에서 바로 드러나야 한다."""
+        self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
+            {
+                "id": 1,
+                "name": "Summary",
+                "type": "TextField",
+                "trackerItemField": "name",
+                "valueModel": "TextFieldValue",
+            },
+            {
+                "id": 2,
+                "name": "Status",
+                "type": "OptionChoiceField",
+                "trackerItemField": "status",
+                "options": [{"id": 11, "name": "Open"}],
+                "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+            },
+        ])
+        self.wizard.state.selected_mapping = {"summary": "Summary"}
+        self.wizard.state.upload_df = pd.DataFrame([
+            {"_row_id": 1, "upload_name": "REQ-1", "summary": "REQ-1"}
+        ])
+
+        _, option_check_df = self.wizard.process_option_mapping(
+            self.wizard.state.selected_mapping,
+            selected_default_values={"Status": "Missing"},
+        )
+
+        self.assertEqual(option_check_df.iloc[0]["df_column"], "(기본값)")
+        self.assertEqual(option_check_df.iloc[0]["schema_field"], "Status")
+        self.assertEqual(option_check_df.iloc[0]["status"], "OPTION_NOT_FOUND")
+
     def test_preview_payload_builds_tracker_item_choice_field_from_bracket_text(self) -> None:
         """TrackerItemChoiceField는 입력 문자열에서 item id를 직접 파싱해야 한다."""
         self.wizard.state.schema_df = self.mapper.flatten_schema_fields([

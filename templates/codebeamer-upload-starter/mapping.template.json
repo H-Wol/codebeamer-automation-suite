@@ -1,0 +1,12 @@
+{
+  "selected_mapping": {
+    "Summary": "Summary"
+  },
+  "selected_option_mapping": {
+    "Status": "Status"
+  },
+  "notes": [
+    "selected_mapping 은 입력 컬럼 -> schema field 이름 매핑입니다.",
+    "selected_option_mapping 은 option/reference 해석이 필요한 필드만 따로 적습니다."
+  ]
+}

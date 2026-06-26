@@ -156,6 +156,8 @@ py -3 cli_main.py
 
 - [문서 허브](./docs/index.md)
 - [아키텍처](./docs/architecture.md)
+- [Codebeamer 업로드 조사 정리](./docs/codebeamer-upload-reference.md)
+- [Codebeamer 프로젝트 시작 패키지](./docs/codebeamer-project-start-kit.md)
 - [CLI 사용 가이드](./docs/cli-guide.md)
 - [GUI 설계 초안](./docs/gui-plan.md)
 - [변경 이력 성격의 v2 문서](./docs/v2-changes.md)

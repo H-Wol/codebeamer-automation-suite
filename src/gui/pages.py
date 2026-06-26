@@ -1,5 +1,33 @@
 from __future__ import annotations
 
+
+USER_HIDDEN_TABLE_COLUMNS = {
+    "_row_id",
+    "parent_row_id",
+    "depth",
+    "_summary_indent",
+    "_start_excel_row",
+    "_end_excel_row",
+    "_excel_row",
+    "payload_json",
+    "payload_status",
+    "payload_error",
+    "error_response_json",
+}
+
+
+def _is_hidden_user_table_column(column_name: object) -> bool:
+    text = str(column_name or "").strip()
+    if not text:
+        return False
+    if text in USER_HIDDEN_TABLE_COLUMNS:
+        return True
+    if text.startswith("_"):
+        return True
+    if "__" in text:
+        return True
+    return False
+
 def _require_qt():
     try:
         from PySide6.QtCore import Qt
@@ -684,6 +712,20 @@ def create_mapping_page(on_validate_requested):
     _configure_table_columns(table, [90, 240, 240, 180, 100, 100])
     layout.addWidget(table)
 
+    default_label = QLabel("공통 기본값")
+    default_label.setObjectName("section_label")
+    layout.addWidget(default_label)
+
+    default_help_label = QLabel("행 값이 있으면 행 값이 우선하고, 비어 있으면 아래 기본값을 사용합니다.")
+    default_help_label.setWordWrap(True)
+    layout.addWidget(default_help_label)
+
+    default_table = QTableWidget(0, 4)
+    default_table.setHorizontalHeaderLabels(["Codebeamer 필드", "타입", "기본값", "필수"])
+    default_table.setAlternatingRowColors(True)
+    _configure_table_columns(default_table, [240, 180, 240, 90])
+    layout.addWidget(default_table)
+
     status_label = QLabel("")
     status_label.setObjectName("status_label")
     layout.addWidget(status_label)
@@ -704,7 +746,17 @@ def create_mapping_page(on_validate_requested):
     page._mapping_validated = False
     page._schema_rows_by_name = {}
 
-    def load_context(upload_columns: list[str], schema_df, selected_mapping: dict[str, str]) -> None:
+    def _mark_dirty() -> None:
+        page._mapping_validated = False
+        next_button.setEnabled(False)
+
+    def load_context(
+        upload_columns: list[str],
+        schema_df,
+        selected_mapping: dict[str, str],
+        default_value_candidates: list,
+        selected_default_values: dict[str, str],
+    ) -> None:
         page._mapping_validated = False
         next_button.setEnabled(False)
         page._schema_rows_by_name = {
@@ -739,13 +791,39 @@ def create_mapping_page(on_validate_requested):
                 table.setItem(row, 3, QTableWidgetItem(str(schema.get("field_type") or "")))
                 table.setItem(row, 4, QTableWidgetItem(str(bool(schema.get("multiple_values", False)))))
                 table.setItem(row, 5, QTableWidgetItem("yes" if schema.get("is_supported", True) else "no"))
-                page._mapping_validated = False
-                next_button.setEnabled(False)
+                _mark_dirty()
 
             combo.currentTextChanged.connect(_on_combo_changed)
-            enabled_widget.toggled.connect(lambda _checked: next_button.setEnabled(False))
+            enabled_widget.toggled.connect(lambda _checked: _mark_dirty())
+
+        default_table.setRowCount(len(default_value_candidates))
+        for row_index, candidate in enumerate(default_value_candidates):
+            schema_field = str(getattr(candidate, "schema_field", ""))
+            default_table.setItem(row_index, 0, QTableWidgetItem(schema_field))
+            default_table.setItem(row_index, 1, QTableWidgetItem(str(getattr(candidate, "field_type", ""))))
+
+            combo = QComboBox()
+            combo.addItem("")
+            combo.addItems(list(getattr(candidate, "options", [])))
+            selected_default = str(selected_default_values.get(schema_field, "") or "")
+            if selected_default and combo.findText(selected_default) >= 0:
+                combo.setCurrentText(selected_default)
+            combo.currentTextChanged.connect(lambda _text: _mark_dirty())
+            default_table.setCellWidget(row_index, 2, combo)
+
+            default_table.setItem(
+                row_index,
+                3,
+                QTableWidgetItem("yes" if bool(getattr(candidate, "mandatory", False)) else "no"),
+            )
+
         _configure_table_columns(table, [90, 240, 240, 180, 100, 100])
+        _configure_table_columns(default_table, [240, 180, 240, 90])
         info_label.setText(f"매핑 대상 컬럼 {len(upload_columns)}개. id, parent 는 제외됩니다.")
+        if default_value_candidates:
+            default_help_label.setText("행 값이 있으면 행 값이 우선하고, 비어 있으면 아래 기본값을 사용합니다.")
+        else:
+            default_help_label.setText("선택 가능한 공통 기본값 필드가 없습니다.")
         status_label.setText("")
 
     def get_selected_mapping() -> dict[str, str]:
@@ -766,13 +844,26 @@ def create_mapping_page(on_validate_requested):
             mapping[column_name_item.text()] = schema_field
         return mapping
 
+    def get_selected_default_values() -> dict[str, str]:
+        default_values: dict[str, str] = {}
+        for row_index in range(default_table.rowCount()):
+            field_item = default_table.item(row_index, 0)
+            combo = default_table.cellWidget(row_index, 2)
+            if field_item is None or combo is None:
+                continue
+            selected_value = combo.currentText().strip()
+            if not selected_value:
+                continue
+            default_values[field_item.text()] = selected_value
+        return default_values
+
     def _validate() -> None:
         mapping = get_selected_mapping()
         if not mapping:
             status_label.setText("최소 1개 이상의 컬럼을 매핑해야 합니다.")
             return
         try:
-            on_validate_requested(mapping)
+            on_validate_requested(mapping, get_selected_default_values())
         except Exception as exc:
             status_label.setText(f"검증 실패: {exc}")
             page._mapping_validated = False
@@ -788,6 +879,7 @@ def create_mapping_page(on_validate_requested):
 
     page.load_context = load_context
     page.get_selected_mapping = get_selected_mapping
+    page.get_selected_default_values = get_selected_default_values
     return page
 
 
@@ -1012,12 +1104,22 @@ def create_result_page():
                 table.setRowCount(0)
                 table.setColumnCount(0)
                 continue
-            table.setColumnCount(len(df.columns))
-            table.setHorizontalHeaderLabels([str(col) for col in df.columns])
+
+            visible_columns = [
+                column_name
+                for column_name in df.columns
+                if not _is_hidden_user_table_column(column_name)
+            ]
+            if not visible_columns:
+                visible_columns = [str(col) for col in df.columns]
+
+            table.setColumnCount(len(visible_columns))
+            table.setHorizontalHeaderLabels([str(col) for col in visible_columns])
             table.setRowCount(len(df))
             for row_index, (_, row) in enumerate(df.iterrows()):
-                for col_index, column_name in enumerate(df.columns):
+                for col_index, column_name in enumerate(visible_columns):
                     table.setItem(row_index, col_index, QTableWidgetItem(str(row.get(column_name) or "")))
+            _configure_table_columns(table, [140] * max(len(visible_columns), 1))
 
         failed_df = upload_result.get("failed_df")
         if failed_df is not None and not getattr(failed_df, "empty", True) and "error_response_json" in failed_df.columns:

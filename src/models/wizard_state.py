@@ -28,6 +28,8 @@ class WizardState:
 
     selected_mapping: dict[str, str] = field(default_factory=dict)
     selected_option_mapping: dict[str, str] = field(default_factory=dict)
+    selected_default_values: dict[str, Any] = field(default_factory=dict)
+    resolved_default_values: dict[str, Any] = field(default_factory=dict)
     table_field_mapping: dict[str, dict[str, Any]] = field(default_factory=dict)
     list_cols: list[str] = field(default_factory=list)
     user_lookup_cache: dict[tuple[int | None, str], tuple[Any, Any, str, str | None]] = field(default_factory=dict)

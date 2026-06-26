@@ -30,6 +30,7 @@ from .models import WizardState
 
 UserLookupCacheEntry = tuple[dict[str, Any] | None, dict[str, Any] | None, str, str | None]
 MemberLookupCacheEntry = tuple[dict[str, Any] | None, dict[str, Any] | None, str, str | None]
+DEFAULT_VALUE_COLUMN_LABEL = "(기본값)"
 
 
 class CodebeamerUploadWizard:
@@ -692,6 +693,7 @@ class CodebeamerUploadWizard:
         self,
         selected_mapping: dict[str, str],
         selected_option_mapping: dict[str, str] | None = None,
+        selected_default_values: dict[str, Any] | None = None,
     ) -> tuple[dict[str, str], pd.DataFrame]:
         """옵션/참조형 필드를 찾아 lookup과 검증을 한 번에 수행한다."""
         if self.state.schema_df is None:
@@ -709,7 +711,16 @@ class CodebeamerUploadWizard:
                 if schema_field in option_field_names:
                     selected_option_mapping[excel_col] = schema_field
 
-        if not selected_option_mapping:
+        normalized_default_values: dict[str, Any] = {}
+        for schema_field, raw_value in (selected_default_values or {}).items():
+            if not self._has_configured_value(raw_value):
+                continue
+            normalized_default_values[str(schema_field).strip()] = raw_value
+
+        self.state.selected_default_values = normalized_default_values
+        self.state.resolved_default_values = {}
+
+        if not selected_option_mapping and not normalized_default_values:
             self.state.selected_option_mapping = {}
             self.state.option_maps = {}
             self.state.option_check_df = pd.DataFrame()
@@ -721,32 +732,55 @@ class CodebeamerUploadWizard:
         option_maps = self.mapper.build_option_maps_from_schema(self.state.schema_df)
         self.state.option_maps = option_maps
 
-        lookup_ready_df = self._resolve_user_reference_fields(
-            upload_df=self.state.upload_df,
-            option_mapping=selected_option_mapping,
-            option_maps=option_maps,
+        lookup_ready_df = self.state.upload_df.copy()
+        if selected_option_mapping:
+            lookup_ready_df = self._resolve_user_reference_fields(
+                upload_df=lookup_ready_df,
+                option_mapping=selected_option_mapping,
+                option_maps=option_maps,
+            )
+            lookup_ready_df = self._resolve_member_reference_fields(
+                upload_df=lookup_ready_df,
+                option_mapping=selected_option_mapping,
+                option_maps=option_maps,
+            )
+
+        option_check_df = pd.DataFrame()
+        if selected_option_mapping:
+            option_check_df = self.mapper.check_option_alignment(
+                upload_df=lookup_ready_df,
+                option_mapping=selected_option_mapping,
+                option_maps=option_maps,
+            )
+
+        default_value_check_df, resolved_default_values = self._resolve_default_field_values(
+            normalized_default_values,
+            option_maps,
         )
-        lookup_ready_df = self._resolve_member_reference_fields(
-            upload_df=lookup_ready_df,
-            option_mapping=selected_option_mapping,
-            option_maps=option_maps,
+        self.state.resolved_default_values = resolved_default_values
+
+        check_frames = [
+            df
+            for df in (option_check_df, default_value_check_df)
+            if isinstance(df, pd.DataFrame) and not df.empty
+        ]
+        self.state.option_check_df = (
+            pd.concat(check_frames, ignore_index=True)
+            if check_frames
+            else pd.DataFrame()
         )
 
-        option_check_df = self.mapper.check_option_alignment(
-            upload_df=lookup_ready_df,
-            option_mapping=selected_option_mapping,
-            option_maps=option_maps,
-        )
-        self.state.option_check_df = option_check_df
-
-        self.state.converted_upload_df = self.mapper.apply_option_resolution(
-            upload_df=lookup_ready_df,
-            option_mapping=selected_option_mapping,
-            option_maps=option_maps,
-        )
+        if selected_option_mapping:
+            self.state.converted_upload_df = self.mapper.apply_option_resolution(
+                upload_df=lookup_ready_df,
+                option_mapping=selected_option_mapping,
+                option_maps=option_maps,
+            )
+        else:
+            self.state.converted_upload_df = lookup_ready_df.copy()
         self._invalidate_payload_cache()
 
-        return selected_option_mapping, option_check_df
+        return selected_option_mapping, self.state.option_check_df
 
     def _serialize_payload_value(self, value: Any) -> Any:
         """payload 안의 모델 객체를 재귀적으로 일반 자료형으로 바꾼다."""
@@ -765,6 +799,17 @@ class CodebeamerUploadWizard:
             return False
 
         value = row[column_name]
+        if value is None:
+            return False
+        if isinstance(value, float) and pd.isna(value):
+            return False
+        if isinstance(value, str) and value.strip() == "":
+            return False
+        return True
+
+    @staticmethod
+    def _has_configured_value(value: Any) -> bool:
+        """기본값 설정에 실제 값이 들어 있는지 확인한다."""
         if value is None:
             return False
         if isinstance(value, float) and pd.isna(value):
@@ -943,6 +988,221 @@ class CodebeamerUploadWizard:
             detail=f"value={row[df_col]!r}",
         )
 
+    def _resolve_default_field_values(
+        self,
+        selected_default_values: dict[str, Any],
+        option_maps: dict[str, dict[str, Any]],
+    ) -> tuple[pd.DataFrame, dict[str, Any]]:
+        """필드 기본값을 검증하고 payload에 바로 쓸 값으로 정리한다."""
+        if self.state.schema_df is None or not selected_default_values:
+            return pd.DataFrame(), {}
+
+        errors: list[dict[str, Any]] = []
+        resolved_defaults: dict[str, Any] = {}
+
+        for schema_field, raw_value in selected_default_values.items():
+            matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
+            if matched.empty:
+                errors.append({
+                    "df_column": DEFAULT_VALUE_COLUMN_LABEL,
+                    "schema_field": schema_field,
+                    "_row_id": None,
+                    "raw_value": raw_value,
+                    "status": "SCHEMA_FIELD_MISSING",
+                    "value_source": "default",
+                    "error": "선택한 기본값 필드를 현재 트래커 스키마에서 찾을 수 없습니다.",
+                })
+                continue
+
+            field_row = matched.iloc[0]
+            if not bool(field_row.get("is_option_like", False)):
+                resolved_defaults[schema_field] = raw_value
+                continue
+
+            option_info = option_maps.get(schema_field)
+            if option_info is None:
+                errors.append({
+                    "df_column": DEFAULT_VALUE_COLUMN_LABEL,
+                    "schema_field": schema_field,
+                    "_row_id": None,
+                    "raw_value": raw_value,
+                    "status": "OPTION_MAP_MISSING",
+                    "value_source": "default",
+                    "error": "기본값에 필요한 option map을 만들 수 없습니다.",
+                })
+                continue
+
+            if not option_info.get("is_supported", True) or option_info.get("kind") == OptionMapKind.UNSUPPORTED.value:
+                errors.append({
+                    **self.mapper._validation_context(
+                        DEFAULT_VALUE_COLUMN_LABEL,
+                        schema_field,
+                        option_info,
+                        raw_value=raw_value,
+                        error=option_info.get("unsupported_reason"),
+                        value_source="default",
+                    ),
+                    "status": "FIELD_UNSUPPORTED",
+                })
+                continue
+
+            if option_info.get("kind") == OptionMapKind.STATIC_OPTIONS.value:
+                resolved_value = self.mapper.resolve_static_option_value(raw_value, option_info)
+                if resolved_value is None:
+                    errors.append({
+                        **self.mapper._validation_context(
+                            DEFAULT_VALUE_COLUMN_LABEL,
+                            schema_field,
+                            option_info,
+                            raw_value=raw_value,
+                            value_source="default",
+                        ),
+                        "status": "OPTION_NOT_FOUND",
+                    })
+                    continue
+                resolved_defaults[schema_field] = resolved_value
+                continue
+
+            if option_info.get("kind") == OptionMapKind.TRACKER_ITEM_DIRECT.value:
+                try:
+                    resolved_defaults[schema_field] = self.mapper.resolve_tracker_item_reference_value(
+                        raw_value,
+                        multiple_values=option_info.get("multiple_values", False),
+                    )
+                except Exception as exc:
+                    errors.append({
+                        **self.mapper._validation_context(
+                            DEFAULT_VALUE_COLUMN_LABEL,
+                            schema_field,
+                            option_info,
+                            raw_value=raw_value,
+                            error=str(exc),
+                            value_source="default",
+                        ),
+                        "status": "DIRECT_PARSE_FAILED",
+                    })
+                continue
+
+            errors.append({
+                **self.mapper._validation_context(
+                    DEFAULT_VALUE_COLUMN_LABEL,
+                    schema_field,
+                    option_info,
+                    raw_value=raw_value,
+                    error=option_info.get("unsupported_reason"),
+                    value_source="default",
+                ),
+                "status": "LOOKUP_REQUIRED",
+            })
+
+        return pd.DataFrame(errors), resolved_defaults
+
+    def _resolve_default_field_value(self, schema_field: str, raw_value: Any, row_id: int) -> Any:
+        """payload 생성 중 기본값을 실제 업로드 형식으로 변환한다."""
+        matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
+        if matched.empty:
+            self._raise_payload_error(
+                "FIELD_UNSUPPORTED",
+                schema_field=schema_field,
+                df_col=DEFAULT_VALUE_COLUMN_LABEL,
+                row_id=row_id,
+                detail="default field is missing in current schema",
+            )
+
+        field_row = matched.iloc[0]
+        if not bool(field_row.get("is_option_like", False)):
+            return raw_value
+
+        option_info = (self.state.option_maps or {}).get(schema_field, {})
+        kind = option_info.get("kind")
+
+        if not option_info.get("is_supported", True) or kind == OptionMapKind.UNSUPPORTED.value:
+            self._raise_payload_error(
+                "FIELD_UNSUPPORTED",
+                schema_field=schema_field,
+                df_col=DEFAULT_VALUE_COLUMN_LABEL,
+                row_id=row_id,
+                detail=(
+                    f"reason={option_info.get('unsupported_reason')!r} "
+                    f"strategy={option_info.get('resolution_strategy')!r}"
+                ),
+            )
+
+        if kind == OptionMapKind.STATIC_OPTIONS.value:
+            resolved_value = self.mapper.resolve_static_option_value(raw_value, option_info)
+            if resolved_value is None:
+                self._raise_payload_error(
+                    "OPTION_RESOLUTION_FAILED",
+                    schema_field=schema_field,
+                    df_col=DEFAULT_VALUE_COLUMN_LABEL,
+                    row_id=row_id,
+                    detail=f"value={raw_value!r}",
+                )
+            return resolved_value
+
+        if kind == OptionMapKind.TRACKER_ITEM_DIRECT.value:
+            try:
+                return self.mapper.resolve_tracker_item_reference_value(
+                    raw_value,
+                    multiple_values=option_info.get("multiple_values", False),
+                )
+            except Exception as exc:
+                self._raise_payload_error(
+                    "DIRECT_PARSE_FAILED",
+                    schema_field=schema_field,
+                    df_col=DEFAULT_VALUE_COLUMN_LABEL,
+                    row_id=row_id,
+                    detail=f"value={raw_value!r} error={str(exc)!r}",
+                )
+
+        self._raise_payload_error(
+            "LOOKUP_REQUIRED",
+            schema_field=schema_field,
+            df_col=DEFAULT_VALUE_COLUMN_LABEL,
+            row_id=row_id,
+            detail=(
+                f"value={raw_value!r} "
+                f"lookup_target={option_info.get('lookup_target_kind')!r} "
+                f"reason={option_info.get('unsupported_reason')!r}"
+            ),
+        )
+
+    def _apply_default_field_values(
+        self,
+        item: TrackerItemBase,
+        *,
+        row_id: int,
+        applied_schema_fields: set[str],
+    ) -> None:
+        """행 값이 없는 필드에 공통 기본값을 보충한다."""
+        if self.state.schema_df is None or not self.state.selected_default_values:
+            return
+
+        for schema_field, raw_value in self.state.selected_default_values.items():
+            if schema_field in applied_schema_fields:
+                continue
+            if not self._has_configured_value(raw_value):
+                continue
+
+            matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
+            if matched.empty:
+                continue
+
+            field_row = matched.iloc[0]
+            tracker_field = field_row["tracker_item_field"]
+            if not tracker_field:
+                continue
+
+            field_value = self.state.resolved_default_values.get(schema_field)
+            if field_value is None:
+                field_value = self._resolve_default_field_value(schema_field, raw_value, row_id)
+            if field_value is None:
+                continue
+
+            field_info = self._schema_field_info(field_row, schema_field)
+            item.set_field_value(tracker_field, field_value, field_info)
+            applied_schema_fields.add(schema_field)
+
     def _build_table_custom_fields(self, row: pd.Series) -> list[TableFieldValue]:
         """현재 행에서 TableField 값들을 모아 custom field payload로 만든다."""
         custom_fields: list[TableFieldValue] = []
@@ -1002,6 +1262,7 @@ class CodebeamerUploadWizard:
         """단일 행에서 순수 item payload만 계산한다."""
         item = TrackerItemBase()
         item.name = str(row.get("upload_name", ""))
+        applied_schema_fields: set[str] = set()
 
         for df_col, schema_field in self.state.selected_mapping.items():
             matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
@@ -1039,6 +1300,13 @@ class CodebeamerUploadWizard:
 
             field_info = self._schema_field_info(field_row, schema_field)
             item.set_field_value(tracker_field, field_value, field_info)
+            applied_schema_fields.add(schema_field)
+
+        self._apply_default_field_values(
+            item,
+            row_id=row_id,
+            applied_schema_fields=applied_schema_fields,
+        )
 
         payload = item.create_new_item_payload()
         table_custom_fields = self._build_table_custom_fields(row)
@@ -1292,6 +1560,14 @@ class CodebeamerUploadWizard:
         if self.state.option_maps is not None:
             with open(out / "option_maps.json", "w", encoding="utf-8") as file:
                 json.dump(self.state.option_maps, file, ensure_ascii=False, indent=2)
+
+        if self.state.selected_default_values:
+            with open(out / "selected_default_values.json", "w", encoding="utf-8") as file:
+                json.dump(self.state.selected_default_values, file, ensure_ascii=False, indent=2)
+
+        if self.state.resolved_default_values:
+            with open(out / "resolved_default_values.json", "w", encoding="utf-8") as file:
+                json.dump(self.state.resolved_default_values, file, ensure_ascii=False, indent=2)
 
         if isinstance(self.state.payload_df, pd.DataFrame) and not self.state.payload_df.empty:
             with open(out / "payload_preview.jsonl", "w", encoding="utf-8") as file:

@@ -677,6 +677,43 @@ class MappingService:
             if schema_field in multiple_value_fields
         ]
 
+    def get_default_value_candidates(self, schema_df: pd.DataFrame) -> list[dict[str, Any]]:
+        """공통 기본값으로 선택할 수 있는 단일 static option 필드 목록을 만든다."""
+        if schema_df.empty:
+            return []
+
+        option_maps = self.build_option_maps_from_schema(schema_df)
+        candidates: list[dict[str, Any]] = []
+
+        for _, row in schema_df.iterrows():
+            field_name = str(row.get("field_name") or "").strip()
+            if not field_name:
+                continue
+            if self._is_truthy_flag(row.get("multiple_values")):
+                continue
+
+            option_info = option_maps.get(field_name)
+            if not option_info or option_info.get("kind") != OptionMapKind.STATIC_OPTIONS.value:
+                continue
+
+            option_names = [
+                str(option.get("name")).strip()
+                for option in option_info.get("options") or []
+                if option.get("name")
+            ]
+            if not option_names:
+                continue
+
+            candidates.append({
+                "field_name": field_name,
+                "field_type": row.get("field_type"),
+                "tracker_item_field": row.get("tracker_item_field"),
+                "mandatory": bool(row.get("mandatory", False)),
+                "options": option_names,
+            })
+
+        return candidates
+
     @staticmethod
     def build_option_name_map(options: list[dict]) -> dict:
         """option 이름으로 빠르게 찾을 수 있는 사전을 만든다."""
@@ -854,6 +891,7 @@ class MappingService:
         row_id: Any = None,
         raw_value: Any = None,
         error: str | None = None,
+        value_source: str = "mapping",
     ) -> dict[str, Any]:
         """검증 결과 한 행에 공통으로 넣을 설명 정보를 만든다."""
         return {
@@ -872,6 +910,42 @@ class MappingService:
             "preconstruction_detail": option_info.get("preconstruction_detail"),
             "payload_target_kind": option_info.get("payload_target_kind"),
             "error": error,
+            "value_source": value_source,
+        }
+
+    @staticmethod
+    def resolve_static_option_value(raw_value: Any, option_info: dict[str, Any]) -> Any:
+        """schema option 이름을 실제 reference payload 값으로 바꾼다."""
+        if raw_value is None or str(raw_value).strip() == "":
+            return None
+
+        name_map = option_info["name_map"]
+        reference_type = option_info.get("reference_type")
+        multiple_values = option_info.get("multiple_values", False)
+
+        if multiple_values and isinstance(raw_value, list):
+            resolved_list = []
+            for item in raw_value:
+                if item is None or str(item).strip() == "":
+                    continue
+                key = str(item).strip()
+                option = name_map.get(key)
+                if option:
+                    resolved_list.append({
+                        "id": option.get("id"),
+                        "name": option.get("name"),
+                        "type": reference_type or ReferenceType.CHOICE_OPTION.value,
+                    })
+            return resolved_list or None
+
+        key = str(raw_value).strip()
+        option = name_map.get(key)
+        if not option:
+            return None
+        return {
+            "id": option.get("id"),
+            "name": option.get("name"),
+            "type": reference_type or ReferenceType.CHOICE_OPTION.value,
         }
 
     def check_option_alignment(
@@ -1094,10 +1168,6 @@ class MappingService:
                 work[f"{df_col}__resolved"] = [None] * len(work)
                 continue
 
-            name_map = option_info["name_map"]
-            reference_type = option_info.get("reference_type")
-            multiple_values = option_info.get("multiple_values", False)
-
             resolved_values = []
             for _, row in work.iterrows():
                 raw_value = row[df_col]
@@ -1105,32 +1175,7 @@ class MappingService:
                     resolved_values.append(None)
                     continue
 
-                if multiple_values and isinstance(raw_value, list):
-                    resolved_list = []
-                    for val in raw_value:
-                        if not val:
-                            continue
-                        key = str(val).strip()
-                        opt = name_map.get(key)
-                        if opt:
-                            resolved_list.append({
-                                "id": opt.get("id"),
-                                "name": opt.get("name"),
-                                "type": reference_type or ReferenceType.CHOICE_OPTION.value,
-                            })
-
-                    resolved_values.append(resolved_list if resolved_list else None)
-                else:
-                    key = str(raw_value).strip()
-                    opt = name_map.get(key)
-                    if not opt:
-                        resolved_values.append(None)
-                        continue
-                    resolved_values.append({
-                        "id": opt.get("id"),
-                        "name": opt.get("name"),
-                        "type": reference_type or ReferenceType.CHOICE_OPTION.value,
-                    })
+                resolved_values.append(self.resolve_static_option_value(raw_value, option_info))
 
             work[f"{df_col}__resolved"] = resolved_values
 

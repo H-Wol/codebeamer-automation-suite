@@ -518,10 +518,16 @@ class MainWindow:
                     mapping_context.upload_columns,
                     mapping_context.schema_df,
                     mapping_context.selected_mapping,
+                    mapping_context.default_value_candidates,
+                    mapping_context.selected_default_values,
                 )
                 self._show_page(self.mapping_page)
 
-            def _validate_mapping(self, selected_mapping: dict[str, str]) -> None:
+            def _validate_mapping(
+                self,
+                selected_mapping: dict[str, str],
+                selected_default_values: dict[str, str],
+            ) -> None:
                 if self.session_state.mapping_context is None:
                     raise ValueError("매핑 컨텍스트가 준비되지 않았습니다.")
                 validation_context = self._run_with_busy(
@@ -529,6 +535,7 @@ class MainWindow:
                     self.pipeline_service.validate_mapping,
                     self.session_state.mapping_context,
                     selected_mapping,
+                    selected_default_values,
                 )
                 self.session_state.validation_context = validation_context
                 self.validation_page.set_results(

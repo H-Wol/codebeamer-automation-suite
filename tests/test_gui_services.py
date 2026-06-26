@@ -95,6 +95,18 @@ class FakeClient:
                 },
                 {
                     "id": 2,
+                    "name": "Status",
+                    "type": "OptionChoiceField",
+                    "trackerItemField": "status",
+                    "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+                    "multipleValues": False,
+                    "options": [
+                        {"id": 201, "name": "Open", "type": "ChoiceOptionReference"},
+                        {"id": 202, "name": "Review", "type": "ChoiceOptionReference"},
+                    ],
+                },
+                {
+                    "id": 3,
                     "name": "담당자",
                     "type": "TextField",
                     "trackerItemField": None,
@@ -102,7 +114,7 @@ class FakeClient:
                     "multipleValues": False,
                 },
                 {
-                    "id": 3,
+                    "id": 4,
                     "name": "id",
                     "type": "TextField",
                     "trackerItemField": "id",
@@ -110,7 +122,7 @@ class FakeClient:
                     "multipleValues": False,
                 },
                 {
-                    "id": 4,
+                    "id": 5,
                     "name": "parent",
                     "type": "TextField",
                     "trackerItemField": "parent",
@@ -118,7 +130,7 @@ class FakeClient:
                     "multipleValues": False,
                 },
                 {
-                    "id": 5,
+                    "id": 6,
                     "name": "테이블필드",
                     "type": "TableField",
                     "trackerItemField": None,
@@ -232,6 +244,11 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             self.assertEqual(mapping_context.selected_mapping["Summary"], "Summary")
             self.assertEqual(mapping_context.selected_mapping["담당자"], "담당자")
             self.assertEqual(mapping_context.selected_mapping["테이블필드.컬럼A"], "테이블필드")
+            self.assertEqual(
+                [candidate.schema_field for candidate in mapping_context.default_value_candidates],
+                ["Status"],
+            )
+            self.assertEqual(mapping_context.default_value_candidates[0].options, ["Open", "Review"])
 
     def test_build_user_issue_df_keeps_only_user_visible_issues(self) -> None:
         service = GuiUploadPipelineService(client_factory=FakeClient)
@@ -317,6 +334,7 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             validation_context = service.validate_mapping(
                 mapping_context,
                 {"Summary": "Summary"},
+                {"Status": "Open"},
             )
 
             self.assertFalse(validation_context.has_blocking_issues)
@@ -324,4 +342,8 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             self.assertEqual(
                 list(mapping_context.wizard.state.payload_df["payload_status"]),
                 [PayloadStatus.READY.value],
+            )
+            self.assertEqual(
+                mapping_context.wizard.state.payload_df.iloc[0]["payload_json"]["status"]["name"],
+                "Open",
             )

@@ -91,10 +91,14 @@ def prepare_upload_dataframe(
 def run_validation_pipeline(
     wizard: CodebeamerUploadWizard,
     selected_mapping: dict[str, str],
+    selected_default_values: dict[str, Any] | None = None,
 ) -> ValidationPreparation:
     """CLI와 GUI가 공통으로 쓰는 검증 및 payload 생성 시퀀스다."""
     comparison_df = wizard.load_schema_and_compare(selected_mapping)
-    selected_option_mapping, option_check_df = wizard.process_option_mapping(selected_mapping)
+    selected_option_mapping, option_check_df = wizard.process_option_mapping(
+        selected_mapping,
+        selected_default_values=selected_default_values,
+    )
     payload_df = wizard.build_payloads(force=True)
     return ValidationPreparation(
         comparison_df=comparison_df,
@@ -102,4 +106,3 @@ def run_validation_pipeline(
         option_check_df=option_check_df,
         payload_df=payload_df,
     )
-

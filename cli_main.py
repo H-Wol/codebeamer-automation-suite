@@ -130,6 +130,35 @@ def _print_option_check_summary(option_check_df):
     return False
 
 
+def _prompt_default_field_values(mapper: MappingService, schema_df) -> dict[str, str]:
+    """공통 기본값으로 쓸 static option 필드를 사용자에게 선택받는다."""
+    candidates = mapper.get_default_value_candidates(schema_df)
+    if not candidates:
+        return {}
+
+    print("\n[공통 기본값 후보]")
+    print("행 값이 있으면 행 값이 우선하고, 비어 있으면 아래 기본값을 사용합니다.")
+    for candidate in candidates:
+        print(f"- {candidate['field_name']}: {', '.join(candidate['options'])}")
+
+    if not confirm("공통 기본값을 지정할까요?", default=False):
+        return {}
+
+    selected_defaults: dict[str, str] = {}
+    for candidate in candidates:
+        options = ["설정 안 함"] + list(candidate["options"])
+        selected_index = choose_one(
+            f"필드 '{candidate['field_name']}' 기본값 선택",
+            options,
+            default_index=0,
+        )
+        if selected_index == 0:
+            continue
+        selected_defaults[candidate["field_name"]] = options[selected_index]
+
+    return selected_defaults
+
+
 def main():
     """프로젝트 선택부터 업로드 실행까지 전체 CLI 흐름을 실행한다."""
     cfg = load_config()
@@ -213,7 +242,12 @@ def main():
     for col in wizard.state.upload_df.columns:
         print("-", col)
 
-    validation_result = run_validation_pipeline(wizard, selected_mapping)
+    selected_default_values = _prompt_default_field_values(wizard.mapper, schema_df)
+    validation_result = run_validation_pipeline(
+        wizard,
+        selected_mapping,
+        selected_default_values=selected_default_values,
+    )
     comparison_df = validation_result.comparison_df
     print("\n[Schema Comparison]")
     print(comparison_df[["df_column", "selected_schema_field", "status"]])
