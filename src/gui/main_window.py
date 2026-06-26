@@ -541,6 +541,7 @@ class MainWindow:
                 self.validation_page.set_results(
                     validation_context.issue_df,
                     validation_context.has_blocking_issues,
+                    validation_context.summary_stats,
                 )
 
             def _start_upload(self) -> None:

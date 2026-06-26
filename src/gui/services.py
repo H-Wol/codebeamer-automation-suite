@@ -204,6 +204,7 @@ class ValidationContext:
     converted_upload_df: pd.DataFrame
     issue_df: pd.DataFrame
     has_blocking_issues: bool
+    summary_stats: dict[str, int]
 
 
 class GuiUploadPipelineService:
@@ -394,7 +395,18 @@ class GuiUploadPipelineService:
         if not payload_df.empty and (payload_df["payload_status"] != PayloadStatus.READY.value).any():
             has_blocking = True
 
-        issue_df = self._build_user_issue_df(comparison_df, option_check_df, payload_df)
+        row_context_df = wizard.state.converted_upload_df
+        if row_context_df is None or row_context_df.empty:
+            row_context_df = wizard.state.upload_df
+
+        issue_df = self._build_user_issue_df(
+            comparison_df,
+            option_check_df,
+            payload_df,
+            row_context_df=row_context_df,
+            selected_default_values=normalized_default_values,
+        )
+        summary_stats = self._build_summary_stats(issue_df, row_context_df)
         if not issue_df.empty and issue_df["severity"].eq("오류").any():
             has_blocking = True
 
@@ -404,14 +416,128 @@ class GuiUploadPipelineService:
             converted_upload_df=wizard.state.converted_upload_df,
             issue_df=issue_df,
             has_blocking_issues=has_blocking,
+            summary_stats=summary_stats,
         )
 
     @staticmethod
-    def _message_from_option_status(row: pd.Series) -> tuple[str, str]:
+    def _display_text(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, float) and pd.isna(value):
+            return ""
+        if isinstance(value, list):
+            return ", ".join(part for part in (GuiUploadPipelineService._display_text(item) for item in value) if part)
+        if isinstance(value, dict):
+            if value.get("name") is not None:
+                return str(value.get("name")).strip()
+            return str(value).strip()
+        text = str(value).strip()
+        return "" if text.lower() == "nan" else text
+
+    @staticmethod
+    def _to_row_key(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, float):
+            if pd.isna(value):
+                return ""
+            if value.is_integer():
+                return str(int(value))
+            return str(value)
+        if isinstance(value, int):
+            return str(value)
+
+        text = str(value).strip()
+        if not text or text.lower() == "nan":
+            return ""
+        try:
+            numeric = float(text)
+        except ValueError:
+            return text
+        if numeric.is_integer():
+            return str(int(numeric))
+        return text
+
+    @classmethod
+    def _build_row_label(cls, row: pd.Series) -> str:
+        start_row = cls._to_row_key(row.get("_start_excel_row"))
+        end_row = cls._to_row_key(row.get("_end_excel_row"))
+        excel_row = cls._to_row_key(row.get("_excel_row"))
+        row_key = cls._to_row_key(row.get("_row_id"))
+
+        if start_row and end_row and start_row != end_row:
+            return f"Excel {start_row}-{end_row}행"
+        if start_row:
+            return f"Excel {start_row}행"
+        if excel_row:
+            return f"Excel {excel_row}행"
+        if row_key:
+            return f"행 {row_key}"
+        return ""
+
+    @classmethod
+    def _build_row_context_map(cls, row_context_df: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
+        if row_context_df is None or row_context_df.empty:
+            return {}
+
+        row_context_map: dict[str, dict[str, Any]] = {}
+        for _, row in row_context_df.iterrows():
+            row_key = cls._to_row_key(row.get("_row_id"))
+            if not row_key:
+                continue
+
+            item_name = cls._display_text(row.get("upload_name"))
+            if not item_name:
+                for fallback_column in ("Summary", "summary", "요약", "name"):
+                    if fallback_column in row.index:
+                        item_name = cls._display_text(row.get(fallback_column))
+                    if item_name:
+                        break
+
+            row_context_map[row_key] = {
+                "row_id": row_key,
+                "row_label": cls._build_row_label(row),
+                "item_name": item_name,
+                "values": row.to_dict(),
+            }
+
+        return row_context_map
+
+    @classmethod
+    def _row_context(
+        cls,
+        row_key: str,
+        row_context_map: dict[str, dict[str, Any]],
+        *,
+        fallback_item_name: str = "",
+    ) -> dict[str, str]:
+        context = row_context_map.get(row_key, {})
+        return {
+            "row_id": row_key,
+            "row_label": str(context.get("row_label") or (f"행 {row_key}" if row_key else "")),
+            "item_name": str(context.get("item_name") or fallback_item_name or ""),
+        }
+
+    @classmethod
+    def _raw_value_from_row_context(
+        cls,
+        row_key: str,
+        column_name: str,
+        row_context_map: dict[str, dict[str, Any]],
+    ) -> str:
+        if not row_key or not column_name:
+            return ""
+        context = row_context_map.get(row_key, {})
+        values = context.get("values") if isinstance(context, dict) else None
+        if not isinstance(values, dict):
+            return ""
+        return cls._display_text(values.get(column_name))
+
+    @staticmethod
+    def _message_from_option_status(row: pd.Series) -> tuple[str, str, str]:
         status = str(row.get("status") or "")
         field_name = str(row.get("schema_field") or "")
         df_column = str(row.get("df_column") or "")
-        value = row.get("raw_value")
         is_default_value = (
             str(row.get("value_source") or "") == "default"
             or df_column == DEFAULT_VALUE_COLUMN_LABEL
@@ -419,29 +545,93 @@ class GuiUploadPipelineService:
 
         if status == OptionCheckStatus.FIELD_UNSUPPORTED.value:
             if is_default_value:
-                return "오류", f"이 필드는 공통 기본값으로 바로 넣을 수 없습니다. 필드: {field_name}"
-            return "오류", f"현재 GUI에서 지원하지 않는 필드입니다. 필드: {field_name}"
+                return (
+                    "오류",
+                    f"{field_name} 필드는 공통 기본값으로 바로 넣을 수 없습니다.",
+                    "기본값을 비우거나, Excel 컬럼으로 직접 매핑할 수 있는지 확인하세요.",
+                )
+            return (
+                "오류",
+                f"{field_name} 필드는 현재 GUI에서 지원하지 않습니다.",
+                "이 컬럼 사용을 끄거나 지원되는 다른 필드로 다시 매핑하세요.",
+            )
         if status == OptionCheckStatus.LOOKUP_REQUIRED.value:
             if is_default_value:
-                return "오류", f"기본값으로 쓰려면 추가 조회 로직이 필요합니다. 필드: {field_name}"
-            return "오류", f"추가 조회 로직이 필요한 필드입니다. 필드: {field_name}"
+                return (
+                    "오류",
+                    f"{field_name} 기본값은 추가 조회가 필요해서 바로 넣을 수 없습니다.",
+                    "기본값을 비우고 행별 값으로 관리하거나, 지원 로직을 추가해야 합니다.",
+                )
+            return (
+                "오류",
+                f"{field_name} 값은 업로드 전에 추가 조회가 필요합니다.",
+                "이 컬럼 사용을 끄거나, 지원되는 필드로 다시 매핑하세요.",
+            )
         if status == OptionCheckStatus.OPTION_NOT_FOUND.value:
             if is_default_value:
-                return "오류", f"선택한 기본값이 스키마 option에 없습니다. 필드: {field_name}"
-            return "오류", f"선택값을 찾을 수 없습니다. 컬럼: {df_column}"
+                return (
+                    "오류",
+                    f"{field_name} 기본값이 현재 트래커 옵션 목록에 없습니다.",
+                    "기본값을 다시 선택하고, 트래커 옵션 이름과 정확히 일치하는지 확인하세요.",
+                )
+            return (
+                "오류",
+                f"{df_column} 입력값이 현재 트래커 옵션 목록에 없습니다.",
+                "Excel 값을 트래커 옵션 이름과 동일하게 수정하세요.",
+            )
         if status == OptionCheckStatus.DIRECT_PARSE_FAILED.value:
             if is_default_value:
-                return "오류", f"선택한 기본값을 아이디 형식으로 해석할 수 없습니다. 필드: {field_name}"
-            return "오류", f"아이디 형식으로 해석할 수 없습니다. 컬럼: {df_column}"
+                return (
+                    "오류",
+                    f"{field_name} 기본값을 아이디 형식으로 해석하지 못했습니다.",
+                    "숫자 ID처럼 허용되는 형식으로 값을 다시 지정하세요.",
+                )
+            return (
+                "오류",
+                f"{df_column} 값을 아이디 형식으로 해석하지 못했습니다.",
+                "셀 값을 숫자 ID처럼 허용되는 형식으로 수정하세요.",
+            )
+        if status == OptionCheckStatus.DF_COLUMN_MISSING.value:
+            return (
+                "오류",
+                f"매핑된 Excel 컬럼 {df_column} 을(를) 찾을 수 없습니다.",
+                "파일을 다시 불러오고, 매핑 화면에서 컬럼 선택을 다시 확인하세요.",
+            )
         if status == "SCHEMA_FIELD_MISSING":
-            return "오류", str(row.get("error") or "선택한 기본값 필드를 현재 스키마에서 찾을 수 없습니다.")
+            return (
+                "오류",
+                str(row.get("error") or "선택한 기본값 필드를 현재 스키마에서 찾을 수 없습니다."),
+                "매핑 화면으로 돌아가 기본값 필드를 다시 선택하세요.",
+            )
         if status == "OPTION_MAP_MISSING":
-            return "오류", str(row.get("error") or "기본값 검증에 필요한 option map을 만들 수 없습니다.")
+            return (
+                "오류",
+                str(row.get("error") or "기본값 검증에 필요한 option map을 만들 수 없습니다."),
+                "트래커 스키마를 다시 불러오거나 해당 기본값을 비운 뒤 다시 검증하세요.",
+            )
+        if status == OptionCheckStatus.OPTION_SOURCE_UNAVAILABLE.value:
+            return (
+                "오류",
+                f"{field_name} 필드의 값을 확인할 준비가 아직 되어 있지 않습니다.",
+                "이 컬럼 사용을 끄거나 지원되는 다른 필드로 다시 매핑하세요.",
+            )
         if status.endswith(("USER_LOOKUP_FAILED", "USER_LOOKUP_AMBIGUOUS", "USER_NOT_FOUND")):
-            return "오류", f"사용자를 찾지 못했습니다. 컬럼: {df_column}"
+            return (
+                "오류",
+                f"{df_column} 값으로 사용자를 찾지 못했습니다.",
+                "사용자 이름, 이메일, 아이디를 확인하고 프로젝트 멤버인지 점검하세요.",
+            )
         if status.endswith(("MEMBER_LOOKUP_FAILED", "MEMBER_LOOKUP_AMBIGUOUS", "MEMBER_NOT_FOUND")):
-            return "오류", f"담당자/역할/그룹을 찾지 못했습니다. 컬럼: {df_column}"
-        return "안내", str(row.get("error") or row.get("detail") or status or value or "")
+            return (
+                "오류",
+                f"{df_column} 값으로 담당자, 역할, 그룹을 찾지 못했습니다.",
+                "입력값을 확인하고, 대상 사용자가 프로젝트 역할 또는 그룹에 포함되는지 점검하세요.",
+            )
+        return (
+            "안내",
+            str(row.get("error") or row.get("detail") or status or ""),
+            "내용을 확인한 뒤 필요하면 매핑이나 입력값을 조정하세요.",
+        )
 
     @staticmethod
     def _parse_payload_error(payload_error: str) -> dict[str, str]:
@@ -483,7 +673,7 @@ class GuiUploadPipelineService:
         return parsed
 
     @classmethod
-    def _message_from_payload_error(cls, row: pd.Series) -> tuple[str, str, str]:
+    def _message_from_payload_error(cls, row: pd.Series) -> tuple[str, str, str, str]:
         payload_error = str(row.get("payload_error") or "").strip()
         parsed = cls._parse_payload_error(payload_error)
         code = parsed["code"]
@@ -492,17 +682,102 @@ class GuiUploadPipelineService:
         detail = parsed["detail"]
 
         if code == "FIELD_UNSUPPORTED":
-            return column, field, "현재 GUI에서 지원하지 않는 필드가 포함되어 있습니다."
+            return (
+                column,
+                field,
+                "현재 GUI에서 지원하지 않는 필드가 포함되어 있습니다.",
+                "매핑에서 해당 컬럼 사용을 끄거나 다른 필드로 바꾼 뒤 다시 검증하세요.",
+            )
         if code == "LOOKUP_REQUIRED":
-            return column, field, "필요한 값을 찾지 못해 업로드용 데이터를 만들 수 없습니다."
+            return (
+                column,
+                field,
+                "필요한 값을 찾지 못해 업로드용 데이터를 만들 수 없습니다.",
+                "입력값을 확인하거나, 지원되는 필드와 값으로 수정한 뒤 다시 검증하세요.",
+            )
         if code == "DIRECT_PARSE_FAILED":
-            return column, field, "입력값을 아이디 형식으로 해석하지 못했습니다."
+            return (
+                column,
+                field,
+                "입력값을 아이디 형식으로 해석하지 못했습니다.",
+                "숫자 ID처럼 허용되는 형식으로 값을 수정한 뒤 다시 검증하세요.",
+            )
         if code == "OPTION_RESOLUTION_FAILED":
-            return column, field, "선택값을 업로드 형식으로 변환하지 못했습니다."
+            return (
+                column,
+                field,
+                "선택값을 업로드 형식으로 변환하지 못했습니다.",
+                "Excel 값이나 기본값이 트래커 옵션 이름과 정확히 일치하는지 확인하세요.",
+            )
 
         if detail:
-            return column, field, detail
-        return column, field, "업로드용 데이터를 만들 수 없습니다."
+            return (
+                column,
+                field,
+                detail,
+                "문구를 확인하고 매핑 또는 입력값을 수정한 뒤 다시 검증하세요.",
+            )
+        return (
+            column,
+            field,
+            "업로드용 데이터를 만들 수 없습니다.",
+            "문구를 확인하고 매핑 또는 입력값을 수정한 뒤 다시 검증하세요.",
+        )
+
+    @classmethod
+    def _build_summary_stats(
+        cls,
+        issue_df: pd.DataFrame,
+        row_context_df: pd.DataFrame | None,
+    ) -> dict[str, int]:
+        total_rows = 0
+        if row_context_df is not None and not row_context_df.empty and "_row_id" in row_context_df.columns:
+            total_rows = len({
+                cls._to_row_key(value)
+                for value in row_context_df["_row_id"].tolist()
+                if cls._to_row_key(value)
+            })
+
+        if issue_df is None or issue_df.empty:
+            return {
+                "total_rows": total_rows,
+                "ready_rows": total_rows,
+                "error_rows": 0,
+                "warning_rows": 0,
+                "config_errors": 0,
+                "config_warnings": 0,
+                "error_count": 0,
+                "info_count": 0,
+            }
+
+        row_id_series = issue_df["row_id"].fillna("").astype(str).str.strip()
+        row_issue_df = issue_df[row_id_series != ""]
+        config_issue_df = issue_df[row_id_series == ""]
+
+        error_row_ids = set(
+            row_issue_df.loc[row_issue_df["severity"] == "오류", "row_id"].fillna("").astype(str).str.strip()
+        )
+        error_row_ids.discard("")
+        warning_row_ids = set(
+            row_issue_df.loc[row_issue_df["severity"] != "오류", "row_id"].fillna("").astype(str).str.strip()
+        )
+        warning_row_ids.discard("")
+        warning_row_ids -= error_row_ids
+
+        ready_rows = total_rows - len(error_row_ids) - len(warning_row_ids)
+        if ready_rows < 0:
+            ready_rows = 0
+
+        return {
+            "total_rows": total_rows,
+            "ready_rows": ready_rows,
+            "error_rows": len(error_row_ids),
+            "warning_rows": len(warning_row_ids),
+            "config_errors": int(config_issue_df["severity"].eq("오류").sum()),
+            "config_warnings": int(config_issue_df["severity"].eq("안내").sum()),
+            "error_count": int(issue_df["severity"].eq("오류").sum()),
+            "info_count": int(issue_df["severity"].eq("안내").sum()),
+        }
 
     @classmethod
     def _build_user_issue_df(
@@ -510,7 +785,23 @@ class GuiUploadPipelineService:
         comparison_df: pd.DataFrame,
         option_check_df: pd.DataFrame,
         payload_df: pd.DataFrame,
+        *,
+        row_context_df: pd.DataFrame | None = None,
+        selected_default_values: dict[str, str] | None = None,
     ) -> pd.DataFrame:
+        row_context_map = cls._build_row_context_map(row_context_df)
+        issue_columns = [
+            "severity",
+            "category",
+            "row_id",
+            "row_label",
+            "item_name",
+            "column",
+            "field",
+            "raw_value",
+            "message",
+            "action",
+        ]
         issues: list[dict[str, str]] = []
 
         if comparison_df is not None and not comparison_df.empty:
@@ -525,45 +816,78 @@ class GuiUploadPipelineService:
                     issues.append({
                         "severity": "오류",
                         "category": "매핑",
+                        "row_id": "",
+                        "row_label": "",
+                        "item_name": "",
                         "column": str(row.get("df_column") or ""),
                         "field": str(row.get("selected_schema_field") or ""),
+                        "raw_value": "",
                         "message": "선택한 필드를 현재 트래커 스키마에서 찾을 수 없습니다.",
+                        "action": "매핑 단계에서 다른 필드를 선택하거나, 해당 컬럼 사용을 끄세요.",
                     })
 
         if option_check_df is not None and not option_check_df.empty:
             for _, row in option_check_df.iterrows():
                 if cls._is_hidden_user_column(row.get("df_column")):
                     continue
-                severity, message = cls._message_from_option_status(row)
+                severity, message, action = cls._message_from_option_status(row)
                 if not message:
                     continue
                 if str(row.get("status") or "") == OptionCheckStatus.PRECONSTRUCTION_REQUIRED.value:
                     continue
+                row_key = cls._to_row_key(row.get("_row_id"))
+                row_context = cls._row_context(row_key, row_context_map)
                 issues.append({
                     "severity": severity,
                     "category": "값 검증",
+                    "row_id": row_context["row_id"],
+                    "row_label": row_context["row_label"],
+                    "item_name": row_context["item_name"],
                     "column": str(row.get("df_column") or ""),
                     "field": str(row.get("schema_field") or ""),
+                    "raw_value": cls._display_text(row.get("raw_value")),
                     "message": message,
+                    "action": action,
                 })
 
         if payload_df is not None and not payload_df.empty:
             failed_df = payload_df[payload_df["payload_status"] != PayloadStatus.READY.value]
             for _, row in failed_df.iterrows():
-                column, field, message = cls._message_from_payload_error(row)
+                column, field, message, action = cls._message_from_payload_error(row)
+                parsed = cls._parse_payload_error(str(row.get("payload_error") or ""))
+                row_key = cls._to_row_key(parsed.get("row_id") or row.get("_row_id"))
+                row_context = cls._row_context(
+                    row_key,
+                    row_context_map,
+                    fallback_item_name=cls._display_text(row.get("upload_name")),
+                )
+                raw_value = ""
+                if column == DEFAULT_VALUE_COLUMN_LABEL:
+                    raw_value = cls._display_text((selected_default_values or {}).get(field))
+                elif column:
+                    raw_value = cls._raw_value_from_row_context(row_key, column, row_context_map)
                 issues.append({
                     "severity": "오류",
                     "category": "Payload 생성",
+                    "row_id": row_context["row_id"],
+                    "row_label": row_context["row_label"],
+                    "item_name": row_context["item_name"],
                     "column": column,
                     "field": field,
+                    "raw_value": raw_value,
                     "message": message,
+                    "action": action,
                 })
 
-        issue_df = pd.DataFrame(issues)
+        issue_df = pd.DataFrame(issues, columns=issue_columns)
         if issue_df.empty:
             return issue_df
         issue_df = issue_df.drop_duplicates().reset_index(drop=True)
         severity_order = {"오류": 0, "안내": 1}
         issue_df["_sort"] = issue_df["severity"].map(severity_order).fillna(99)
-        issue_df = issue_df.sort_values(by=["_sort", "category", "column", "field"]).drop(columns=["_sort"])
+        issue_df["_config_sort"] = issue_df["row_id"].fillna("").astype(str).str.strip().ne("").astype(int)
+        issue_df["_row_order"] = pd.to_numeric(issue_df["row_id"], errors="coerce").fillna(10**9)
+        issue_df = issue_df.sort_values(
+            by=["_sort", "_config_sort", "_row_order", "category", "column", "field"]
+        ).drop(columns=["_sort", "_config_sort", "_row_order"])
         return issue_df

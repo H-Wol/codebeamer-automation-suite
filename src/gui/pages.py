@@ -901,10 +901,10 @@ def create_validation_page():
     summary_label.setObjectName("summary_label")
     layout.addWidget(summary_label)
 
-    table = QTableWidget(0, 4)
-    table.setHorizontalHeaderLabels(["구분", "컬럼", "필드", "안내"])
+    table = QTableWidget(0, 7)
+    table.setHorizontalHeaderLabels(["상태", "행", "항목", "컬럼", "입력값", "문제", "조치"])
     table.setAlternatingRowColors(True)
-    _configure_table_columns(table, [120, 220, 220, 420])
+    _configure_table_columns(table, [90, 120, 180, 160, 160, 260, 280])
     layout.addWidget(table)
 
     status_label = QLabel("")
@@ -923,25 +923,44 @@ def create_validation_page():
 
     page.has_blocking_issues = True
 
-    def set_results(issue_df, has_blocking_issues: bool) -> None:
+    def set_results(issue_df, has_blocking_issues: bool, summary_stats: dict | None = None) -> None:
         rows: list[list[str]] = []
         if issue_df is not None and not issue_df.empty:
             for _, row in issue_df.iterrows():
                 rows.append([
-                    str(row.get("category") or ""),
+                    str(row.get("severity") or ""),
+                    str(row.get("row_label") or ""),
+                    str(row.get("item_name") or ""),
                     str(row.get("column") or ""),
-                    str(row.get("field") or ""),
+                    str(row.get("raw_value") or ""),
                     str(row.get("message") or ""),
+                    str(row.get("action") or ""),
                 ])
         table.setRowCount(len(rows))
         for row_index, values in enumerate(rows):
             for col_index, value in enumerate(values):
                 table.setItem(row_index, col_index, QTableWidgetItem(value))
-        _configure_table_columns(table, [120, 220, 220, 420])
+        _configure_table_columns(table, [90, 120, 180, 160, 160, 260, 280])
 
-        error_count = 0 if issue_df is None or issue_df.empty else int(issue_df["severity"].eq("오류").sum())
-        info_count = 0 if issue_df is None or issue_df.empty else int(issue_df["severity"].eq("안내").sum())
-        summary_label.setText(f"확인할 항목 {len(rows)}건, 오류 {error_count}건, 안내 {info_count}건")
+        summary_stats = summary_stats or {}
+        total_rows = int(summary_stats.get("total_rows", 0))
+        ready_rows = int(summary_stats.get("ready_rows", 0))
+        error_rows = int(summary_stats.get("error_rows", 0))
+        warning_rows = int(summary_stats.get("warning_rows", 0))
+        config_errors = int(summary_stats.get("config_errors", 0))
+        config_warnings = int(summary_stats.get("config_warnings", 0))
+
+        summary_parts = [
+            f"전체 {total_rows}행",
+            f"바로 업로드 가능 {ready_rows}행",
+            f"수정 필요 {error_rows}행",
+            f"안내 {warning_rows}행",
+        ]
+        if config_errors:
+            summary_parts.append(f"설정 오류 {config_errors}건")
+        if config_warnings:
+            summary_parts.append(f"설정 안내 {config_warnings}건")
+        summary_label.setText(" | ".join(summary_parts))
         page.has_blocking_issues = has_blocking_issues
         next_button.setEnabled(not has_blocking_issues)
         if has_blocking_issues:
@@ -949,7 +968,7 @@ def create_validation_page():
         elif not rows:
             status_label.setText("문제가 있는 항목이 없습니다. 바로 업로드할 수 있습니다.")
         else:
-            status_label.setText("업로드 전 확인할 안내 항목만 남아 있습니다.")
+            status_label.setText("오류는 없고 업로드 전에 확인할 안내 항목만 남아 있습니다.")
 
     def _go_next():
         if page.has_blocking_issues:
