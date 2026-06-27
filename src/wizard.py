@@ -108,6 +108,20 @@ class CodebeamerUploadWizard:
         self.state.upload_result = None
         self._invalidate_payload_cache()
 
+    def prepend_root_item(self, root_name: str) -> None:
+        """현재 계층 데이터 앞에 synthetic root item을 추가한다."""
+        if self.processor is None:
+            raise ValueError("processor is required to prepend a root item.")
+        if self.state.hierarchy_df is None or self.state.hierarchy_df.empty:
+            return
+
+        rooted_hierarchy_df = self.processor.prepend_root_item(self.state.hierarchy_df, root_name)
+        self.state.hierarchy_df = rooted_hierarchy_df
+        self.state.upload_df = self.processor.build_upload_df(rooted_hierarchy_df, list_cols=self.state.list_cols)
+        self.state.converted_upload_df = None
+        self.state.upload_result = None
+        self._invalidate_payload_cache()
+
     def read_excel(self, file_path: str, sheet_name: str | int = 0, list_cols: list[str] | None = None) -> None:
         """호환용 메서드다. reader로 raw DataFrame을 만든 뒤 processor로 후처리한다."""
         if self.reader is not None:
@@ -1297,9 +1311,6 @@ class CodebeamerUploadWizard:
 
             if field_value is None:
                 continue
-
-            if tracker_field == "name" and self._has_row_value(row, "upload_name"):
-                field_value = row["upload_name"]
 
             field_info = self._schema_field_info(field_row, schema_field)
             item.set_field_value(tracker_field, field_value, field_info)

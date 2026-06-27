@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from src.hierarchy_processor import UPLOAD_NAME_STRATEGY_SUMMARY
-from src.hierarchy_processor import UPLOAD_NAME_STRATEGY_TOP_LEVEL
-
 
 USER_HIDDEN_TABLE_COLUMNS = {
     "_row_id",
@@ -16,6 +13,7 @@ USER_HIDDEN_TABLE_COLUMNS = {
     "payload_status",
     "payload_error",
     "error_response_json",
+    "_synthetic_root",
 }
 
 
@@ -30,37 +28,6 @@ def _is_hidden_user_table_column(column_name: object) -> bool:
     if "__" in text:
         return True
     return False
-
-
-UPLOAD_NAME_STRATEGY_OPTIONS = [
-    (UPLOAD_NAME_STRATEGY_SUMMARY, "Summary 컬럼 값"),
-    (UPLOAD_NAME_STRATEGY_TOP_LEVEL, "최상단 데이터(폴더)"),
-]
-
-
-def _normalize_upload_name_strategy_value(value: object) -> str:
-    text = str(value or "").strip()
-    if text == UPLOAD_NAME_STRATEGY_TOP_LEVEL:
-        return UPLOAD_NAME_STRATEGY_TOP_LEVEL
-    return UPLOAD_NAME_STRATEGY_SUMMARY
-
-
-def _configure_upload_name_strategy_combo(combo, current_value: object) -> None:
-    combo.clear()
-    normalized = _normalize_upload_name_strategy_value(current_value)
-    selected_index = 0
-
-    for index, (value, label) in enumerate(UPLOAD_NAME_STRATEGY_OPTIONS):
-        combo.addItem(label, value)
-        if value == normalized:
-            selected_index = index
-
-    combo.setCurrentIndex(selected_index)
-
-
-def _current_upload_name_strategy(combo) -> str:
-    return _normalize_upload_name_strategy_value(combo.currentData())
-
 
 def _require_qt():
     try:
@@ -173,7 +140,6 @@ def create_settings_page(
     QLineEdit = qt["QLineEdit"]
     QFrame = qt["QFrame"]
     QCheckBox = qt["QCheckBox"]
-    QComboBox = qt["QComboBox"]
     QSpinBox = qt["QSpinBox"]
     QDoubleSpinBox = qt["QDoubleSpinBox"]
     QPushButton = qt["QPushButton"]
@@ -199,11 +165,8 @@ def create_settings_page(
     header_row.setMinimum(1)
     header_row.setValue(initial_settings.excel_header_row)
     summary_column = QLineEdit(initial_settings.summary_column)
-    upload_name_strategy = QComboBox()
-    _configure_upload_name_strategy_combo(
-        upload_name_strategy,
-        getattr(initial_settings, "upload_name_strategy", UPLOAD_NAME_STRATEGY_SUMMARY),
-    )
+    create_file_root_item = QCheckBox("파일명으로 최상단 폴더 생성")
+    create_file_root_item.setChecked(getattr(initial_settings, "create_file_root_item", False))
     sheet_name = QLineEdit(initial_settings.excel_sheet_name)
     retry_delay = QDoubleSpinBox()
     retry_delay.setMinimum(0.0)
@@ -257,7 +220,6 @@ def create_settings_page(
     for field_widget in (
         header_row,
         summary_column,
-        upload_name_strategy,
         sheet_name,
         retry_delay,
         retry_count,
@@ -267,7 +229,7 @@ def create_settings_page(
 
     advanced_form.addRow("Header Row", header_row)
     advanced_form.addRow("Summary Column", summary_column)
-    advanced_form.addRow("업로드 이름 기준", upload_name_strategy)
+    advanced_form.addRow("", create_file_root_item)
     advanced_form.addRow("Sheet Name", sheet_name)
     advanced_form.addRow("Retry Delay", retry_delay)
     advanced_form.addRow("Max Retries", retry_count)
@@ -310,7 +272,7 @@ def create_settings_page(
             default_tracker_id=initial_settings.default_tracker_id,
             excel_header_row=header_row.value(),
             summary_column=summary_column.text().strip() or "Summary",
-            upload_name_strategy=_current_upload_name_strategy(upload_name_strategy),
+            create_file_root_item=create_file_root_item.isChecked(),
             excel_sheet_name=sheet_name.text().strip() or "0",
             rate_limit_retry_delay_seconds=retry_delay.value(),
             rate_limit_max_retries=retry_count.value(),
@@ -333,7 +295,7 @@ def create_settings_page(
         save_password.setChecked(loaded.save_password)
         header_row.setValue(loaded.excel_header_row)
         summary_column.setText(loaded.summary_column)
-        _configure_upload_name_strategy_combo(upload_name_strategy, loaded.upload_name_strategy)
+        create_file_root_item.setChecked(loaded.create_file_root_item)
         sheet_name.setText(loaded.excel_sheet_name)
         retry_delay.setValue(loaded.rate_limit_retry_delay_seconds)
         retry_count.setValue(loaded.rate_limit_max_retries)
@@ -536,6 +498,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     QLabel = qt["QLabel"]
     QLineEdit = qt["QLineEdit"]
     QPushButton = qt["QPushButton"]
+    QCheckBox = qt["QCheckBox"]
     QSpinBox = qt["QSpinBox"]
     QComboBox = qt["QComboBox"]
     QTableWidget = qt["QTableWidget"]
@@ -567,22 +530,18 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     summary_column.setEditable(True)
     summary_column.addItems(["Summary", "요약"])
     summary_column.setCurrentText(initial_settings.summary_column)
-    upload_name_strategy = QComboBox()
-    _configure_upload_name_strategy_combo(
-        upload_name_strategy,
-        getattr(initial_settings, "upload_name_strategy", UPLOAD_NAME_STRATEGY_SUMMARY),
-    )
+    create_file_root_item = QCheckBox("파일명으로 최상단 폴더 생성")
+    create_file_root_item.setChecked(getattr(initial_settings, "create_file_root_item", False))
     _configure_form_field(file_path)
     _configure_form_field(file_row_widget, minimum_width=320)
     _configure_form_field(sheet_name)
     _configure_form_field(header_row)
     _configure_form_field(summary_column)
-    _configure_form_field(upload_name_strategy)
     form.addRow("Excel 파일", file_row_widget)
     form.addRow("시트", sheet_name)
     form.addRow("헤더 행", header_row)
     form.addRow("Summary 컬럼", summary_column)
-    form.addRow("업로드 이름 기준", upload_name_strategy)
+    form.addRow("", create_file_root_item)
     layout.addLayout(form)
 
     preview_label = QLabel("미리보기")
@@ -626,7 +585,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
             "sheet_name": sheet_name.currentText().strip() or "0",
             "header_row": header_row.value(),
             "summary_column": summary_column.currentText().strip() or "Summary",
-            "upload_name_strategy": _current_upload_name_strategy(upload_name_strategy),
+            "create_file_root_item": create_file_root_item.isChecked(),
         }
 
     def _set_preview(headers: list[str], rows: list[list[str]], suggested_summary: str) -> None:
@@ -738,6 +697,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     sheet_name.currentTextChanged.connect(lambda _: _mark_preview_dirty())
     header_row.valueChanged.connect(lambda _: _mark_preview_dirty())
     summary_column.currentTextChanged.connect(lambda _: _mark_preview_dirty())
+    create_file_root_item.toggled.connect(lambda _: on_file_state_changed(_collect_state()))
     previous_button.clicked.connect(_go_previous)
     next_button.clicked.connect(_go_next)
 

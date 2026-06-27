@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -8,7 +9,6 @@ import pandas as pd
 from src.codebeamer_client import CodebeamerClient
 from src.excel_reader import ExcelReader
 from src.hierarchy_processor import HierarchyProcessor
-from src.hierarchy_processor import UPLOAD_NAME_STRATEGY_SUMMARY
 from src.models import MappingStatus
 from src.mapping_service import MappingService
 from src.models import OptionCheckStatus
@@ -168,6 +168,7 @@ GUI_EXCLUDED_MAPPING_COLUMNS = {
     "_start_excel_row",
     "_end_excel_row",
     "_excel_row",
+    "_synthetic_root",
 }
 GUI_EXCLUDED_TARGET_FIELDS = {"id", "parent"}
 DEFAULT_VALUE_COLUMN_LABEL = "(기본값)"
@@ -242,7 +243,6 @@ class GuiUploadPipelineService:
         processor = HierarchyProcessor(
             header_row=settings.excel_header_row,
             summary_col=settings.summary_column,
-            upload_name_strategy=getattr(settings, "upload_name_strategy", UPLOAD_NAME_STRATEGY_SUMMARY),
             logger=self.logger,
         )
         return CodebeamerUploadWizard(
@@ -310,6 +310,13 @@ class GuiUploadPipelineService:
             ))
         return candidates
 
+    @staticmethod
+    def _root_item_name(file_path: str, create_root_item: bool) -> str | None:
+        if not create_root_item:
+            return None
+        name = Path(file_path).stem.strip()
+        return name or None
+
     def prepare_mapping_context(self, settings, file_state: dict[str, Any]) -> MappingContext:
         wizard = self.create_wizard(settings)
         wizard.select_project(int(settings.default_project_id))
@@ -334,9 +341,13 @@ class GuiUploadPipelineService:
             sheet_name=file_state["sheet_name"],
             header_row=int(file_state["header_row"]),
             summary_col=str(file_state["summary_column"]),
-            upload_name_strategy=str(
-                file_state.get("upload_name_strategy")
-                or getattr(settings, "upload_name_strategy", UPLOAD_NAME_STRATEGY_SUMMARY)
+            root_item_name=self._root_item_name(
+                str(file_state["file_path"]),
+                bool(
+                    file_state.get("create_file_root_item")
+                    if "create_file_root_item" in file_state
+                    else getattr(settings, "create_file_root_item", False)
+                ),
             ),
             selected_mapping=raw_mapping,
             schema=schema,
@@ -467,6 +478,8 @@ class GuiUploadPipelineService:
 
     @classmethod
     def _build_row_label(cls, row: pd.Series) -> str:
+        if bool(row.get("_synthetic_root")):
+            return "루트 폴더"
         start_row = cls._to_row_key(row.get("_start_excel_row"))
         end_row = cls._to_row_key(row.get("_end_excel_row"))
         excel_row = cls._to_row_key(row.get("_excel_row"))

@@ -9,7 +9,6 @@ from typing import Any
 import pandas as pd
 
 from src.hierarchy_processor import HierarchyProcessor
-from src.hierarchy_processor import UPLOAD_NAME_STRATEGY_TOP_LEVEL
 from src.mapping_service import MappingService
 from src.models import PayloadStatus
 from src.models import UploadStatus
@@ -85,11 +84,8 @@ class HierarchyProcessorSplitTest(unittest.TestCase):
         self.assertEqual(int(hierarchy_df.iloc[1]["parent_row_id"]), 0)
         self.assertEqual(list(upload_df["upload_name"]), ["Parent", "Child"])
 
-    def test_processor_can_use_top_level_item_name_for_children(self) -> None:
-        processor = HierarchyProcessor(
-            summary_col="요약",
-            upload_name_strategy=UPLOAD_NAME_STRATEGY_TOP_LEVEL,
-        )
+    def test_processor_can_prepend_file_root_item(self) -> None:
+        processor = HierarchyProcessor(summary_col="요약")
         raw_df = pd.DataFrame([
             {"요약": "Parent", "_excel_row": 2, "_summary_indent": 0},
             {"요약": "Child", "_excel_row": 3, "_summary_indent": 1},
@@ -98,9 +94,14 @@ class HierarchyProcessorSplitTest(unittest.TestCase):
 
         merged_df = processor.merge_multiline_records(raw_df, list_cols=[])
         hierarchy_df = processor.add_hierarchy_by_indent(merged_df)
-        upload_df = processor.build_upload_df(hierarchy_df, list_cols=[])
+        rooted_df = processor.prepend_root_item(hierarchy_df, "sample")
+        upload_df = processor.build_upload_df(rooted_df, list_cols=[])
 
-        self.assertEqual(list(upload_df["upload_name"]), ["Parent", "Parent", "Parent"])
+        self.assertEqual(list(upload_df["upload_name"]), ["sample", "Parent", "Child", "Grandchild"])
+        self.assertTrue(bool(rooted_df.iloc[0]["_synthetic_root"]))
+        self.assertEqual(rooted_df.iloc[1]["parent_row_id"], 0)
+        self.assertEqual(rooted_df.iloc[2]["parent_row_id"], 1)
+        self.assertEqual(rooted_df.iloc[3]["parent_row_id"], 2)
 
 
 class PayloadCacheWizardTest(unittest.TestCase):
@@ -173,11 +174,8 @@ class PayloadCacheWizardTest(unittest.TestCase):
             self.assertEqual(saved_payload["payload_status"], PayloadStatus.READY.value)
             self.assertEqual(saved_payload["payload_json"]["name"], "REQ-001")
 
-    def test_payload_name_follows_upload_name_strategy(self) -> None:
-        processor = HierarchyProcessor(
-            summary_col="요약",
-            upload_name_strategy=UPLOAD_NAME_STRATEGY_TOP_LEVEL,
-        )
+    def test_prepend_root_item_uploads_file_root_before_existing_hierarchy(self) -> None:
+        processor = HierarchyProcessor(summary_col="요약")
         wizard = CountingWizard(
             client=self.client,
             processor=processor,
@@ -190,13 +188,21 @@ class PayloadCacheWizardTest(unittest.TestCase):
             {"요약": "Child", "_excel_row": 3, "_summary_indent": 1},
         ])
         wizard.load_raw_dataframe(raw_df, list_cols=[])
+        wizard.prepend_root_item("sample")
         wizard.load_schema_and_compare({"요약": "Summary"})
         wizard.process_option_mapping({"요약": "Summary"})
+        upload_result = wizard.upload(dry_run=False)
 
-        child_payload = wizard.preview_payload(1)
-
-        self.assertEqual(wizard.state.upload_df.iloc[1]["upload_name"], "Parent")
-        self.assertEqual(child_payload["name"], "Parent")
+        self.assertEqual(list(wizard.state.upload_df["upload_name"]), ["sample", "Parent", "Child"])
+        self.assertEqual(
+            [call["payload"]["name"] for call in self.client.create_item_calls],
+            ["sample", "Parent", "Child"],
+        )
+        self.assertEqual(
+            [call["parent_item_id"] for call in self.client.create_item_calls],
+            [None, 1001, 1002],
+        )
+        self.assertEqual(len(upload_result["success_df"]), 3)
 
     def test_upload_failure_persists_response_json(self) -> None:
         wizard = CountingWizard(

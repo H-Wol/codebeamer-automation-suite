@@ -5,23 +5,12 @@ from typing import Any
 import pandas as pd
 
 
-UPLOAD_NAME_STRATEGY_SUMMARY = "summary"
-UPLOAD_NAME_STRATEGY_TOP_LEVEL = "top_level_folder"
-
-
 class HierarchyProcessor:
     """raw DataFrame를 계층 업로드용 DataFrame으로 후처리하는 전용 processor다."""
 
-    def __init__(
-        self,
-        header_row: int = 1,
-        summary_col: str = "Summary",
-        upload_name_strategy: str = UPLOAD_NAME_STRATEGY_SUMMARY,
-        logger=None,
-    ):
+    def __init__(self, header_row: int = 1, summary_col: str = "Summary", logger=None):
         self.header_row = header_row
         self.summary_col = summary_col
-        self.upload_name_strategy = self.normalize_upload_name_strategy(upload_name_strategy)
         self.logger = logger
 
     @staticmethod
@@ -73,13 +62,6 @@ class HierarchyProcessor:
             return "\n".join(values) if values else None
         text = str(value).strip()
         return text or None
-
-    @staticmethod
-    def normalize_upload_name_strategy(value: Any) -> str:
-        text = str(value or "").strip()
-        if text == UPLOAD_NAME_STRATEGY_TOP_LEVEL:
-            return UPLOAD_NAME_STRATEGY_TOP_LEVEL
-        return UPLOAD_NAME_STRATEGY_SUMMARY
 
     def merge_multiline_records(
         self,
@@ -158,33 +140,38 @@ class HierarchyProcessor:
         work["parent_row_id"] = parent_row_ids
         return work
 
-    @classmethod
-    def _top_level_upload_names(cls, hierarchy_df: pd.DataFrame, summary_col: str) -> list[Any]:
-        summary_values = hierarchy_df[summary_col].apply(cls.normalize_scalar).tolist()
-        parent_row_ids = hierarchy_df["parent_row_id"].tolist()
-        upload_names: list[Any] = []
+    def prepend_root_item(self, hierarchy_df: pd.DataFrame, root_name: str) -> pd.DataFrame:
+        work = hierarchy_df.copy().reset_index(drop=True)
+        normalized_root_name = self.normalize_scalar(root_name)
+        if work.empty or normalized_root_name is None:
+            return work
 
-        for index, parent_row_id in enumerate(parent_row_ids):
-            root_index = index
-            visited = {index}
+        if "_synthetic_root" in work.columns and bool(work["_synthetic_root"].fillna(False).iloc[0]):
+            return work
 
-            while parent_row_id is not None and not pd.isna(parent_row_id):
-                parent_index = int(parent_row_id)
-                if parent_index < 0 or parent_index >= len(summary_values) or parent_index in visited:
-                    break
-                visited.add(parent_index)
-                root_index = parent_index
-                parent_row_id = parent_row_ids[parent_index]
+        work["_row_id"] = work["_row_id"].apply(lambda value: int(value) + 1)
+        work["parent_row_id"] = work["parent_row_id"].apply(
+            lambda value: 0 if self.is_blank(value) else int(value) + 1
+        )
+        if "depth" in work.columns:
+            work["depth"] = work["depth"].apply(
+                lambda value: 1 if self.is_blank(value) else int(value) + 1
+            )
+        else:
+            work["depth"] = 1
 
-            upload_names.append(summary_values[root_index])
+        work["_synthetic_root"] = False
 
-        return upload_names
+        root_row = {column: None for column in work.columns}
+        root_row[self.summary_col] = normalized_root_name
+        root_row["_row_id"] = 0
+        root_row["parent_row_id"] = None
+        root_row["depth"] = 0
+        root_row["_synthetic_root"] = True
+        return pd.concat([pd.DataFrame([root_row]), work], ignore_index=True)
 
     def build_upload_df(self, hierarchy_df: pd.DataFrame, list_cols: list[str] | None = None) -> pd.DataFrame:
         work = hierarchy_df.copy()
         del list_cols
-        if self.upload_name_strategy == UPLOAD_NAME_STRATEGY_TOP_LEVEL:
-            work["upload_name"] = self._top_level_upload_names(work, self.summary_col)
-        else:
-            work["upload_name"] = work[self.summary_col].apply(self.normalize_scalar)
+        work["upload_name"] = work[self.summary_col].apply(self.normalize_scalar)
         return work
