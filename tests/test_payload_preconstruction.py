@@ -312,6 +312,83 @@ class WizardPayloadResolutionTest(unittest.TestCase):
             ["UserReference", "RoleReference", "GroupReference"],
         )
 
+    def test_preview_payload_builds_table_field_value_from_column_field_values(self) -> None:
+        """TableField는 일반 custom field처럼 중복 생성하지 말고 셀별 FieldValue로 묶어야 한다."""
+        self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
+            {
+                "id": 1000000,
+                "name": "Test Steps",
+                "type": "TableField",
+                "valueModel": "TableFieldValue",
+                "columns": [
+                    {
+                        "id": 1000001,
+                        "name": "Action",
+                        "type": "WikiTextField",
+                        "valueModel": "WikiTextFieldValue",
+                    },
+                    {
+                        "id": 1000002,
+                        "name": "Expected result",
+                        "type": "WikiTextField",
+                        "valueModel": "WikiTextFieldValue",
+                    },
+                    {
+                        "id": 1000003,
+                        "name": "Critical?",
+                        "type": "BoolField",
+                        "valueModel": "BoolFieldValue",
+                    },
+                ],
+            }
+        ])
+        self.wizard.state.selected_mapping = {
+            "Test Steps.Action": "Test Steps",
+            "Test Steps.Expected result": "Test Steps",
+            "Test Steps.Critical?": "Test Steps",
+        }
+        self.wizard.state.table_field_mapping = {
+            "Test Steps.Action": {
+                "table_field_name": "Test Steps",
+                "column_name": "Action",
+                "column_info": {"id": 1000001, "name": "Action", "type": "WikiTextField", "valueModel": "WikiTextFieldValue"},
+            },
+            "Test Steps.Expected result": {
+                "table_field_name": "Test Steps",
+                "column_name": "Expected result",
+                "column_info": {"id": 1000002, "name": "Expected result", "type": "WikiTextField", "valueModel": "WikiTextFieldValue"},
+            },
+            "Test Steps.Critical?": {
+                "table_field_name": "Test Steps",
+                "column_name": "Critical?",
+                "column_info": {"id": 1000003, "name": "Critical?", "type": "BoolField", "valueModel": "BoolFieldValue"},
+            },
+        }
+        self.wizard.state.upload_df = pd.DataFrame([
+            {
+                "_row_id": 1,
+                "upload_name": "REQ-1",
+                "Test Steps.Action": ["ACU_RetFlag := 1", "BMS_Timeout := 0"],
+                "Test Steps.Expected result": ["Result A", "Result B"],
+                "Test Steps.Critical?": [False, True],
+            }
+        ])
+
+        payload = self.wizard.preview_payload(1)
+
+        self.assertEqual(len(payload["customFields"]), 1)
+        custom_field = payload["customFields"][0]
+        self.assertEqual(custom_field["name"], "Test Steps")
+        self.assertEqual(custom_field["type"], "TableFieldValue")
+        self.assertEqual(len(custom_field["values"]), 2)
+        self.assertEqual(
+            [value["type"] for value in custom_field["values"][0]],
+            ["WikiTextFieldValue", "WikiTextFieldValue", "BoolFieldValue"],
+        )
+        self.assertEqual(custom_field["values"][0][0]["value"], "ACU_RetFlag := 1")
+        self.assertFalse(custom_field["values"][0][2]["value"])
+        self.assertTrue(custom_field["values"][1][2]["value"])
+
     def test_preview_payload_applies_default_status_when_row_value_is_missing(self) -> None:
         """행 값이 없으면 선택한 공통 기본값으로 Status를 채워야 한다."""
         self.wizard.state.schema_df = self.mapper.flatten_schema_fields([

@@ -26,6 +26,7 @@ from .models import UserInfo
 from .models import UserGroupReference
 from .models import UserLookupStatus
 from .models import WizardState
+from .models.field_values import _build_field_value
 
 
 UserLookupCacheEntry = tuple[dict[str, Any] | None, dict[str, Any] | None, str, str | None]
@@ -1233,32 +1234,55 @@ class CodebeamerUploadWizard:
                 "columns": tf_row.get("table_columns", []),
             }
 
-        tables_data: dict[str, list[dict[str, dict[str, Any]]]] = {}
+        tables_data: dict[str, dict[str, Any]] = {}
 
         for df_col, tf_info in self.state.table_field_mapping.items():
             tf_name = tf_info["table_field_name"]
             col_name = tf_info["column_name"]
-            col_def = tf_info["column_info"]
-
             if tf_name not in tables_data:
-                tables_data[tf_name] = [{}]
+                tables_data[tf_name] = {}
+            tables_data[tf_name][col_name] = row[df_col] if df_col in row.index else None
 
-            field_value = row[df_col] if df_col in row.index and row[df_col] is not None else None
-            tables_data[tf_name][0][col_name] = {
-                "fieldId": col_def.get("id"),
-                "name": col_name,
-                "value": field_value,
-                "type": col_def.get("valueModel", FieldValueType.TEXT.value),
-            }
-
-        for tf_name, table_rows in tables_data.items():
+        for tf_name, table_values_by_column in tables_data.items():
             if tf_name not in table_fields_by_name:
                 continue
 
+            column_defs = table_fields_by_name[tf_name]["columns"]
+            row_count = 0
+            for raw_value in table_values_by_column.values():
+                if isinstance(raw_value, list):
+                    row_count = max(row_count, len(raw_value))
+                elif self._has_configured_value(raw_value):
+                    row_count = max(row_count, 1)
+
             values = []
-            for row_data in table_rows:
-                row_fields = list(row_data.values())
-                if any(v["value"] is not None for v in row_fields):
+            for row_index in range(row_count):
+                row_fields = []
+                for column_def in column_defs:
+                    column_name = column_def.get("name")
+                    if not column_name:
+                        continue
+
+                    raw_value = table_values_by_column.get(column_name)
+                    if isinstance(raw_value, list):
+                        cell_value = raw_value[row_index] if row_index < len(raw_value) else None
+                    else:
+                        cell_value = raw_value if row_index == 0 else None
+
+                    if not self._has_configured_value(cell_value):
+                        continue
+
+                    field_info = {
+                        "field_id": column_def.get("id"),
+                        "field_name": column_name,
+                        "field_type": column_def.get("type"),
+                        "value_model": column_def.get("valueModel", FieldValueType.TEXT.value),
+                        "reference_type": column_def.get("referenceType"),
+                        "multiple_values": column_def.get("multipleValues", False),
+                    }
+                    row_fields.append(_build_field_value(field_info, cell_value))
+
+                if row_fields:
                     values.append(row_fields)
 
             if values:
@@ -1287,6 +1311,8 @@ class CodebeamerUploadWizard:
             tracker_field = field_row["tracker_item_field"]
 
             if not tracker_field:
+                continue
+            if bool(field_row.get("is_table_field")):
                 continue
 
             field_value = None

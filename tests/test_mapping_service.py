@@ -59,6 +59,22 @@ class MappingServiceTest(unittest.TestCase):
 
         self.assertEqual(list_columns, [])
 
+    def test_get_list_columns_for_mapping_includes_table_field_pseudo_columns(self) -> None:
+        """`TableField.Column` 형식 컬럼은 멀티라인 병합을 위해 list 컬럼으로 다뤄야 한다."""
+        schema_df = pd.DataFrame([
+            {"field_name": "Summary", "multiple_values": False, "is_table_field": False},
+            {"field_name": "Test Steps", "multiple_values": False, "is_table_field": True},
+        ])
+        selected_mapping = {
+            "요약": "Summary",
+            "Test Steps.Action": "Test Steps",
+            "Test Steps.Expected result": "Test Steps",
+        }
+
+        list_columns = self.service.get_list_columns_for_mapping(selected_mapping, schema_df)
+
+        self.assertEqual(list_columns, ["Test Steps.Action", "Test Steps.Expected result"])
+
     def test_get_default_value_candidates_returns_single_static_option_fields_only(self) -> None:
         """공통 기본값 후보는 단일 static option 필드만 포함해야 한다."""
         schema_df = self.service.flatten_schema_fields([

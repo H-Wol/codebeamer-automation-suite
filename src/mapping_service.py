@@ -670,11 +670,22 @@ class MappingService:
             for _, row in schema_df.iterrows()
             if row.get("field_name") and self._is_truthy_flag(row.get("multiple_values"))
         }
+        table_fields = {
+            row["field_name"]
+            for _, row in schema_df.iterrows()
+            if row.get("field_name") and self._is_truthy_flag(row.get("is_table_field"))
+        }
 
         return [
             df_col
             for df_col, schema_field in selected_mapping.items()
-            if schema_field in multiple_value_fields
+            if (
+                schema_field in multiple_value_fields
+                or (
+                    schema_field in table_fields
+                    and "." in str(df_col)
+                )
+            )
         ]
 
     def get_default_value_candidates(self, schema_df: pd.DataFrame) -> list[dict[str, Any]]:
