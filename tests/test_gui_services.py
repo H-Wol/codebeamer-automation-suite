@@ -398,6 +398,21 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             self.assertIn("title", preview_context.preview_columns)
             self.assertEqual(preview_context.preview_rows[0]["project"], "ABC")
             self.assertEqual(preview_context.preview_rows[0]["title"], "REQ-001")
+            self.assertEqual(
+                preview_context.field_assignments["Summary"],
+                {
+                    "enabled": True,
+                    "mode": "file_source",
+                    "value": "title",
+                },
+            )
+            status_candidate = next(
+                candidate
+                for candidate in preview_context.field_candidates
+                if candidate.schema_field == "Status"
+            )
+            self.assertTrue(status_candidate.allows_fixed_value)
+            self.assertEqual(status_candidate.fixed_options, ["Open", "Review"])
 
     def test_build_root_item_payload_spec_uses_regex_mapped_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -439,13 +454,25 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             mapping_context.root_item_config = {
                 "regex_pattern": r"^(?P<project>[A-Z]+)_(?P<title>.+)$",
                 "regex_target": "file_stem",
-                "field_sources": {"Summary": "title"},
+                "field_assignments": {
+                    "Summary": {
+                        "enabled": True,
+                        "mode": "file_source",
+                        "value": "title",
+                    },
+                    "Status": {
+                        "enabled": True,
+                        "mode": "fixed_value",
+                        "value": "Open",
+                    },
+                },
             }
 
             root_item_name, root_field_values = service.build_root_item_payload_spec(mapping_context, str(path))
 
             self.assertEqual(root_item_name, "REQ-001")
             self.assertEqual(root_field_values["Summary"], "REQ-001")
+            self.assertEqual(root_field_values["Status"], "Open")
 
     def test_prepare_mapping_context_rejects_mismatched_batch_headers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -542,7 +569,18 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             mapping_context.root_item_config = {
                 "regex_pattern": r"^(?P<project>[A-Z]+)_(?P<title>.+)$",
                 "regex_target": "file_stem",
-                "field_sources": {"Summary": "title"},
+                "field_assignments": {
+                    "Summary": {
+                        "enabled": True,
+                        "mode": "file_source",
+                        "value": "title",
+                    },
+                    "Status": {
+                        "enabled": True,
+                        "mode": "fixed_value",
+                        "value": "Open",
+                    },
+                },
             }
             validation_context = service.validate_mapping(
                 mapping_context,

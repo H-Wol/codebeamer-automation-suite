@@ -1191,7 +1191,10 @@ class CodebeamerUploadWizard:
         if not bool(field_row.get("is_option_like", False)):
             return raw_value
 
-        option_info = (self.state.option_maps or {}).get(schema_field, {})
+        option_maps = self.state.option_maps or self.mapper.build_option_maps_from_schema(self.state.schema_df)
+        if not self.state.option_maps:
+            self.state.option_maps = option_maps
+        option_info = option_maps.get(schema_field, {})
         kind = option_info.get("kind")
         if not option_info.get("is_supported", True) or kind == OptionMapKind.UNSUPPORTED.value:
             self._raise_payload_error(

@@ -196,6 +196,50 @@ class PayloadCacheWizardTest(unittest.TestCase):
         self.assertEqual(self.client.create_item_calls[0]["payload"]["name"], "ROOT-CUSTOM")
         self.assertEqual(upload_result["success_df"].iloc[0]["upload_name"], "sample")
 
+    def test_upload_root_field_values_can_apply_static_option_field(self) -> None:
+        schema = [
+            {
+                "id": 1,
+                "name": "Summary",
+                "type": "TextField",
+                "trackerItemField": "name",
+                "valueModel": "TextFieldValue",
+            },
+            {
+                "id": 2,
+                "name": "Status",
+                "type": "OptionChoiceField",
+                "trackerItemField": "status",
+                "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+                "options": [
+                    {"id": 201, "name": "Open", "type": "ChoiceOptionReference"},
+                    {"id": 202, "name": "Review", "type": "ChoiceOptionReference"},
+                ],
+            },
+        ]
+        client = StaticSchemaClient(schema)
+        wizard = CountingWizard(
+            client=client,
+            processor=self.processor,
+            mapper=self.mapper,
+        )
+        wizard.select_project(1)
+        wizard.select_tracker(2)
+        raw_df = pd.DataFrame([
+            {"요약": "REQ-001", "_excel_row": 2, "_summary_indent": 0},
+        ])
+        wizard.load_raw_dataframe(raw_df, list_cols=[])
+        wizard.load_schema_and_compare({"요약": "Summary"})
+        wizard.process_option_mapping({"요약": "Summary"})
+
+        wizard.upload(
+            dry_run=False,
+            root_item_name="sample",
+            root_field_values={"Status": "Open"},
+        )
+
+        self.assertEqual(client.create_item_calls[0]["payload"]["status"]["name"], "Open")
+
     def test_upload_failure_persists_response_json(self) -> None:
         wizard = CountingWizard(
             client=FailingSchemaClient(self.schema),

@@ -185,6 +185,8 @@ ROOT_SOURCE_FILE_STEM = "__file_stem__"
 ROOT_SOURCE_REGEX_FULL = "__regex_full__"
 ROOT_REGEX_TARGET_FILE_NAME = "file_name"
 ROOT_REGEX_TARGET_FILE_STEM = "file_stem"
+ROOT_ASSIGNMENT_MODE_FILE_SOURCE = "file_source"
+ROOT_ASSIGNMENT_MODE_FIXED_VALUE = "fixed_value"
 
 
 @dataclass
@@ -236,6 +238,9 @@ class RootFieldCandidate:
     field_type: str
     mandatory: bool
     supported: bool
+    fixed_options: list[str]
+    allows_file_source: bool
+    allows_fixed_value: bool
 
 
 @dataclass
@@ -248,6 +253,7 @@ class RootSourceOption:
 class RootItemPreviewContext:
     regex_pattern: str
     regex_target: str
+    field_assignments: dict[str, dict[str, Any]]
     field_sources: dict[str, str]
     field_candidates: list[RootFieldCandidate]
     source_options: list[RootSourceOption]
@@ -385,6 +391,43 @@ class GuiUploadPipelineService:
         return Path(file_path).stem
 
     @staticmethod
+    def _root_assignment(
+        *,
+        enabled: bool,
+        mode: str,
+        value: str,
+    ) -> dict[str, Any]:
+        normalized_mode = str(mode or ROOT_ASSIGNMENT_MODE_FILE_SOURCE).strip()
+        if normalized_mode not in {
+            ROOT_ASSIGNMENT_MODE_FILE_SOURCE,
+            ROOT_ASSIGNMENT_MODE_FIXED_VALUE,
+        }:
+            normalized_mode = ROOT_ASSIGNMENT_MODE_FILE_SOURCE
+        return {
+            "enabled": bool(enabled),
+            "mode": normalized_mode,
+            "value": str(value or "").strip(),
+        }
+
+    @classmethod
+    def _root_file_source_assignments(
+        cls,
+        field_assignments: dict[str, dict[str, Any]],
+    ) -> dict[str, str]:
+        field_sources: dict[str, str] = {}
+        for schema_field, assignment in field_assignments.items():
+            if not isinstance(assignment, dict):
+                continue
+            if not bool(assignment.get("enabled")):
+                continue
+            if str(assignment.get("mode") or "").strip() != ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
+                continue
+            source_key = str(assignment.get("value") or "").strip()
+            if source_key:
+                field_sources[str(schema_field).strip()] = source_key
+        return field_sources
+
+    @staticmethod
     def _name_schema_field(schema_df: pd.DataFrame) -> str | None:
         if schema_df is None or schema_df.empty:
             return None
@@ -394,14 +437,19 @@ class GuiUploadPipelineService:
         return str(matched.iloc[0]["field_name"])
 
     def _default_root_item_config(self, schema_df: pd.DataFrame) -> dict[str, Any]:
-        field_sources: dict[str, str] = {}
+        field_assignments: dict[str, dict[str, Any]] = {}
         name_schema_field = self._name_schema_field(schema_df)
         if name_schema_field:
-            field_sources[name_schema_field] = ROOT_SOURCE_FILE_STEM
+            field_assignments[name_schema_field] = self._root_assignment(
+                enabled=True,
+                mode=ROOT_ASSIGNMENT_MODE_FILE_SOURCE,
+                value=ROOT_SOURCE_FILE_STEM,
+            )
         return {
             "regex_pattern": "",
             "regex_target": ROOT_REGEX_TARGET_FILE_STEM,
-            "field_sources": field_sources,
+            "field_assignments": field_assignments,
+            "field_sources": self._root_file_source_assignments(field_assignments),
         }
 
     @classmethod
@@ -415,25 +463,55 @@ class GuiUploadPipelineService:
         config = dict(default_config or {})
         if root_item_config:
             config.update(root_item_config)
+        explicit_root_config = dict(root_item_config or {})
+        has_explicit_field_assignments = "field_assignments" in explicit_root_config
 
         regex_pattern = str(config.get("regex_pattern") or "").strip()
         regex_target = str(config.get("regex_target") or ROOT_REGEX_TARGET_FILE_STEM).strip()
         if regex_target not in {ROOT_REGEX_TARGET_FILE_STEM, ROOT_REGEX_TARGET_FILE_NAME}:
             regex_target = ROOT_REGEX_TARGET_FILE_STEM
 
+        field_assignments: dict[str, dict[str, Any]] = {}
+        raw_field_assignments = config.get("field_assignments")
+        if isinstance(raw_field_assignments, dict):
+            for schema_field, raw_assignment in raw_field_assignments.items():
+                field_name = str(schema_field or "").strip()
+                if not field_name:
+                    continue
+                if isinstance(raw_assignment, dict):
+                    field_assignments[field_name] = cls._root_assignment(
+                        enabled=bool(raw_assignment.get("enabled")),
+                        mode=str(raw_assignment.get("mode") or ROOT_ASSIGNMENT_MODE_FILE_SOURCE),
+                        value=str(raw_assignment.get("value") or ""),
+                    )
+                    continue
+
+                field_assignments[field_name] = cls._root_assignment(
+                    enabled=True,
+                    mode=ROOT_ASSIGNMENT_MODE_FILE_SOURCE,
+                    value=str(raw_assignment or ""),
+                )
+
         raw_field_sources = config.get("field_sources")
-        field_sources: dict[str, str] = {}
         if isinstance(raw_field_sources, dict):
             for schema_field, source_key in raw_field_sources.items():
                 field_name = str(schema_field or "").strip()
                 source_name = str(source_key or "").strip()
-                if field_name:
-                    field_sources[field_name] = source_name
+                if not field_name:
+                    continue
+                if field_name in field_assignments and has_explicit_field_assignments:
+                    continue
+                field_assignments[field_name] = cls._root_assignment(
+                    enabled=True,
+                    mode=ROOT_ASSIGNMENT_MODE_FILE_SOURCE,
+                    value=source_name,
+                )
 
         return {
             "regex_pattern": regex_pattern,
             "regex_target": regex_target,
-            "field_sources": field_sources,
+            "field_assignments": field_assignments,
+            "field_sources": cls._root_file_source_assignments(field_assignments),
         }
 
     def _root_field_candidates(self, schema_df: pd.DataFrame) -> list[RootFieldCandidate]:
@@ -455,6 +533,8 @@ class GuiUploadPipelineService:
                 continue
 
             supported = bool(row.get("is_supported", True))
+            fixed_options: list[str] = []
+            allows_fixed_value = False
             if bool(row.get("is_option_like", False)):
                 option_info = option_maps.get(schema_field, {})
                 kind = option_info.get("kind")
@@ -463,12 +543,26 @@ class GuiUploadPipelineService:
                     OptionMapKind.UNSUPPORTED.value,
                     OptionMapKind.REFERENCE_LOOKUP.value,
                 }
+                if (
+                    supported
+                    and not bool(row.get("multiple_values", False))
+                    and kind == OptionMapKind.STATIC_OPTIONS.value
+                ):
+                    fixed_options = [
+                        str(option.get("name")).strip()
+                        for option in option_info.get("options") or []
+                        if str(option.get("name") or "").strip()
+                    ]
+                    allows_fixed_value = bool(fixed_options)
 
             candidates.append(RootFieldCandidate(
                 schema_field=schema_field,
                 field_type=str(row.get("field_type") or ""),
                 mandatory=bool(row.get("mandatory", False)),
                 supported=supported,
+                fixed_options=fixed_options,
+                allows_file_source=supported,
+                allows_fixed_value=allows_fixed_value,
             ))
 
         return candidates
@@ -539,8 +633,16 @@ class GuiUploadPipelineService:
         )
         regex_pattern = normalized["regex_pattern"]
         regex_target = normalized["regex_target"]
-        field_sources = dict(normalized["field_sources"])
+        field_assignments = {
+            str(schema_field): dict(assignment)
+            for schema_field, assignment in dict(normalized.get("field_assignments") or {}).items()
+            if str(schema_field).strip() and isinstance(assignment, dict)
+        }
         field_candidates = self._root_field_candidates(mapping_context.schema_df)
+        candidate_by_field = {
+            candidate.schema_field: candidate
+            for candidate in field_candidates
+        }
 
         compiled_pattern, regex_error = self._compiled_root_regex(regex_pattern)
         source_options = [
@@ -556,6 +658,46 @@ class GuiUploadPipelineService:
         if compiled_pattern is not None:
             preview_columns.append(ROOT_SOURCE_REGEX_FULL)
             preview_columns.extend(self._root_regex_group_keys(compiled_pattern))
+
+        valid_source_keys = {
+            str(option.key)
+            for option in source_options
+        }
+        invalid_assignments: list[str] = []
+        normalized_assignments: dict[str, dict[str, Any]] = {}
+        for schema_field, candidate in candidate_by_field.items():
+            raw_assignment = field_assignments.get(schema_field)
+            if raw_assignment is None:
+                continue
+
+            assignment = self._root_assignment(
+                enabled=bool(raw_assignment.get("enabled")),
+                mode=str(raw_assignment.get("mode") or ROOT_ASSIGNMENT_MODE_FILE_SOURCE),
+                value=str(raw_assignment.get("value") or ""),
+            )
+            normalized_assignments[schema_field] = assignment
+            if not assignment["enabled"]:
+                continue
+
+            if assignment["mode"] == ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
+                if not candidate.allows_file_source:
+                    invalid_assignments.append(schema_field)
+                    continue
+                if not assignment["value"] or assignment["value"] not in valid_source_keys:
+                    invalid_assignments.append(schema_field)
+                    continue
+                continue
+
+            if assignment["mode"] == ROOT_ASSIGNMENT_MODE_FIXED_VALUE:
+                if not candidate.allows_fixed_value:
+                    invalid_assignments.append(schema_field)
+                    continue
+                if not assignment["value"] or assignment["value"] not in candidate.fixed_options:
+                    invalid_assignments.append(schema_field)
+                    continue
+                continue
+
+            invalid_assignments.append(schema_field)
 
         preview_rows: list[dict[str, str]] = []
         missing_sources: list[str] = []
@@ -578,16 +720,24 @@ class GuiUploadPipelineService:
                 preview_row[column_name] = str(sources.get(column_name) or "")
             preview_rows.append(preview_row)
 
-            for schema_field, source_key in field_sources.items():
+            for schema_field, assignment in normalized_assignments.items():
+                if not bool(assignment.get("enabled")):
+                    continue
+                if str(assignment.get("mode") or "") != ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
+                    continue
+                source_key = str(assignment.get("value") or "").strip()
                 if not source_key:
                     continue
                 if not str(sources.get(source_key) or "").strip():
                     missing_sources.append(f"{Path(file_path).name}:{schema_field}")
 
         has_blocking_issues = regex_error is not None
-        status_message = "파일명 파싱 결과를 확인하고 루트 필드 소스를 선택하세요."
+        status_message = "파일명 파싱 결과와 루트 필드 값을 확인하세요."
         if regex_error is not None:
             status_message = f"정규식 오류: {regex_error}"
+        elif invalid_assignments:
+            has_blocking_issues = True
+            status_message = "선택한 루트 필드의 값 방식 또는 값이 현재 스키마와 맞지 않습니다."
         elif missing_sources:
             has_blocking_issues = True
             status_message = "일부 파일에서 선택한 루트 필드 소스를 만들 수 없습니다."
@@ -595,7 +745,8 @@ class GuiUploadPipelineService:
         return RootItemPreviewContext(
             regex_pattern=regex_pattern,
             regex_target=regex_target,
-            field_sources=field_sources,
+            field_assignments=normalized_assignments,
+            field_sources=self._root_file_source_assignments(normalized_assignments),
             field_candidates=field_candidates,
             source_options=source_options,
             preview_columns=preview_columns,
@@ -916,8 +1067,19 @@ class GuiUploadPipelineService:
             raise ValueError(f"루트 데이터 정규식 오류: {regex_error}")
 
         root_field_values: dict[str, Any] = {}
-        for schema_field, source_key in preview_context.field_sources.items():
-            raw_value = str(sources.get(source_key) or "").strip()
+        for schema_field, assignment in preview_context.field_assignments.items():
+            if not bool(assignment.get("enabled")):
+                continue
+
+            assignment_mode = str(assignment.get("mode") or "").strip()
+            assignment_value = str(assignment.get("value") or "").strip()
+            if assignment_mode == ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
+                raw_value = str(sources.get(assignment_value) or "").strip()
+            elif assignment_mode == ROOT_ASSIGNMENT_MODE_FIXED_VALUE:
+                raw_value = assignment_value
+            else:
+                raw_value = ""
+
             if raw_value:
                 root_field_values[schema_field] = raw_value
 

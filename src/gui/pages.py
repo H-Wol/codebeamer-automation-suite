@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .services import ROOT_ASSIGNMENT_MODE_FILE_SOURCE
+from .services import ROOT_ASSIGNMENT_MODE_FIXED_VALUE
+
 
 USER_HIDDEN_TABLE_COLUMNS = {
     "_row_id",
@@ -761,7 +764,7 @@ def create_root_item_page(on_preview_requested):
 
     description_label = QLabel(
         "파일명 기반으로 생성할 최상위 부모 데이터의 이름과 필드 값을 설정합니다. "
-        "정규식은 실시간으로 미리보기에 반영됩니다."
+        "필드별로 파일명/정규식 값을 쓰거나 스키마 선택값을 고를 수 있습니다."
     )
     description_label.setWordWrap(True)
     description_label.setObjectName("section_label")
@@ -792,10 +795,10 @@ def create_root_item_page(on_preview_requested):
     field_label.setObjectName("section_label")
     layout.addWidget(field_label)
 
-    field_table = QTableWidget(0, 5)
-    field_table.setHorizontalHeaderLabels(["사용", "Codebeamer 필드", "타입", "필수", "파일명 소스"])
+    field_table = QTableWidget(0, 6)
+    field_table.setHorizontalHeaderLabels(["사용", "Codebeamer 필드", "타입", "필수", "값 방식", "값"])
     field_table.setAlternatingRowColors(True)
-    _configure_table_columns(field_table, [80, 240, 180, 90, 240])
+    _configure_table_columns(field_table, [80, 240, 180, 90, 160, 240])
     layout.addWidget(field_table)
 
     status_label = QLabel("")
@@ -817,26 +820,41 @@ def create_root_item_page(on_preview_requested):
     page._field_candidates = []
     page._current_preview_context = None
 
-    def _current_field_sources() -> dict[str, str]:
-        field_sources: dict[str, str] = {}
+    def _current_field_assignments() -> dict[str, dict[str, object]]:
+        field_assignments: dict[str, dict[str, object]] = {}
         for row_index in range(field_table.rowCount()):
             enabled_widget = field_table.cellWidget(row_index, 0)
-            source_combo = field_table.cellWidget(row_index, 4)
+            mode_combo = field_table.cellWidget(row_index, 4)
+            value_combo = field_table.cellWidget(row_index, 5)
             field_item = field_table.item(row_index, 1)
-            if enabled_widget is None or source_combo is None or field_item is None:
+            if enabled_widget is None or mode_combo is None or value_combo is None or field_item is None:
                 continue
-            if not enabled_widget.isChecked():
+            field_assignments[field_item.text()] = {
+                "enabled": bool(enabled_widget.isChecked()),
+                "mode": str(mode_combo.currentData() or ROOT_ASSIGNMENT_MODE_FILE_SOURCE),
+                "value": str(value_combo.currentData() or "").strip(),
+            }
+        return field_assignments
+
+    def _legacy_field_sources(field_assignments: dict[str, dict[str, object]]) -> dict[str, str]:
+        field_sources: dict[str, str] = {}
+        for schema_field, assignment in field_assignments.items():
+            if not bool(assignment.get("enabled")):
                 continue
-            source_key = str(source_combo.currentData() or "").strip()
+            if str(assignment.get("mode") or "") != ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
+                continue
+            source_key = str(assignment.get("value") or "").strip()
             if source_key:
-                field_sources[field_item.text()] = source_key
+                field_sources[schema_field] = source_key
         return field_sources
 
     def get_config() -> dict[str, object]:
+        field_assignments = _current_field_assignments()
         return {
             "regex_pattern": regex_pattern.text().strip(),
             "regex_target": str(regex_target.currentData() or "file_stem"),
-            "field_sources": _current_field_sources(),
+            "field_assignments": field_assignments,
+            "field_sources": _legacy_field_sources(field_assignments),
         }
 
     def _column_label(column_name: str, source_options) -> str:
@@ -848,6 +866,36 @@ def create_root_item_page(on_preview_requested):
             return "일치"
         source_lookup = {str(option.key): str(option.label) for option in source_options}
         return source_lookup.get(column_name, column_name)
+
+    def _mode_options(candidate) -> list[tuple[str, str]]:
+        options: list[tuple[str, str]] = []
+        if bool(candidate.allows_file_source):
+            options.append(("파일명/정규식", ROOT_ASSIGNMENT_MODE_FILE_SOURCE))
+        if bool(candidate.allows_fixed_value):
+            options.append(("스키마 선택값", ROOT_ASSIGNMENT_MODE_FIXED_VALUE))
+        return options
+
+    def _populate_value_combo(value_combo, candidate, preview_context, mode_key: str, selected_value: str) -> None:
+        value_combo.blockSignals(True)
+        value_combo.clear()
+        value_combo.addItem("", "")
+
+        if mode_key == ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
+            for option in preview_context.source_options:
+                value_combo.addItem(str(option.label), str(option.key))
+        elif mode_key == ROOT_ASSIGNMENT_MODE_FIXED_VALUE:
+            for option_name in getattr(candidate, "fixed_options", []):
+                value_combo.addItem(str(option_name), str(option_name))
+
+        selected_index = value_combo.findData(selected_value)
+        value_combo.setCurrentIndex(selected_index if selected_index >= 0 else 0)
+        value_combo.blockSignals(False)
+
+    def _sync_row_enabled_state(enabled_widget, mode_combo, value_combo, *, candidate) -> None:
+        row_enabled = bool(enabled_widget.isChecked()) and bool(candidate.supported)
+        has_mode_choice = mode_combo.count() > 0 and str(mode_combo.itemData(0) or "").strip() != ""
+        mode_combo.setEnabled(row_enabled and has_mode_choice)
+        value_combo.setEnabled(row_enabled and has_mode_choice)
 
     def _refresh_preview() -> None:
         if not page._loaded or page._refreshing:
@@ -888,30 +936,75 @@ def create_root_item_page(on_preview_requested):
                 )
         _configure_table_columns(preview_table, [180] * max(len(preview_headers), 1))
 
-        current_field_sources = dict(preview_context.field_sources)
+        current_field_assignments = dict(preview_context.field_assignments)
         field_table.setRowCount(len(preview_context.field_candidates))
         for row_index, candidate in enumerate(preview_context.field_candidates):
             enabled_widget = QCheckBox()
-            selected_source = str(current_field_sources.get(candidate.schema_field) or "")
-            enabled_widget.setChecked(bool(selected_source))
-            enabled_widget.toggled.connect(lambda _checked: _refresh_preview())
+            current_assignment = dict(current_field_assignments.get(candidate.schema_field) or {})
+            selected_mode = str(
+                current_assignment.get("mode") or ROOT_ASSIGNMENT_MODE_FILE_SOURCE
+            ).strip()
+            selected_value = str(current_assignment.get("value") or "").strip()
+            enabled_widget.setChecked(bool(current_assignment.get("enabled")))
+            enabled_widget.setEnabled(bool(candidate.supported))
             field_table.setCellWidget(row_index, 0, enabled_widget)
             field_table.setItem(row_index, 1, QTableWidgetItem(candidate.schema_field))
             field_table.setItem(row_index, 2, QTableWidgetItem(candidate.field_type))
             field_table.setItem(row_index, 3, QTableWidgetItem("yes" if candidate.mandatory else "no"))
 
-            source_combo = QComboBox()
-            source_combo.addItem("", "")
-            for option in preview_context.source_options:
-                source_combo.addItem(str(option.label), str(option.key))
-            source_combo.setEnabled(candidate.supported)
-            if selected_source:
-                combo_index = source_combo.findData(selected_source)
-                source_combo.setCurrentIndex(combo_index if combo_index >= 0 else 0)
-            source_combo.currentIndexChanged.connect(lambda _index: _refresh_preview())
-            field_table.setCellWidget(row_index, 4, source_combo)
+            mode_combo = QComboBox()
+            mode_options = _mode_options(candidate)
+            if not mode_options:
+                mode_combo.addItem("지원 안 함", "")
+            else:
+                for mode_label, mode_key in mode_options:
+                    mode_combo.addItem(mode_label, mode_key)
+                mode_index = mode_combo.findData(selected_mode)
+                if mode_index < 0:
+                    mode_index = 0
+                mode_combo.setCurrentIndex(mode_index)
+            field_table.setCellWidget(row_index, 4, mode_combo)
 
-        _configure_table_columns(field_table, [80, 240, 180, 90, 240])
+            value_combo = QComboBox()
+            _populate_value_combo(
+                value_combo,
+                candidate,
+                preview_context,
+                str(mode_combo.currentData() or ""),
+                selected_value,
+            )
+            field_table.setCellWidget(row_index, 5, value_combo)
+            _sync_row_enabled_state(
+                enabled_widget,
+                mode_combo,
+                value_combo,
+                candidate=candidate,
+            )
+
+            def _on_enabled_toggled(_checked, *, checkbox=enabled_widget, mode_widget=mode_combo, value_widget=value_combo, row_candidate=candidate):
+                _sync_row_enabled_state(
+                    checkbox,
+                    mode_widget,
+                    value_widget,
+                    candidate=row_candidate,
+                )
+                _refresh_preview()
+
+            def _on_mode_changed(_index, *, mode_widget=mode_combo, value_widget=value_combo, row_candidate=candidate):
+                _populate_value_combo(
+                    value_widget,
+                    row_candidate,
+                    preview_context,
+                    str(mode_widget.currentData() or ""),
+                    "",
+                )
+                _refresh_preview()
+
+            enabled_widget.toggled.connect(_on_enabled_toggled)
+            mode_combo.currentIndexChanged.connect(_on_mode_changed)
+            value_combo.currentIndexChanged.connect(lambda _index: _refresh_preview())
+
+        _configure_table_columns(field_table, [80, 240, 180, 90, 160, 240])
         status_label.setText(str(preview_context.status_message or ""))
         next_button.setEnabled(not bool(preview_context.has_blocking_issues))
         page._loaded = True
