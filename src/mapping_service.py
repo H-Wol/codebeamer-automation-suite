@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pandas as pd
 
+from .models import CONNECTED_FIELD_TYPE_VALUE_MODEL_MAP
 from .models import FieldValueType
 from .models import LookupTargetKind
 from .models import MappingStatus
@@ -25,13 +27,25 @@ from .models import UserLookupStatus
 
 class MappingService:
     def __init__(self, logger=None):
+        """schema 해석과 업로드 데이터 매핑을 담당하는 서비스 객체를 만든다."""
         self.logger = logger
 
     @staticmethod
+    def _is_missing_scalar(value: Any) -> bool:
+        """None 또는 scalar NaN처럼 비어 있는 값을 공통 판정한다."""
+        if value is None:
+            return True
+        try:
+            return bool(pd.isna(value))
+        except Exception:
+            return False
+
+    @staticmethod
     def _is_truthy_flag(value: Any) -> bool:
+        """문자열이나 숫자로 들어온 참/거짓 값을 불린으로 단순화한다."""
         if isinstance(value, bool):
             return value
-        if value is None:
+        if MappingService._is_missing_scalar(value):
             return False
         if isinstance(value, str):
             return value.strip().lower() == "true"
@@ -39,6 +53,7 @@ class MappingService:
 
     @staticmethod
     def _extract_status_option_ids(fields: list[dict[str, Any]]) -> set[int]:
+        """상태 필드가 가진 모든 option ID를 모아 mandatory 계산에 사용한다."""
         for field in fields:
             tracker_item_field = field.get("trackerItemField")
             field_name = field.get("name")
@@ -59,6 +74,7 @@ class MappingService:
         field: dict[str, Any],
         all_status_option_ids: set[int],
     ) -> dict[str, Any]:
+        """필드가 항상 필수인지, 특정 상태에서만 필수인지 정리한다."""
         mandatory_statuses = field.get("mandatoryInStatuses") or []
         mandatory_status_ids = {
             status["id"]
@@ -84,10 +100,81 @@ class MappingService:
 
     @staticmethod
     def _is_choice_value_model(value_model: Any) -> bool:
+        """valueModel 문자열이 choice 계열인지 빠르게 판정한다."""
         return isinstance(value_model, str) and "Choice" in value_model
+
+    @staticmethod
+    def _parse_tracker_item_reference_id(raw_value: Any) -> int:
+        """Tracker item 입력값에서 실제 item id를 추출한다."""
+        if isinstance(raw_value, bool):
+            raise ValueError(f"Cannot parse tracker item id from value: {raw_value!r}")
+        if isinstance(raw_value, int):
+            return raw_value
+        if isinstance(raw_value, float):
+            if pd.isna(raw_value) or not raw_value.is_integer():
+                raise ValueError(f"Cannot parse tracker item id from value: {raw_value!r}")
+            return int(raw_value)
+        if isinstance(raw_value, dict) and raw_value.get("id") is not None:
+            return int(raw_value["id"])
+
+        text = str(raw_value).strip()
+        bracket_match = re.search(r"\[.*?:(\d+).*?\]", text)
+        if bracket_match:
+            return int(bracket_match.group(1))
+        bracket_match = re.search(r"\[(\d+)\]", text)
+        if bracket_match:
+            return int(bracket_match.group(1))
+        if text.isdigit():
+            return int(text)
+        if text.endswith(".0") and text[:-2].isdigit():
+            return int(text[:-2])
+        raise ValueError(f"Cannot parse tracker item id from value: {raw_value!r}")
+
+    @classmethod
+    def _to_tracker_item_reference_payload(cls, raw_value: Any) -> dict[str, Any]:
+        """원본 값을 tracker item reference payload dict로 정규화한다."""
+        item_id = cls._parse_tracker_item_reference_id(raw_value)
+        if isinstance(raw_value, dict):
+            normalized = dict(raw_value)
+            normalized["id"] = item_id
+            normalized.setdefault("type", ReferenceType.TRACKER_ITEM.value)
+            result = {
+                "id": normalized.get("id"),
+                "name": normalized.get("name"),
+                "type": normalized.get("type"),
+            }
+            return {key: value for key, value in result.items() if value is not None}
+
+        return {
+            "id": item_id,
+            "type": ReferenceType.TRACKER_ITEM.value,
+        }
+
+    @classmethod
+    def resolve_tracker_item_reference_value(
+        cls,
+        raw_value: Any,
+        *,
+        multiple_values: bool,
+    ) -> Any:
+        """TrackerItemChoiceField 입력을 업로드용 reference payload로 바꾼다."""
+        if raw_value is None or str(raw_value).strip() == "":
+            return None
+
+        if multiple_values:
+            values = raw_value if isinstance(raw_value, list) else [raw_value]
+            resolved_values = []
+            for item in values:
+                if item is None or str(item).strip() == "":
+                    continue
+                resolved_values.append(cls._to_tracker_item_reference_payload(item))
+            return resolved_values or None
+
+        return cls._to_tracker_item_reference_payload(raw_value)
 
     @classmethod
     def _resolve_payload_target_kind(cls, field: dict[str, Any]) -> str:
+        """이 필드가 builtin field인지 custom field인지 먼저 판정한다."""
         tracker_item_field = field.get("trackerItemField")
         if TrackerItemBase.has_builtin_field(tracker_item_field):
             return PayloadTargetKind.BUILTIN_FIELD.value
@@ -97,8 +184,13 @@ class MappingService:
 
     @classmethod
     def _reference_detail(cls, resolved_field_kind: str, field: dict[str, Any]) -> str:
+        """reference 계열 필드가 실제로 어떤 참조 객체를 요구하는지 설명 문자열로 만든다."""
         if resolved_field_kind == ResolvedFieldKind.STATIC_OPTION.value:
             return field.get("referenceType") or ReferenceType.CHOICE_OPTION.value
+        if resolved_field_kind == ResolvedFieldKind.MEMBER_REFERENCE.value:
+            return ReferenceType.ABSTRACT.value
+        if resolved_field_kind == ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value:
+            return ReferenceType.TRACKER_ITEM.value
         if resolved_field_kind == ResolvedFieldKind.USER_REFERENCE.value:
             return ReferenceType.USER.value
         if field.get("referenceType"):
@@ -107,16 +199,19 @@ class MappingService:
 
     @classmethod
     def _field_value_detail(cls, resolved_field_kind: str, field: dict[str, Any]) -> str:
-        if resolved_field_kind == ResolvedFieldKind.SCALAR_BOOL.value:
-            return FieldValueType.BOOL.value
-        if resolved_field_kind == ResolvedFieldKind.TABLE.value:
-            return FieldValueType.TABLE.value
+        """custom field가 필요로 하는 FieldValue 종류를 사람이 읽기 쉬운 문자열로 만든다."""
         if resolved_field_kind in {
+            ResolvedFieldKind.MEMBER_REFERENCE.value,
             ResolvedFieldKind.STATIC_OPTION.value,
+            ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value,
             ResolvedFieldKind.USER_REFERENCE.value,
             ResolvedFieldKind.GENERIC_REFERENCE.value,
         }:
             return f"{FieldValueType.CHOICE.value}<{cls._reference_detail(resolved_field_kind, field)}>"
+
+        field_type = field.get("field_type") or field.get("type")
+        if field_type in CONNECTED_FIELD_TYPE_VALUE_MODEL_MAP:
+            return CONNECTED_FIELD_TYPE_VALUE_MODEL_MAP[field_type]
 
         value_model = field.get("valueModel")
         if isinstance(value_model, str) and value_model.endswith("FieldValue"):
@@ -125,10 +220,12 @@ class MappingService:
 
     @classmethod
     def _resolve_field_kind(cls, field: dict[str, Any]) -> dict[str, Any]:
+        """raw schema field를 내부 분류 체계로 해석한다."""
         field_type = field.get("type")
         reference_type = field.get("referenceType")
         has_options = bool(field.get("options"))
         value_model = field.get("valueModel")
+        tracker_item_field = field.get("trackerItemField", field.get("name", None))
         payload_target_kind = cls._resolve_payload_target_kind(field)
 
         result = {
@@ -181,10 +278,33 @@ class MappingService:
                 )
             return result
 
+        if field_type == SchemaFieldType.USER_CHOICE.value:
+            result["resolved_field_kind"] = ResolvedFieldKind.USER_REFERENCE.value
+            result["resolution_strategy"] = ResolutionStrategy.TYPE_REFERENCE_WITH_USER_REFERENCE.value
+            return result
+
+        if field_type == SchemaFieldType.TRACKER_ITEM_CHOICE.value:
+            result["resolved_field_kind"] = ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value
+            result["resolution_strategy"] = ResolutionStrategy.TYPE_TRACKER_ITEM_CHOICE.value
+            return result
+
+        if field_type == SchemaFieldType.MEMBER.value:
+            result["resolved_field_kind"] = ResolvedFieldKind.MEMBER_REFERENCE.value
+            result["resolution_strategy"] = ResolutionStrategy.TYPE_MEMBER.value
+            return result
+
         if field_type == SchemaFieldType.REFERENCE.value:
             if reference_type == ReferenceType.USER.value:
                 result["resolved_field_kind"] = ResolvedFieldKind.USER_REFERENCE.value
                 result["resolution_strategy"] = ResolutionStrategy.TYPE_REFERENCE_WITH_USER_REFERENCE.value
+                return result
+            if (
+                reference_type == ReferenceType.TRACKER_ITEM.value
+                and payload_target_kind == PayloadTargetKind.BUILTIN_FIELD.value
+                and TrackerItemBase.has_builtin_field(tracker_item_field)
+            ):
+                result["resolved_field_kind"] = ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value
+                result["resolution_strategy"] = ResolutionStrategy.TYPE_REFERENCE_WITH_REFERENCE_TYPE.value
                 return result
             if reference_type:
                 result["resolved_field_kind"] = ResolvedFieldKind.GENERIC_REFERENCE.value
@@ -218,6 +338,7 @@ class MappingService:
 
     @classmethod
     def _resolve_preconstruction(cls, field_resolution: dict[str, Any]) -> dict[str, Any]:
+        """payload를 만들기 전에 무엇을 먼저 준비해야 하는지 규칙을 정한다."""
         resolved_field_kind = field_resolution["resolved_field_kind"]
         payload_target_kind = field_resolution["payload_target_kind"]
         multiple_values = cls._is_truthy_flag(field_resolution.get("multiple_values"))
@@ -305,6 +426,40 @@ class MappingService:
                 )
             return result
 
+        if resolved_field_kind == ResolvedFieldKind.MEMBER_REFERENCE.value:
+            result["requires_lookup"] = True
+            result["lookup_target_kind"] = LookupTargetKind.MEMBER.value
+            if payload_target_kind == PayloadTargetKind.BUILTIN_FIELD.value:
+                result["preconstruction_kind"] = (
+                    PreconstructionKind.REFERENCE_LIST.value
+                    if multiple_values
+                    else PreconstructionKind.REFERENCE.value
+                )
+                result["preconstruction_detail"] = ReferenceType.ABSTRACT.value
+            else:
+                result["preconstruction_kind"] = PreconstructionKind.FIELD_VALUE.value
+                result["preconstruction_detail"] = cls._field_value_detail(
+                    resolved_field_kind,
+                    field_resolution,
+                )
+            return result
+
+        if resolved_field_kind == ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value:
+            if payload_target_kind == PayloadTargetKind.BUILTIN_FIELD.value:
+                result["preconstruction_kind"] = (
+                    PreconstructionKind.REFERENCE_LIST.value
+                    if multiple_values
+                    else PreconstructionKind.REFERENCE.value
+                )
+                result["preconstruction_detail"] = ReferenceType.TRACKER_ITEM.value
+            else:
+                result["preconstruction_kind"] = PreconstructionKind.FIELD_VALUE.value
+                result["preconstruction_detail"] = cls._field_value_detail(
+                    resolved_field_kind,
+                    field_resolution,
+                )
+            return result
+
         if resolved_field_kind == ResolvedFieldKind.GENERIC_REFERENCE.value:
             result["requires_lookup"] = True
             result["lookup_target_kind"] = LookupTargetKind.REFERENCE.value
@@ -327,10 +482,13 @@ class MappingService:
 
     @classmethod
     def _is_option_like_field(cls, field: pd.Series | dict[str, Any]) -> bool:
+        """이 필드가 옵션 또는 참조 해석 과정을 거쳐야 하는지 판정한다."""
         getter = field.get
         resolved_field_kind = getter("resolved_field_kind")
         if resolved_field_kind in {
+            ResolvedFieldKind.MEMBER_REFERENCE.value,
             ResolvedFieldKind.STATIC_OPTION.value,
+            ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value,
             ResolvedFieldKind.USER_REFERENCE.value,
             ResolvedFieldKind.GENERIC_REFERENCE.value,
         }:
@@ -349,11 +507,15 @@ class MappingService:
 
     @classmethod
     def _detect_option_source_kind(cls, field: pd.Series | dict[str, Any]) -> str | None:
+        """옵션 값을 어디서 해결해야 하는지 출처 종류를 정한다."""
         getter = field.get
         resolved_field_kind = getter("resolved_field_kind")
         if resolved_field_kind == ResolvedFieldKind.STATIC_OPTION.value:
             return OptionSourceKind.SCHEMA_OPTIONS.value
+        if resolved_field_kind == ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value:
+            return OptionSourceKind.DIRECT_PARSE.value
         if resolved_field_kind in {
+            ResolvedFieldKind.MEMBER_REFERENCE.value,
             ResolvedFieldKind.USER_REFERENCE.value,
             ResolvedFieldKind.GENERIC_REFERENCE.value,
         }:
@@ -363,6 +525,7 @@ class MappingService:
         return None
 
     def flatten_schema_fields(self, schema: dict | list) -> pd.DataFrame:
+        """복잡한 schema JSON을 분석하기 쉬운 표 형태로 펼친다."""
         candidates = []
 
         if isinstance(schema, list):
@@ -407,6 +570,7 @@ class MappingService:
                 "raw_tracker_item_field": field.get("trackerItemField"),
                 "value_model": value_model,
                 "reference_type": reference_type,
+                "member_types": field.get("memberTypes") or [],
                 "has_options": has_options,
                 "multiple_values": multiple_values,
                 "options": options if has_options else None,
@@ -428,6 +592,7 @@ class MappingService:
         schema_df: pd.DataFrame,
         selected_mapping: dict[str, str],
     ) -> pd.DataFrame:
+        """업로드 컬럼과 schema 필드를 비교해 위험 요소를 한 표로 정리한다."""
         schema_field_names = set(schema_df["field_name"].dropna().astype(str).str.strip())
         upload_columns = set(upload_df.columns)
 
@@ -483,6 +648,7 @@ class MappingService:
         return pd.DataFrame(rows)
 
     def get_option_field_candidates(self, schema_df: pd.DataFrame) -> pd.DataFrame:
+        """옵션 또는 참조 해석이 필요한 schema 필드만 골라낸다."""
         if "is_option_like" in schema_df.columns:
             mask = schema_df["is_option_like"].fillna(False)
             return schema_df[mask].copy()
@@ -495,6 +661,7 @@ class MappingService:
         selected_mapping: dict[str, str],
         schema_df: pd.DataFrame,
     ) -> list[str]:
+        """`multipleValues=true` 필드에 연결된 Excel 컬럼만 추려낸다."""
         if schema_df.empty or not selected_mapping:
             return []
 
@@ -503,15 +670,64 @@ class MappingService:
             for _, row in schema_df.iterrows()
             if row.get("field_name") and self._is_truthy_flag(row.get("multiple_values"))
         }
+        table_fields = {
+            row["field_name"]
+            for _, row in schema_df.iterrows()
+            if row.get("field_name") and self._is_truthy_flag(row.get("is_table_field"))
+        }
 
         return [
             df_col
             for df_col, schema_field in selected_mapping.items()
-            if schema_field in multiple_value_fields
+            if (
+                schema_field in multiple_value_fields
+                or (
+                    schema_field in table_fields
+                    and "." in str(df_col)
+                )
+            )
         ]
+
+    def get_default_value_candidates(self, schema_df: pd.DataFrame) -> list[dict[str, Any]]:
+        """공통 기본값으로 선택할 수 있는 단일 static option 필드 목록을 만든다."""
+        if schema_df.empty:
+            return []
+
+        option_maps = self.build_option_maps_from_schema(schema_df)
+        candidates: list[dict[str, Any]] = []
+
+        for _, row in schema_df.iterrows():
+            field_name = str(row.get("field_name") or "").strip()
+            if not field_name:
+                continue
+            if self._is_truthy_flag(row.get("multiple_values")):
+                continue
+
+            option_info = option_maps.get(field_name)
+            if not option_info or option_info.get("kind") != OptionMapKind.STATIC_OPTIONS.value:
+                continue
+
+            option_names = [
+                str(option.get("name")).strip()
+                for option in option_info.get("options") or []
+                if option.get("name")
+            ]
+            if not option_names:
+                continue
+
+            candidates.append({
+                "field_name": field_name,
+                "field_type": row.get("field_type"),
+                "tracker_item_field": row.get("tracker_item_field"),
+                "mandatory": bool(row.get("mandatory", False)),
+                "options": option_names,
+            })
+
+        return candidates
 
     @staticmethod
     def build_option_name_map(options: list[dict]) -> dict:
+        """option 이름으로 빠르게 찾을 수 있는 사전을 만든다."""
         result = {}
         duplicates = set()
 
@@ -532,12 +748,17 @@ class MappingService:
 
     @staticmethod
     def _option_map_metadata(row: pd.Series | dict[str, Any]) -> dict[str, Any]:
+        """option map에도 공통 분류 정보를 함께 담기 위한 묶음을 만든다."""
         getter = row.get
+        unsupported_reason = getter("unsupported_reason")
+        if MappingService._is_missing_scalar(unsupported_reason):
+            unsupported_reason = None
+
         return {
             "resolved_field_kind": getter("resolved_field_kind"),
             "resolution_strategy": getter("resolution_strategy"),
             "is_supported": getter("is_supported"),
-            "unsupported_reason": getter("unsupported_reason"),
+            "unsupported_reason": unsupported_reason,
             "requires_lookup": getter("requires_lookup"),
             "lookup_target_kind": getter("lookup_target_kind"),
             "preconstruction_kind": getter("preconstruction_kind"),
@@ -546,6 +767,7 @@ class MappingService:
         }
 
     def build_option_maps_from_schema(self, schema_df: pd.DataFrame) -> dict[str, dict]:
+        """schema를 바탕으로 옵션 해결 전략 표를 만든다."""
         option_maps = {}
         option_fields = self.get_option_field_candidates(schema_df)
 
@@ -587,6 +809,38 @@ class MappingService:
                     "options": options,
                     "source_status": OptionSourceStatus.READY.value,
                     "resolver_available": True,
+                    **metadata,
+                }
+                continue
+
+            if resolved_field_kind == ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value:
+                option_maps[field_name] = {
+                    "kind": OptionMapKind.TRACKER_ITEM_DIRECT.value,
+                    "name_map": {},
+                    "reference_type": reference_type or ReferenceType.TRACKER_ITEM.value,
+                    "multiple_values": multiple_values,
+                    "options": None,
+                    "source_status": OptionSourceStatus.READY.value,
+                    "resolver_available": True,
+                    **metadata,
+                }
+                continue
+
+            if resolved_field_kind == ResolvedFieldKind.MEMBER_REFERENCE.value:
+                option_maps[field_name] = {
+                    "kind": OptionMapKind.MEMBER_LOOKUP.value,
+                    "name_map": {},
+                    "reference_type": reference_type,
+                    "multiple_values": multiple_values,
+                    "options": None,
+                    "source_status": (
+                        OptionSourceStatus.LOOKUP_REQUIRED.value
+                        if metadata["is_supported"]
+                        else OptionSourceStatus.UNSUPPORTED.value
+                    ),
+                    "resolver_available": True,
+                    "member_types": row.get("member_types") or [],
+                    "field_id": row.get("field_id"),
                     **metadata,
                 }
                 continue
@@ -648,7 +902,9 @@ class MappingService:
         row_id: Any = None,
         raw_value: Any = None,
         error: str | None = None,
+        value_source: str = "mapping",
     ) -> dict[str, Any]:
+        """검증 결과 한 행에 공통으로 넣을 설명 정보를 만든다."""
         return {
             "df_column": df_col,
             "schema_field": schema_field,
@@ -665,6 +921,42 @@ class MappingService:
             "preconstruction_detail": option_info.get("preconstruction_detail"),
             "payload_target_kind": option_info.get("payload_target_kind"),
             "error": error,
+            "value_source": value_source,
+        }
+
+    @staticmethod
+    def resolve_static_option_value(raw_value: Any, option_info: dict[str, Any]) -> Any:
+        """schema option 이름을 실제 reference payload 값으로 바꾼다."""
+        if raw_value is None or str(raw_value).strip() == "":
+            return None
+
+        name_map = option_info["name_map"]
+        reference_type = option_info.get("reference_type")
+        multiple_values = option_info.get("multiple_values", False)
+
+        if multiple_values and isinstance(raw_value, list):
+            resolved_list = []
+            for item in raw_value:
+                if item is None or str(item).strip() == "":
+                    continue
+                key = str(item).strip()
+                option = name_map.get(key)
+                if option:
+                    resolved_list.append({
+                        "id": option.get("id"),
+                        "name": option.get("name"),
+                        "type": reference_type or ReferenceType.CHOICE_OPTION.value,
+                    })
+            return resolved_list or None
+
+        key = str(raw_value).strip()
+        option = name_map.get(key)
+        if not option:
+            return None
+        return {
+            "id": option.get("id"),
+            "name": option.get("name"),
+            "type": reference_type or ReferenceType.CHOICE_OPTION.value,
         }
 
     def check_option_alignment(
@@ -673,6 +965,7 @@ class MappingService:
         option_mapping: dict[str, str],
         option_maps: dict[str, dict],
     ) -> pd.DataFrame:
+        """업로드 데이터가 schema 규칙에 맞는지 조기에 검사한다."""
         errors = []
 
         for df_col, schema_field in option_mapping.items():
@@ -716,7 +1009,10 @@ class MappingService:
                     "status": OptionCheckStatus.PRECONSTRUCTION_REQUIRED.value,
                 })
 
-            if option_info.get("kind") == OptionMapKind.USER_LOOKUP.value:
+            if option_info.get("kind") in {
+                OptionMapKind.USER_LOOKUP.value,
+                OptionMapKind.MEMBER_LOOKUP.value,
+            }:
                 resolved_col = f"{df_col}__resolved"
                 status_col = f"{df_col}__lookup_status"
                 error_col = f"{df_col}__lookup_error"
@@ -745,6 +1041,32 @@ class MappingService:
                             else UserLookupStatus.USER_LOOKUP_NOT_RUN.value
                         ),
                     })
+                continue
+
+            if option_info.get("kind") == OptionMapKind.TRACKER_ITEM_DIRECT.value:
+                multiple_values = option_info.get("multiple_values", False)
+                for _, row in upload_df.iterrows():
+                    raw_value = row[df_col]
+                    if raw_value is None or str(raw_value).strip() == "":
+                        continue
+
+                    try:
+                        self.resolve_tracker_item_reference_value(
+                            raw_value,
+                            multiple_values=multiple_values,
+                        )
+                    except Exception as exc:
+                        errors.append({
+                            **self._validation_context(
+                                df_col,
+                                schema_field,
+                                option_info,
+                                row_id=row.get("_row_id"),
+                                raw_value=raw_value,
+                                error=str(exc),
+                            ),
+                            "status": OptionCheckStatus.DIRECT_PARSE_FAILED.value,
+                        })
                 continue
 
             if option_info.get("kind") == OptionMapKind.REFERENCE_LOOKUP.value:
@@ -813,6 +1135,7 @@ class MappingService:
         option_mapping: dict[str, str],
         option_maps: dict[str, dict],
     ) -> pd.DataFrame:
+        """정적으로 해결 가능한 옵션 값을 실제 reference payload 값으로 바꾼다."""
         work = upload_df.copy()
 
         for df_col, schema_field in option_mapping.items():
@@ -820,7 +1143,33 @@ class MappingService:
                 continue
 
             option_info = option_maps[schema_field]
-            if option_info.get("kind") == OptionMapKind.USER_LOOKUP.value:
+            if option_info.get("kind") == OptionMapKind.TRACKER_ITEM_DIRECT.value:
+                resolved_values = []
+                multiple_values = option_info.get("multiple_values", False)
+
+                for _, row in work.iterrows():
+                    raw_value = row[df_col]
+                    if raw_value is None or str(raw_value).strip() == "":
+                        resolved_values.append(None)
+                        continue
+
+                    try:
+                        resolved_values.append(
+                            self.resolve_tracker_item_reference_value(
+                                raw_value,
+                                multiple_values=multiple_values,
+                            )
+                        )
+                    except Exception:
+                        resolved_values.append(None)
+
+                work[f"{df_col}__resolved"] = resolved_values
+                continue
+
+            if option_info.get("kind") in {
+                OptionMapKind.USER_LOOKUP.value,
+                OptionMapKind.MEMBER_LOOKUP.value,
+            }:
                 resolved_col = f"{df_col}__resolved"
                 if resolved_col not in work.columns:
                     work[resolved_col] = [None] * len(work)
@@ -830,10 +1179,6 @@ class MappingService:
                 work[f"{df_col}__resolved"] = [None] * len(work)
                 continue
 
-            name_map = option_info["name_map"]
-            reference_type = option_info.get("reference_type")
-            multiple_values = option_info.get("multiple_values", False)
-
             resolved_values = []
             for _, row in work.iterrows():
                 raw_value = row[df_col]
@@ -841,32 +1186,7 @@ class MappingService:
                     resolved_values.append(None)
                     continue
 
-                if multiple_values and isinstance(raw_value, list):
-                    resolved_list = []
-                    for val in raw_value:
-                        if not val:
-                            continue
-                        key = str(val).strip()
-                        opt = name_map.get(key)
-                        if opt:
-                            resolved_list.append({
-                                "id": opt.get("id"),
-                                "name": opt.get("name"),
-                                "type": reference_type or ReferenceType.CHOICE_OPTION.value,
-                            })
-
-                    resolved_values.append(resolved_list if resolved_list else None)
-                else:
-                    key = str(raw_value).strip()
-                    opt = name_map.get(key)
-                    if not opt:
-                        resolved_values.append(None)
-                        continue
-                    resolved_values.append({
-                        "id": opt.get("id"),
-                        "name": opt.get("name"),
-                        "type": reference_type or ReferenceType.CHOICE_OPTION.value,
-                    })
+                resolved_values.append(self.resolve_static_option_value(raw_value, option_info))
 
             work[f"{df_col}__resolved"] = resolved_values
 

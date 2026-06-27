@@ -6,9 +6,13 @@
 
 1. [README](../README.md)
 2. [아키텍처](./architecture.md)
-3. [CLI 사용 가이드](./cli-guide.md)
-4. [트러블슈팅](./troubleshooting.md)
-5. [v2 변경 사항](./v2-changes.md)
+3. [Codebeamer 업로드 조사 정리](./codebeamer-upload-reference.md)
+4. [Codebeamer 프로젝트 시작 패키지](./codebeamer-project-start-kit.md)
+5. [CLI 사용 가이드](./cli-guide.md)
+6. [필드 지원 추가 가이드](./field-support-guide.md)
+7. [GUI 설계 초안](./gui-plan.md)
+8. [트러블슈팅](./troubleshooting.md)
+9. [v2 변경 사항](./v2-changes.md)
 
 ## 문서별 역할
 
@@ -18,8 +22,20 @@
 - [아키텍처](./architecture.md)
   코드 구조, 모듈 책임, 상태 모델, 최신 업로드 순서도를 설명합니다.
 
+- [Codebeamer 업로드 조사 정리](./codebeamer-upload-reference.md)
+  다른 프로젝트에서 재사용할 수 있도록 Codebeamer 업로드에 필요한 API, schema 규칙, payload 규칙, 한계를 한 문서로 묶었습니다.
+
+- [Codebeamer 프로젝트 시작 패키지](./codebeamer-project-start-kit.md)
+  live tracker schema export와 시작 템플릿을 함께 사용하는 권장 시작 절차를 정리합니다.
+
 - [CLI 사용 가이드](./cli-guide.md)
   실행 방법, Excel 입력 형식, 자동 매핑과 자동 list 컬럼 선택 흐름을 설명합니다.
+
+- [필드 지원 추가 가이드](./field-support-guide.md)
+  새로운 schema field type 또는 reference field를 지원할 때 수정해야 하는 코드 경로와 구현 순서를 설명합니다.
+
+- [GUI 설계 초안](./gui-plan.md)
+  사용자용 GUI 의 단계형 화면 구성, 설정 항목, 매핑 UX, 진행률과 일시정지 요구사항, 현재 구현 상태를 정리합니다.
 
 - [트러블슈팅](./troubleshooting.md)
   자주 발생하는 에러와 대응 방법을 정리합니다.
@@ -40,3 +56,4 @@
 - `src/mapping_service.py`
 - `src/wizard.py`
 - `src/models/`
+- `src/gui/`

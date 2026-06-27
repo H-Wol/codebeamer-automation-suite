@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 def setup_logger(name: str, level: str = "INFO", log_file: str | None = None) -> logging.Logger:
+    """터미널과 파일에 공통 형식으로 로그를 남기는 logger를 만든다."""
     logger = logging.getLogger(name)
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
     logger.propagate = False

@@ -4,6 +4,7 @@ from typing import Sequence
 
 
 def choose_one(prompt: str, items: Sequence[str], default_index: int | None = None) -> int:
+    """목록에서 하나를 고르게 하고 선택한 위치를 돌려준다."""
     if not items:
         raise ValueError("선택 가능한 항목이 없습니다.")
 
@@ -24,6 +25,7 @@ def choose_one(prompt: str, items: Sequence[str], default_index: int | None = No
 
 
 def choose_many(prompt: str, items: Sequence[str], default_indices: Sequence[int] | None = None) -> list[int]:
+    """목록에서 여러 개를 고르게 하고 선택한 위치 목록을 돌려준다."""
     default_indices = list(default_indices or [])
 
     while True:
@@ -47,6 +49,7 @@ def choose_many(prompt: str, items: Sequence[str], default_indices: Sequence[int
 
 
 def confirm(prompt: str, default: bool = True) -> bool:
+    """예/아니오 질문을 보여주고 불린 값으로 돌려준다."""
     suffix = "[Y/n]" if default else "[y/N]"
     raw = input(f"{prompt} {suffix}: ").strip().lower()
     if raw == "":
