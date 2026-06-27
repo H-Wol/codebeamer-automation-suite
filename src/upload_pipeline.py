@@ -66,6 +66,7 @@ def prepare_upload_dataframe(
     *,
     file_path: str,
     sheet_name: str | int,
+    header_row: int | None = None,
     summary_col: str,
     selected_mapping: dict[str, str],
     schema: dict[str, Any] | None = None,
@@ -79,7 +80,13 @@ def prepare_upload_dataframe(
         schema, schema_df = load_tracker_schema_df(wizard)
 
     list_cols = wizard.mapper.get_list_columns_for_mapping(selected_mapping, schema_df)
+    if header_row is not None:
+        wizard.reader.header_row = header_row
+        if wizard.processor is not None:
+            wizard.processor.header_row = header_row
     wizard.reader.summary_col = summary_col
+    if wizard.processor is not None:
+        wizard.processor.summary_col = summary_col
     raw_df = wizard.reader.read_excel(file_path=file_path, sheet_name=sheet_name)
     wizard.load_raw_dataframe(raw_df, list_cols=list_cols)
     wizard.state.schema = schema

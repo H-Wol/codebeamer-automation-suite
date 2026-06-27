@@ -547,16 +547,19 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     _configure_table_columns(preview_table, [180, 180, 160, 160])
     layout.addWidget(preview_table)
 
-    status_label = QLabel("Excel 파일을 선택하면 시트 목록과 미리보기를 불러옵니다.")
+    status_label = QLabel("Excel 파일과 옵션을 정한 뒤 '데이터 불러오기'를 누르세요.")
     status_label.setObjectName("status_label")
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
     previous_button = QPushButton("이전")
+    load_button = QPushButton("데이터 불러오기")
     next_button = QPushButton("다음")
+    load_button.setObjectName("primary_button")
     next_button.setObjectName("primary_button")
     next_button.setEnabled(False)
     buttons.addWidget(previous_button)
+    buttons.addWidget(load_button)
     buttons.addStretch(1)
     buttons.addWidget(next_button)
     layout.addLayout(buttons)
@@ -584,9 +587,32 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
                 preview_table.setItem(row_index, col_index, QTableWidgetItem(value))
         _configure_table_columns(preview_table, [180] * max(len(headers), 1))
         if suggested_summary:
+            summary_column.blockSignals(True)
             if summary_column.findText(suggested_summary) < 0:
                 summary_column.addItem(suggested_summary)
             summary_column.setCurrentText(suggested_summary)
+            summary_column.blockSignals(False)
+
+    def _clear_preview() -> None:
+        preview_table.clear()
+        preview_table.setColumnCount(0)
+        preview_table.setRowCount(0)
+
+    def _mark_preview_dirty(*, clear_sheet_names: bool = False, message: str | None = None) -> None:
+        page._preview_ready = False
+        _clear_preview()
+        if clear_sheet_names:
+            sheet_name.blockSignals(True)
+            sheet_name.clear()
+            sheet_name.blockSignals(False)
+        _update_next_button_state()
+        if message:
+            status_label.setText(message)
+            return
+        if file_path.text().strip():
+            status_label.setText("설정을 바꿨습니다. '데이터 불러오기'를 눌러 다시 확인하세요.")
+            return
+        status_label.setText("Excel 파일과 옵션을 정한 뒤 '데이터 불러오기'를 누르세요.")
 
     def _set_sheet_names(names: list[str], selected_name: str) -> None:
         sheet_name.blockSignals(True)
@@ -603,6 +629,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         page._preview_ready = False
         _update_next_button_state()
         if not state["file_path"]:
+            status_label.setText("Excel 파일을 먼저 선택해야 합니다.")
             return
         try:
             preview = on_file_preview_requested(
@@ -629,7 +656,6 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         )
         if selected:
             file_path.setText(selected)
-            _refresh_preview()
 
     def _go_previous():
         page.request_previous()
@@ -639,13 +665,27 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         if not state["file_path"]:
             status_label.setText("Excel 파일 경로를 지정해야 합니다.")
             return
+        if not page._preview_ready:
+            status_label.setText("파일 설정을 마친 뒤 '데이터 불러오기'를 먼저 실행해야 합니다.")
+            return
         on_file_state_changed(state)
         page.request_next()
 
     file_button.clicked.connect(_choose_file)
-    file_path.textChanged.connect(lambda _: (setattr(page, "_preview_ready", False), _update_next_button_state()))
-    sheet_name.currentTextChanged.connect(lambda _: _refresh_preview())
-    header_row.valueChanged.connect(lambda _: _refresh_preview())
+    load_button.clicked.connect(_refresh_preview)
+    file_path.textChanged.connect(
+        lambda _: _mark_preview_dirty(
+            clear_sheet_names=True,
+            message=(
+                "Excel 파일을 선택했습니다. '데이터 불러오기'를 눌러 시트 목록과 미리보기를 확인하세요."
+                if file_path.text().strip()
+                else "Excel 파일과 옵션을 정한 뒤 '데이터 불러오기'를 누르세요."
+            ),
+        )
+    )
+    sheet_name.currentTextChanged.connect(lambda _: _mark_preview_dirty())
+    header_row.valueChanged.connect(lambda _: _mark_preview_dirty())
+    summary_column.currentTextChanged.connect(lambda _: _mark_preview_dirty())
     previous_button.clicked.connect(_go_previous)
     next_button.clicked.connect(_go_next)
 

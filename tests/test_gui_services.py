@@ -250,6 +250,54 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             )
             self.assertEqual(mapping_context.default_value_candidates[0].options, ["Open", "Review"])
 
+    def test_prepare_mapping_context_uses_file_selection_header_and_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["메타", "메타", "메타"])
+            sheet.append(["요약", "담당자", "비고"])
+            sheet.append(["REQ-001", "홍길동", "메모"])
+            workbook.save(path)
+            workbook.close()
+
+            excel_service = GuiExcelService(reader_cls=FakeExcelReader)
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=excel_service,
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 2,
+                    "summary_column": "요약",
+                },
+            )
+
+            self.assertEqual(mapping_context.wizard.reader.header_row, 2)
+            self.assertEqual(mapping_context.wizard.reader.summary_col, "요약")
+            self.assertEqual(mapping_context.wizard.processor.summary_col, "요약")
+            self.assertIn("요약", mapping_context.upload_columns)
+            self.assertEqual(
+                mapping_context.wizard.state.upload_df.iloc[0]["upload_name"],
+                "REQ-001",
+            )
+
     def test_build_user_issue_df_keeps_only_user_visible_issues(self) -> None:
         service = GuiUploadPipelineService(client_factory=FakeClient)
         comparison_df = pd.DataFrame([

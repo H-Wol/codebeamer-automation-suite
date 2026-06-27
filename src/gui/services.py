@@ -330,6 +330,7 @@ class GuiUploadPipelineService:
             wizard,
             file_path=file_state["file_path"],
             sheet_name=file_state["sheet_name"],
+            header_row=int(file_state["header_row"]),
             summary_col=str(file_state["summary_column"]),
             selected_mapping=raw_mapping,
             schema=schema,
