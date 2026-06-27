@@ -8,6 +8,7 @@ import time
 from .pages import create_file_selection_page
 from .pages import create_mapping_page
 from .pages import create_project_selection_page
+from .pages import create_root_item_page
 from .pages import create_settings_page
 from .pages import create_validation_page
 from .pages import create_upload_page
@@ -139,7 +140,7 @@ class MainWindow:
                 steps_row = QHBoxLayout()
                 steps_row.setSpacing(8)
                 self.step_labels = []
-                for step_name in ("설정", "프로젝트", "파일", "매핑", "검증", "업로드", "결과"):
+                for step_name in ("설정", "프로젝트", "파일", "상단 데이터", "매핑", "검증", "업로드", "결과"):
                     label = QLabel(step_name)
                     label.setObjectName("step_badge")
                     steps_row.addWidget(label)
@@ -320,6 +321,7 @@ class MainWindow:
                     self._on_file_state_changed,
                     self._load_file_preview,
                 )
+                self.root_item_page = create_root_item_page(self._preview_root_item_config)
                 self.mapping_page = create_mapping_page(self._validate_mapping)
                 self.validation_page = create_validation_page()
                 self.upload_page = create_upload_page(
@@ -339,11 +341,16 @@ class MainWindow:
                 self._attach_navigation(
                     self.file_page,
                     previous_page=self.project_page,
-                    next_handler=self._on_prepare_mapping_context,
+                    next_handler=self._on_prepare_root_item_context,
+                )
+                self._attach_navigation(
+                    self.root_item_page,
+                    previous_page=self.file_page,
+                    next_handler=self._on_confirm_root_item_config,
                 )
                 self._attach_navigation(
                     self.mapping_page,
-                    previous_page=self.file_page,
+                    previous_page=self.root_item_page,
                     next_page=self.validation_page,
                     next_handler=self._enter_validation_page,
                 )
@@ -369,6 +376,7 @@ class MainWindow:
                     self.settings_page,
                     self.project_page,
                     self.file_page,
+                    self.root_item_page,
                     self.mapping_page,
                     self.validation_page,
                     self.upload_page,
@@ -380,15 +388,17 @@ class MainWindow:
                     self.settings_page: ("설정", "연결 정보와 기본 실행 옵션을 입력합니다.", 0),
                     self.project_page: ("프로젝트 선택", "업로드 대상 프로젝트와 트래커를 선택합니다.", 1),
                     self.file_page: ("파일 선택", "Excel 파일과 시트, 헤더 정보를 확인합니다.", 2),
-                    self.mapping_page: ("컬럼 매핑", "업로드할 컬럼만 선택하고 Codebeamer 필드와 연결합니다.", 3),
-                    self.validation_page: ("검증", "문제가 있는 항목만 먼저 확인하고 수정 여부를 판단합니다.", 4),
-                    self.upload_page: ("업로드", "진행 상황을 확인하면서 업로드를 제어합니다.", 5),
-                    self.result_page: ("결과", "성공, 실패, 미해결 항목을 정리해서 확인합니다.", 6),
+                    self.root_item_page: ("상단 데이터", "파일명 기반 부모 데이터의 필드와 정규식 파싱 규칙을 설정합니다.", 3),
+                    self.mapping_page: ("컬럼 매핑", "업로드할 컬럼만 선택하고 Codebeamer 필드와 연결합니다.", 4),
+                    self.validation_page: ("검증", "문제가 있는 항목만 먼저 확인하고 수정 여부를 판단합니다.", 5),
+                    self.upload_page: ("업로드", "진행 상황을 확인하면서 업로드를 제어합니다.", 6),
+                    self.result_page: ("결과", "성공, 실패, 미해결 항목을 정리해서 확인합니다.", 7),
                 }
                 for page in (
                     self.settings_page,
                     self.project_page,
                     self.file_page,
+                    self.root_item_page,
                     self.mapping_page,
                     self.validation_page,
                     self.upload_page,
@@ -485,6 +495,14 @@ class MainWindow:
             def _show_mapping_page(self) -> None:
                 self._show_page(self.mapping_page)
 
+            def _preview_root_item_config(self, root_item_config: dict[str, object]):
+                if self.session_state.mapping_context is None:
+                    raise ValueError("루트 데이터 컨텍스트가 준비되지 않았습니다.")
+                return self.pipeline_service.build_root_item_preview_context(
+                    self.session_state.mapping_context,
+                    root_item_config,
+                )
+
             def _enter_validation_page(self) -> None:
                 self._show_page(self.validation_page)
 
@@ -504,7 +522,7 @@ class MainWindow:
                 self.upload_failed_count = 0
                 self._show_page(self.project_page)
 
-            def _on_prepare_mapping_context(self) -> None:
+            def _on_prepare_root_item_context(self) -> None:
                 settings = self.session_state.settings
                 if not settings.default_project_id or not settings.default_tracker_id:
                     raise ValueError("프로젝트와 트래커를 먼저 선택해야 합니다.")
@@ -515,12 +533,23 @@ class MainWindow:
                     self.session_state.file_state,
                 )
                 self.session_state.mapping_context = mapping_context
+                root_preview_context = self.pipeline_service.build_root_item_preview_context(
+                    mapping_context,
+                    mapping_context.root_item_config,
+                )
+                self.root_item_page.load_context(root_preview_context)
+                self._show_page(self.root_item_page)
+
+            def _on_confirm_root_item_config(self) -> None:
+                if self.session_state.mapping_context is None:
+                    raise ValueError("매핑 컨텍스트가 준비되지 않았습니다.")
+                self.session_state.mapping_context.root_item_config = self.root_item_page.get_config()
                 self.mapping_page.load_context(
-                    mapping_context.upload_columns,
-                    mapping_context.schema_df,
-                    mapping_context.selected_mapping,
-                    mapping_context.default_value_candidates,
-                    mapping_context.selected_default_values,
+                    self.session_state.mapping_context.upload_columns,
+                    self.session_state.mapping_context.schema_df,
+                    self.session_state.mapping_context.selected_mapping,
+                    self.session_state.mapping_context.default_value_candidates,
+                    self.session_state.mapping_context.selected_default_values,
                 )
                 self._show_page(self.mapping_page)
 

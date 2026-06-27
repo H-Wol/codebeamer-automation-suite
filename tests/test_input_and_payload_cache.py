@@ -184,6 +184,18 @@ class PayloadCacheWizardTest(unittest.TestCase):
         )
         self.assertEqual(len(upload_result["success_df"]), 3)
 
+    def test_upload_root_field_values_can_override_root_name(self) -> None:
+        wizard = self._build_wizard()
+
+        upload_result = wizard.upload(
+            dry_run=False,
+            root_item_name="sample",
+            root_field_values={"Summary": "ROOT-CUSTOM"},
+        )
+
+        self.assertEqual(self.client.create_item_calls[0]["payload"]["name"], "ROOT-CUSTOM")
+        self.assertEqual(upload_result["success_df"].iloc[0]["upload_name"], "sample")
+
     def test_upload_failure_persists_response_json(self) -> None:
         wizard = CountingWizard(
             client=FailingSchemaClient(self.schema),

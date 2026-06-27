@@ -1168,6 +1168,170 @@ class CodebeamerUploadWizard:
             ),
         )
 
+    def _resolve_manual_field_value(
+        self,
+        schema_field: str,
+        raw_value: Any,
+        *,
+        row_id: int,
+        df_col: str,
+    ) -> Any:
+        """행 외부 입력값을 스키마 기준 업로드 값으로 변환한다."""
+        matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
+        if matched.empty:
+            self._raise_payload_error(
+                "FIELD_UNSUPPORTED",
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+                detail="schema field is missing in current schema",
+            )
+
+        field_row = matched.iloc[0]
+        if not bool(field_row.get("is_option_like", False)):
+            return raw_value
+
+        option_info = (self.state.option_maps or {}).get(schema_field, {})
+        kind = option_info.get("kind")
+        if not option_info.get("is_supported", True) or kind == OptionMapKind.UNSUPPORTED.value:
+            self._raise_payload_error(
+                "FIELD_UNSUPPORTED",
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+                detail=(
+                    f"reason={option_info.get('unsupported_reason')!r} "
+                    f"strategy={option_info.get('resolution_strategy')!r}"
+                ),
+            )
+
+        if kind == OptionMapKind.STATIC_OPTIONS.value:
+            resolved_value = self.mapper.resolve_static_option_value(raw_value, option_info)
+            if resolved_value is None:
+                self._raise_payload_error(
+                    "OPTION_RESOLUTION_FAILED",
+                    schema_field=schema_field,
+                    df_col=df_col,
+                    row_id=row_id,
+                    detail=f"value={raw_value!r}",
+                )
+            return resolved_value
+
+        if kind == OptionMapKind.TRACKER_ITEM_DIRECT.value:
+            try:
+                return self.mapper.resolve_tracker_item_reference_value(
+                    raw_value,
+                    multiple_values=option_info.get("multiple_values", False),
+                )
+            except Exception as exc:
+                self._raise_payload_error(
+                    "DIRECT_PARSE_FAILED",
+                    schema_field=schema_field,
+                    df_col=df_col,
+                    row_id=row_id,
+                    detail=f"value={raw_value!r} error={str(exc)!r}",
+                )
+
+        if kind == OptionMapKind.USER_LOOKUP.value:
+            resolved, _, lookup_status, lookup_error = self._resolve_user_reference_value(
+                raw_value,
+                multiple_values=option_info.get("multiple_values", False),
+            )
+            if resolved is None:
+                self._raise_payload_error(
+                    "LOOKUP_REQUIRED",
+                    schema_field=schema_field,
+                    df_col=df_col,
+                    row_id=row_id,
+                    detail=(
+                        f"value={raw_value!r} lookup_status={lookup_status!r} "
+                        f"error={lookup_error!r}"
+                    ),
+                )
+            return resolved
+
+        if kind == OptionMapKind.MEMBER_LOOKUP.value:
+            resolved, _, lookup_status, lookup_error = self._resolve_member_reference_value(
+                raw_value,
+                multiple_values=option_info.get("multiple_values", False),
+                field_id=option_info.get("field_id"),
+                member_types=option_info.get("member_types") or [],
+            )
+            if resolved is None:
+                self._raise_payload_error(
+                    "LOOKUP_REQUIRED",
+                    schema_field=schema_field,
+                    df_col=df_col,
+                    row_id=row_id,
+                    detail=(
+                        f"value={raw_value!r} lookup_status={lookup_status!r} "
+                        f"error={lookup_error!r}"
+                    ),
+                )
+            return resolved
+
+        self._raise_payload_error(
+            "LOOKUP_REQUIRED",
+            schema_field=schema_field,
+            df_col=df_col,
+            row_id=row_id,
+            detail=(
+                f"value={raw_value!r} "
+                f"lookup_target={option_info.get('lookup_target_kind')!r} "
+                f"reason={option_info.get('unsupported_reason')!r}"
+            ),
+        )
+
+    def _apply_manual_field_values(
+        self,
+        item: TrackerItemBase,
+        explicit_field_values: dict[str, Any] | None,
+        *,
+        row_id: int,
+        applied_schema_fields: set[str],
+        df_col_prefix: str,
+    ) -> None:
+        """행 외부에서 받은 값을 루트/보조 payload에 적용한다."""
+        if self.state.schema_df is None or not explicit_field_values:
+            return
+
+        for schema_field, raw_value in explicit_field_values.items():
+            if schema_field in applied_schema_fields:
+                continue
+            if not self._has_configured_value(raw_value):
+                continue
+
+            matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
+            if matched.empty:
+                continue
+
+            field_row = matched.iloc[0]
+            tracker_field = field_row["tracker_item_field"]
+            if not tracker_field:
+                continue
+            if bool(field_row.get("is_table_field")):
+                continue
+
+            df_col = f"{df_col_prefix}:{schema_field}"
+            self._ensure_field_ready_for_payload(
+                field_row=field_row,
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+            )
+            field_value = self._resolve_manual_field_value(
+                schema_field,
+                raw_value,
+                row_id=row_id,
+                df_col=df_col,
+            )
+            if field_value is None:
+                continue
+
+            field_info = self._schema_field_info(field_row, schema_field)
+            item.set_field_value(tracker_field, field_value, field_info)
+            applied_schema_fields.add(schema_field)
+
     def _apply_default_field_values(
         self,
         item: TrackerItemBase,
@@ -1351,11 +1515,22 @@ class CodebeamerUploadWizard:
         normalized = str(root_item_name).strip()
         return normalized or None
 
-    def _build_root_item_payload(self, root_item_name: str) -> dict[str, Any]:
+    def _build_root_item_payload(
+        self,
+        root_item_name: str,
+        root_field_values: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """업로드 시작 전에 생성할 최상위 부모 item payload를 만든다."""
         item = TrackerItemBase()
         item.name = root_item_name
         applied_schema_fields: set[str] = set()
+        self._apply_manual_field_values(
+            item,
+            root_field_values,
+            row_id=-1,
+            applied_schema_fields=applied_schema_fields,
+            df_col_prefix="ROOT",
+        )
         self._apply_default_field_values(
             item,
             row_id=-1,
@@ -1426,6 +1601,7 @@ class CodebeamerUploadWizard:
         continue_on_error: bool = True,
         *,
         root_item_name: str | None = None,
+        root_field_values: dict[str, Any] | None = None,
         event_callback=None,
         cancel_requested=None,
         pause_requested=None,
@@ -1485,7 +1661,7 @@ class CodebeamerUploadWizard:
                 })
 
             try:
-                root_payload = self._build_root_item_payload(root_item_name)
+                root_payload = self._build_root_item_payload(root_item_name, root_field_values=root_field_values)
                 if dry_run:
                     result = {"id": "DRYRUN-ROOT"}
                 else:

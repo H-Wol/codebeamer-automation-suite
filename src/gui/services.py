@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import time
 from typing import Any
 
@@ -12,6 +13,7 @@ from src.excel_reader import ExcelReader
 from src.hierarchy_processor import HierarchyProcessor
 from src.models import MappingStatus
 from src.mapping_service import MappingService
+from src.models import OptionMapKind
 from src.models import OptionCheckStatus
 from src.models import PayloadStatus
 from src.upload_pipeline import load_tracker_schema_df
@@ -178,6 +180,11 @@ GUI_HIDDEN_USER_COLUMNS = GUI_EXCLUDED_MAPPING_COLUMNS | {
     "payload_error",
     "error_response_json",
 }
+ROOT_SOURCE_FILE_NAME = "__file_name__"
+ROOT_SOURCE_FILE_STEM = "__file_stem__"
+ROOT_SOURCE_REGEX_FULL = "__regex_full__"
+ROOT_REGEX_TARGET_FILE_NAME = "file_name"
+ROOT_REGEX_TARGET_FILE_STEM = "file_stem"
 
 
 @dataclass
@@ -199,6 +206,7 @@ class MappingContext:
     list_cols: list[str]
     file_paths: list[str]
     representative_file_path: str
+    root_item_config: dict[str, Any]
 
 
 @dataclass
@@ -216,9 +224,38 @@ class BatchUploadJob:
     file_path: str
     file_label: str
     root_item_name: str | None
+    root_field_values: dict[str, Any]
     ready_count: int
     output_dir: str
     wizard: CodebeamerUploadWizard
+
+
+@dataclass
+class RootFieldCandidate:
+    schema_field: str
+    field_type: str
+    mandatory: bool
+    supported: bool
+
+
+@dataclass
+class RootSourceOption:
+    key: str
+    label: str
+
+
+@dataclass
+class RootItemPreviewContext:
+    regex_pattern: str
+    regex_target: str
+    field_sources: dict[str, str]
+    field_candidates: list[RootFieldCandidate]
+    source_options: list[RootSourceOption]
+    preview_columns: list[str]
+    preview_rows: list[dict[str, str]]
+    regex_error: str | None
+    status_message: str
+    has_blocking_issues: bool
 
 
 class GuiUploadPipelineService:
@@ -321,6 +358,252 @@ class GuiUploadPipelineService:
                 mandatory=bool(candidate.get("mandatory", False)),
             ))
         return candidates
+
+    @staticmethod
+    def _root_regex_target_options() -> list[tuple[str, str]]:
+        return [
+            (ROOT_REGEX_TARGET_FILE_STEM, "파일명(확장자 제외)"),
+            (ROOT_REGEX_TARGET_FILE_NAME, "전체 파일명"),
+        ]
+
+    @staticmethod
+    def _root_source_label(source_key: str) -> str:
+        if source_key == ROOT_SOURCE_FILE_STEM:
+            return "파일명(확장자 제외)"
+        if source_key == ROOT_SOURCE_FILE_NAME:
+            return "전체 파일명"
+        if source_key == ROOT_SOURCE_REGEX_FULL:
+            return "정규식 전체 일치"
+        if source_key.startswith("group"):
+            return f"정규식 {source_key}"
+        return source_key
+
+    @classmethod
+    def _root_parse_target_text(cls, file_path: str, regex_target: str) -> str:
+        if regex_target == ROOT_REGEX_TARGET_FILE_NAME:
+            return Path(file_path).name
+        return Path(file_path).stem
+
+    @staticmethod
+    def _name_schema_field(schema_df: pd.DataFrame) -> str | None:
+        if schema_df is None or schema_df.empty:
+            return None
+        matched = schema_df[schema_df["tracker_item_field"].astype(str) == "name"]
+        if matched.empty:
+            return None
+        return str(matched.iloc[0]["field_name"])
+
+    def _default_root_item_config(self, schema_df: pd.DataFrame) -> dict[str, Any]:
+        field_sources: dict[str, str] = {}
+        name_schema_field = self._name_schema_field(schema_df)
+        if name_schema_field:
+            field_sources[name_schema_field] = ROOT_SOURCE_FILE_STEM
+        return {
+            "regex_pattern": "",
+            "regex_target": ROOT_REGEX_TARGET_FILE_STEM,
+            "field_sources": field_sources,
+        }
+
+    @classmethod
+    def _normalize_root_item_config(
+        cls,
+        schema_df: pd.DataFrame,
+        root_item_config: dict[str, Any] | None,
+        *,
+        default_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        config = dict(default_config or {})
+        if root_item_config:
+            config.update(root_item_config)
+
+        regex_pattern = str(config.get("regex_pattern") or "").strip()
+        regex_target = str(config.get("regex_target") or ROOT_REGEX_TARGET_FILE_STEM).strip()
+        if regex_target not in {ROOT_REGEX_TARGET_FILE_STEM, ROOT_REGEX_TARGET_FILE_NAME}:
+            regex_target = ROOT_REGEX_TARGET_FILE_STEM
+
+        raw_field_sources = config.get("field_sources")
+        field_sources: dict[str, str] = {}
+        if isinstance(raw_field_sources, dict):
+            for schema_field, source_key in raw_field_sources.items():
+                field_name = str(schema_field or "").strip()
+                source_name = str(source_key or "").strip()
+                if field_name:
+                    field_sources[field_name] = source_name
+
+        return {
+            "regex_pattern": regex_pattern,
+            "regex_target": regex_target,
+            "field_sources": field_sources,
+        }
+
+    def _root_field_candidates(self, schema_df: pd.DataFrame) -> list[RootFieldCandidate]:
+        option_maps = self.mapper.build_option_maps_from_schema(schema_df)
+        candidates: list[RootFieldCandidate] = []
+
+        for _, row in schema_df.iterrows():
+            if self._is_gui_excluded_schema_field(row):
+                continue
+            if bool(row.get("is_table_field", False)):
+                continue
+
+            tracker_item_field = str(row.get("tracker_item_field") or "").strip()
+            if not tracker_item_field:
+                continue
+
+            schema_field = str(row.get("field_name") or "").strip()
+            if not schema_field:
+                continue
+
+            supported = bool(row.get("is_supported", True))
+            if bool(row.get("is_option_like", False)):
+                option_info = option_maps.get(schema_field, {})
+                kind = option_info.get("kind")
+                supported = supported and kind not in {
+                    None,
+                    OptionMapKind.UNSUPPORTED.value,
+                    OptionMapKind.REFERENCE_LOOKUP.value,
+                }
+
+            candidates.append(RootFieldCandidate(
+                schema_field=schema_field,
+                field_type=str(row.get("field_type") or ""),
+                mandatory=bool(row.get("mandatory", False)),
+                supported=supported,
+            ))
+
+        return candidates
+
+    @staticmethod
+    def _compiled_root_regex(regex_pattern: str) -> tuple[re.Pattern[str] | None, str | None]:
+        pattern = str(regex_pattern or "").strip()
+        if not pattern:
+            return None, None
+        try:
+            return re.compile(pattern), None
+        except re.error as exc:
+            return None, str(exc)
+
+    @classmethod
+    def _root_regex_group_keys(cls, compiled_pattern: re.Pattern[str] | None) -> list[str]:
+        if compiled_pattern is None:
+            return []
+        if compiled_pattern.groupindex:
+            return [name for name, _ in sorted(compiled_pattern.groupindex.items(), key=lambda item: item[1])]
+        return [f"group{index}" for index in range(1, compiled_pattern.groups + 1)]
+
+    @classmethod
+    def _root_sources_for_file(
+        cls,
+        file_path: str,
+        *,
+        regex_pattern: str,
+        regex_target: str,
+    ) -> tuple[dict[str, str], bool, str | None]:
+        sources = {
+            ROOT_SOURCE_FILE_NAME: Path(file_path).name,
+            ROOT_SOURCE_FILE_STEM: Path(file_path).stem,
+        }
+        compiled_pattern, regex_error = cls._compiled_root_regex(regex_pattern)
+        if regex_error is not None:
+            return sources, False, regex_error
+        if compiled_pattern is None:
+            return sources, True, None
+
+        target_text = cls._root_parse_target_text(file_path, regex_target)
+        match = compiled_pattern.search(target_text)
+        if match is None:
+            return sources, False, None
+
+        sources[ROOT_SOURCE_REGEX_FULL] = match.group(0)
+        group_keys = cls._root_regex_group_keys(compiled_pattern)
+        if compiled_pattern.groupindex:
+            for group_key in group_keys:
+                value = match.group(group_key)
+                sources[group_key] = "" if value is None else str(value)
+        else:
+            for group_index, group_key in enumerate(group_keys, start=1):
+                value = match.group(group_index)
+                sources[group_key] = "" if value is None else str(value)
+        return sources, True, None
+
+    def build_root_item_preview_context(
+        self,
+        mapping_context: MappingContext,
+        root_item_config: dict[str, Any] | None = None,
+    ) -> RootItemPreviewContext:
+        default_config = self._default_root_item_config(mapping_context.schema_df)
+        normalized = self._normalize_root_item_config(
+            mapping_context.schema_df,
+            root_item_config or mapping_context.root_item_config,
+            default_config=default_config,
+        )
+        regex_pattern = normalized["regex_pattern"]
+        regex_target = normalized["regex_target"]
+        field_sources = dict(normalized["field_sources"])
+        field_candidates = self._root_field_candidates(mapping_context.schema_df)
+
+        compiled_pattern, regex_error = self._compiled_root_regex(regex_pattern)
+        source_options = [
+            RootSourceOption(ROOT_SOURCE_FILE_STEM, self._root_source_label(ROOT_SOURCE_FILE_STEM)),
+            RootSourceOption(ROOT_SOURCE_FILE_NAME, self._root_source_label(ROOT_SOURCE_FILE_NAME)),
+        ]
+        if compiled_pattern is not None:
+            source_options.append(RootSourceOption(ROOT_SOURCE_REGEX_FULL, self._root_source_label(ROOT_SOURCE_REGEX_FULL)))
+            for group_key in self._root_regex_group_keys(compiled_pattern):
+                source_options.append(RootSourceOption(group_key, self._root_source_label(group_key)))
+
+        preview_columns = ["file_name", "parse_target", "matched"]
+        if compiled_pattern is not None:
+            preview_columns.append(ROOT_SOURCE_REGEX_FULL)
+            preview_columns.extend(self._root_regex_group_keys(compiled_pattern))
+
+        preview_rows: list[dict[str, str]] = []
+        missing_sources: list[str] = []
+        for file_path in mapping_context.file_paths:
+            sources, matched, source_error = self._root_sources_for_file(
+                file_path,
+                regex_pattern=regex_pattern,
+                regex_target=regex_target,
+            )
+            if source_error is not None and regex_error is None:
+                regex_error = source_error
+            preview_row = {
+                "file_name": Path(file_path).name,
+                "parse_target": self._root_parse_target_text(file_path, regex_target),
+                "matched": "yes" if matched else ("regex error" if regex_error else "no"),
+            }
+            for column_name in preview_columns:
+                if column_name in {"file_name", "parse_target", "matched"}:
+                    continue
+                preview_row[column_name] = str(sources.get(column_name) or "")
+            preview_rows.append(preview_row)
+
+            for schema_field, source_key in field_sources.items():
+                if not source_key:
+                    continue
+                if not str(sources.get(source_key) or "").strip():
+                    missing_sources.append(f"{Path(file_path).name}:{schema_field}")
+
+        has_blocking_issues = regex_error is not None
+        status_message = "파일명 파싱 결과를 확인하고 루트 필드 소스를 선택하세요."
+        if regex_error is not None:
+            status_message = f"정규식 오류: {regex_error}"
+        elif missing_sources:
+            has_blocking_issues = True
+            status_message = "일부 파일에서 선택한 루트 필드 소스를 만들 수 없습니다."
+
+        return RootItemPreviewContext(
+            regex_pattern=regex_pattern,
+            regex_target=regex_target,
+            field_sources=field_sources,
+            field_candidates=field_candidates,
+            source_options=source_options,
+            preview_columns=preview_columns,
+            preview_rows=preview_rows,
+            regex_error=regex_error,
+            status_message=status_message,
+            has_blocking_issues=has_blocking_issues,
+        )
 
     @staticmethod
     def _normalize_file_paths(file_state: dict[str, Any]) -> list[str]:
@@ -451,6 +734,7 @@ class GuiUploadPipelineService:
             list_cols=list_cols,
             file_paths=file_paths,
             representative_file_path=representative_file_path,
+            root_item_config=self._default_root_item_config(mappable_schema_df),
         )
 
     def validate_mapping(
@@ -617,10 +901,32 @@ class GuiUploadPipelineService:
             "item_name": str(context.get("item_name") or fallback_item_name or ""),
         }
 
-    @staticmethod
-    def _root_item_name_for_file(file_path: str) -> str | None:
-        root_item_name = Path(file_path).stem.strip()
-        return root_item_name or None
+    def build_root_item_payload_spec(
+        self,
+        mapping_context: MappingContext,
+        file_path: str,
+    ) -> tuple[str | None, dict[str, Any]]:
+        preview_context = self.build_root_item_preview_context(mapping_context, mapping_context.root_item_config)
+        sources, _, regex_error = self._root_sources_for_file(
+            file_path,
+            regex_pattern=preview_context.regex_pattern,
+            regex_target=preview_context.regex_target,
+        )
+        if regex_error is not None:
+            raise ValueError(f"루트 데이터 정규식 오류: {regex_error}")
+
+        root_field_values: dict[str, Any] = {}
+        for schema_field, source_key in preview_context.field_sources.items():
+            raw_value = str(sources.get(source_key) or "").strip()
+            if raw_value:
+                root_field_values[schema_field] = raw_value
+
+        root_item_name = Path(file_path).stem.strip() or None
+        name_schema_field = self._name_schema_field(mapping_context.schema_df)
+        if name_schema_field and str(root_field_values.get(name_schema_field) or "").strip():
+            root_item_name = str(root_field_values[name_schema_field]).strip()
+
+        return root_item_name, root_field_values
 
     @staticmethod
     def _batch_output_dir(output_dir: str, file_path: str, index: int) -> str:
@@ -755,24 +1061,26 @@ class GuiUploadPipelineService:
                     header_row=header_row,
                     summary_col=summary_col,
                 )
-                root_item_name = self._root_item_name_for_file(file_path)
+                root_item_name, root_field_values = self.build_root_item_payload_spec(mapping_context, file_path)
                 ready_count = self._ready_upload_count(wizard, root_item_name)
                 total_count += ready_count
                 prepared_jobs.append(BatchUploadJob(
                     file_path=file_path,
                     file_label=file_label,
                     root_item_name=root_item_name,
+                    root_field_values=root_field_values,
                     ready_count=ready_count,
                     output_dir=self._batch_output_dir(output_dir, file_path, index),
                     wizard=wizard,
                 ))
             except Exception as exc:
+                fallback_root_item_name = Path(file_path).stem.strip() or file_label
                 failed_frames.append(pd.DataFrame([{
                     "source_file": file_label,
                     "source_file_path": file_path,
                     "_row_id": None,
                     "parent_row_id": None,
-                    "upload_name": self._root_item_name_for_file(file_path) or file_label,
+                    "upload_name": fallback_root_item_name,
                     "error": str(exc),
                     "status": PayloadStatus.FAILED.value,
                 }]))
@@ -817,6 +1125,7 @@ class GuiUploadPipelineService:
                 dry_run=dry_run,
                 continue_on_error=continue_on_error,
                 root_item_name=job.root_item_name,
+                root_field_values=job.root_field_values,
                 event_callback=_forward_event,
                 cancel_requested=cancel_requested,
                 pause_requested=pause_requested,

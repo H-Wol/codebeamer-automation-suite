@@ -346,10 +346,111 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             self.assertEqual(list(upload_df["upload_name"]), ["REQ-001"])
             self.assertNotIn("_synthetic_root", upload_df.columns)
 
+    def test_build_root_item_preview_context_parses_named_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "ABC_REQ-001.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary"])
+            sheet.append(["REQ-001"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "file_paths": [str(path)],
+                    "preview_file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                },
+            )
+
+            preview_context = service.build_root_item_preview_context(
+                mapping_context,
+                {
+                    "regex_pattern": r"^(?P<project>[A-Z]+)_(?P<title>.+)$",
+                    "regex_target": "file_stem",
+                    "field_sources": {"Summary": "title"},
+                },
+            )
+
+            self.assertFalse(preview_context.has_blocking_issues)
+            self.assertIn("project", preview_context.preview_columns)
+            self.assertIn("title", preview_context.preview_columns)
+            self.assertEqual(preview_context.preview_rows[0]["project"], "ABC")
+            self.assertEqual(preview_context.preview_rows[0]["title"], "REQ-001")
+
+    def test_build_root_item_payload_spec_uses_regex_mapped_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "ABC_REQ-001.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary"])
+            sheet.append(["REQ-001"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "file_paths": [str(path)],
+                    "preview_file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                },
+            )
+            mapping_context.root_item_config = {
+                "regex_pattern": r"^(?P<project>[A-Z]+)_(?P<title>.+)$",
+                "regex_target": "file_stem",
+                "field_sources": {"Summary": "title"},
+            }
+
+            root_item_name, root_field_values = service.build_root_item_payload_spec(mapping_context, str(path))
+
+            self.assertEqual(root_item_name, "REQ-001")
+            self.assertEqual(root_field_values["Summary"], "REQ-001")
+
     def test_prepare_mapping_context_rejects_mismatched_batch_headers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
-            first_path = Path(tmp_dir) / "sample_a.xlsx"
-            second_path = Path(tmp_dir) / "sample_b.xlsx"
+            first_path = Path(tmp_dir) / "ABC_REQ-001.xlsx"
+            second_path = Path(tmp_dir) / "DEF_REQ-002.xlsx"
 
             first_book = Workbook()
             first_sheet = first_book.active
@@ -398,8 +499,8 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
 
     def test_run_batch_upload_aggregates_multiple_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
-            first_path = Path(tmp_dir) / "sample_a.xlsx"
-            second_path = Path(tmp_dir) / "sample_b.xlsx"
+            first_path = Path(tmp_dir) / "ABC_REQ-001.xlsx"
+            second_path = Path(tmp_dir) / "DEF_REQ-002.xlsx"
 
             for path, summary in (
                 (first_path, "REQ-001"),
@@ -438,6 +539,11 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             }
 
             mapping_context = service.prepare_mapping_context(settings, file_state)
+            mapping_context.root_item_config = {
+                "regex_pattern": r"^(?P<project>[A-Z]+)_(?P<title>.+)$",
+                "regex_target": "file_stem",
+                "field_sources": {"Summary": "title"},
+            }
             validation_context = service.validate_mapping(
                 mapping_context,
                 mapping_context.selected_mapping,
@@ -456,11 +562,9 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
 
             success_df = result["success_df"]
             self.assertEqual(len(success_df), 4)
-            self.assertEqual(set(success_df["source_file"].tolist()), {"sample_a.xlsx", "sample_b.xlsx"})
-            self.assertEqual(
-                sorted(success_df["upload_name"].tolist()),
-                ["REQ-001", "REQ-002", "sample_a", "sample_b"],
-            )
+            self.assertEqual(set(success_df["source_file"].tolist()), {"ABC_REQ-001.xlsx", "DEF_REQ-002.xlsx"})
+            root_rows = success_df[success_df["_row_id"].isna()].reset_index(drop=True)
+            self.assertEqual(root_rows["upload_name"].tolist(), ["REQ-001", "REQ-002"])
             self.assertTrue(result["failed_df"].empty)
             self.assertTrue(result["unresolved_df"].empty)
 

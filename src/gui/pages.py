@@ -740,6 +740,192 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     return page
 
 
+def create_root_item_page(on_preview_requested):
+    qt = _require_qt()
+    QWidget = qt["QWidget"]
+    QVBoxLayout = qt["QVBoxLayout"]
+    QFormLayout = qt["QFormLayout"]
+    QHBoxLayout = qt["QHBoxLayout"]
+    QLabel = qt["QLabel"]
+    QLineEdit = qt["QLineEdit"]
+    QComboBox = qt["QComboBox"]
+    QCheckBox = qt["QCheckBox"]
+    QPushButton = qt["QPushButton"]
+    QTableWidget = qt["QTableWidget"]
+    QTableWidgetItem = qt["QTableWidgetItem"]
+
+    page = QWidget()
+    layout = QVBoxLayout(page)
+    layout.setContentsMargins(6, 6, 6, 6)
+    layout.setSpacing(10)
+
+    description_label = QLabel(
+        "파일명 기반으로 생성할 최상위 부모 데이터의 이름과 필드 값을 설정합니다. "
+        "정규식은 실시간으로 미리보기에 반영됩니다."
+    )
+    description_label.setWordWrap(True)
+    description_label.setObjectName("section_label")
+    layout.addWidget(description_label)
+
+    form = QFormLayout()
+    _configure_form_layout(form)
+    regex_target = QComboBox()
+    regex_target.addItem("파일명(확장자 제외)", "file_stem")
+    regex_target.addItem("전체 파일명", "file_name")
+    regex_pattern = QLineEdit()
+    regex_pattern.setPlaceholderText(r"예: ^(?P<project>[A-Z]+)_(?P<title>.+)$")
+    _configure_form_field(regex_target)
+    _configure_form_field(regex_pattern, minimum_width=320)
+    form.addRow("정규식 대상", regex_target)
+    form.addRow("정규식", regex_pattern)
+    layout.addLayout(form)
+
+    preview_label = QLabel("파일명 파싱 미리보기")
+    preview_label.setObjectName("section_label")
+    layout.addWidget(preview_label)
+
+    preview_table = QTableWidget(0, 0)
+    preview_table.setAlternatingRowColors(True)
+    layout.addWidget(preview_table)
+
+    field_label = QLabel("상단 데이터 필드 매핑")
+    field_label.setObjectName("section_label")
+    layout.addWidget(field_label)
+
+    field_table = QTableWidget(0, 5)
+    field_table.setHorizontalHeaderLabels(["사용", "Codebeamer 필드", "타입", "필수", "파일명 소스"])
+    field_table.setAlternatingRowColors(True)
+    _configure_table_columns(field_table, [80, 240, 180, 90, 240])
+    layout.addWidget(field_table)
+
+    status_label = QLabel("")
+    status_label.setObjectName("status_label")
+    layout.addWidget(status_label)
+
+    buttons = QHBoxLayout()
+    previous_button = QPushButton("이전")
+    next_button = QPushButton("다음")
+    next_button.setObjectName("primary_button")
+    next_button.setEnabled(False)
+    buttons.addWidget(previous_button)
+    buttons.addStretch(1)
+    buttons.addWidget(next_button)
+    layout.addLayout(buttons)
+
+    page._loaded = False
+    page._refreshing = False
+    page._field_candidates = []
+    page._current_preview_context = None
+
+    def _current_field_sources() -> dict[str, str]:
+        field_sources: dict[str, str] = {}
+        for row_index in range(field_table.rowCount()):
+            enabled_widget = field_table.cellWidget(row_index, 0)
+            source_combo = field_table.cellWidget(row_index, 4)
+            field_item = field_table.item(row_index, 1)
+            if enabled_widget is None or source_combo is None or field_item is None:
+                continue
+            if not enabled_widget.isChecked():
+                continue
+            source_key = str(source_combo.currentData() or "").strip()
+            if source_key:
+                field_sources[field_item.text()] = source_key
+        return field_sources
+
+    def get_config() -> dict[str, object]:
+        return {
+            "regex_pattern": regex_pattern.text().strip(),
+            "regex_target": str(regex_target.currentData() or "file_stem"),
+            "field_sources": _current_field_sources(),
+        }
+
+    def _column_label(column_name: str, source_options) -> str:
+        if column_name == "file_name":
+            return "파일"
+        if column_name == "parse_target":
+            return "파싱 대상"
+        if column_name == "matched":
+            return "일치"
+        source_lookup = {str(option.key): str(option.label) for option in source_options}
+        return source_lookup.get(column_name, column_name)
+
+    def _refresh_preview() -> None:
+        if not page._loaded or page._refreshing:
+            return
+        page._refreshing = True
+        try:
+            preview_context = on_preview_requested(get_config())
+            page.load_context(preview_context)
+        finally:
+            page._refreshing = False
+
+    def load_context(preview_context) -> None:
+        page._current_preview_context = preview_context
+        page._loaded = False
+
+        regex_pattern.blockSignals(True)
+        regex_target.blockSignals(True)
+        regex_pattern.setText(str(preview_context.regex_pattern or ""))
+        target_index = regex_target.findData(str(preview_context.regex_target or "file_stem"))
+        regex_target.setCurrentIndex(target_index if target_index >= 0 else 0)
+        regex_pattern.blockSignals(False)
+        regex_target.blockSignals(False)
+
+        preview_headers = [
+            _column_label(column_name, preview_context.source_options)
+            for column_name in preview_context.preview_columns
+        ]
+        preview_table.clear()
+        preview_table.setColumnCount(len(preview_headers))
+        preview_table.setHorizontalHeaderLabels(preview_headers)
+        preview_table.setRowCount(len(preview_context.preview_rows))
+        for row_index, row_values in enumerate(preview_context.preview_rows):
+            for col_index, column_name in enumerate(preview_context.preview_columns):
+                preview_table.setItem(
+                    row_index,
+                    col_index,
+                    QTableWidgetItem(str(row_values.get(column_name) or "")),
+                )
+        _configure_table_columns(preview_table, [180] * max(len(preview_headers), 1))
+
+        current_field_sources = dict(preview_context.field_sources)
+        field_table.setRowCount(len(preview_context.field_candidates))
+        for row_index, candidate in enumerate(preview_context.field_candidates):
+            enabled_widget = QCheckBox()
+            selected_source = str(current_field_sources.get(candidate.schema_field) or "")
+            enabled_widget.setChecked(bool(selected_source))
+            enabled_widget.toggled.connect(lambda _checked: _refresh_preview())
+            field_table.setCellWidget(row_index, 0, enabled_widget)
+            field_table.setItem(row_index, 1, QTableWidgetItem(candidate.schema_field))
+            field_table.setItem(row_index, 2, QTableWidgetItem(candidate.field_type))
+            field_table.setItem(row_index, 3, QTableWidgetItem("yes" if candidate.mandatory else "no"))
+
+            source_combo = QComboBox()
+            source_combo.addItem("", "")
+            for option in preview_context.source_options:
+                source_combo.addItem(str(option.label), str(option.key))
+            source_combo.setEnabled(candidate.supported)
+            if selected_source:
+                combo_index = source_combo.findData(selected_source)
+                source_combo.setCurrentIndex(combo_index if combo_index >= 0 else 0)
+            source_combo.currentIndexChanged.connect(lambda _index: _refresh_preview())
+            field_table.setCellWidget(row_index, 4, source_combo)
+
+        _configure_table_columns(field_table, [80, 240, 180, 90, 240])
+        status_label.setText(str(preview_context.status_message or ""))
+        next_button.setEnabled(not bool(preview_context.has_blocking_issues))
+        page._loaded = True
+
+    previous_button.clicked.connect(lambda: page.request_previous())
+    next_button.clicked.connect(lambda: page.request_next())
+    regex_pattern.textChanged.connect(lambda _text: _refresh_preview())
+    regex_target.currentIndexChanged.connect(lambda _index: _refresh_preview())
+
+    page.get_config = get_config
+    page.load_context = load_context
+    return page
+
+
 def create_placeholder_page(title_text: str, description: str):
     qt = _require_qt()
     QWidget = qt["QWidget"]
