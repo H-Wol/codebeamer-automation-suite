@@ -5,12 +5,23 @@ from typing import Any
 import pandas as pd
 
 
+UPLOAD_NAME_STRATEGY_SUMMARY = "summary"
+UPLOAD_NAME_STRATEGY_TOP_LEVEL = "top_level_folder"
+
+
 class HierarchyProcessor:
     """raw DataFrame를 계층 업로드용 DataFrame으로 후처리하는 전용 processor다."""
 
-    def __init__(self, header_row: int = 1, summary_col: str = "Summary", logger=None):
+    def __init__(
+        self,
+        header_row: int = 1,
+        summary_col: str = "Summary",
+        upload_name_strategy: str = UPLOAD_NAME_STRATEGY_SUMMARY,
+        logger=None,
+    ):
         self.header_row = header_row
         self.summary_col = summary_col
+        self.upload_name_strategy = self.normalize_upload_name_strategy(upload_name_strategy)
         self.logger = logger
 
     @staticmethod
@@ -62,6 +73,13 @@ class HierarchyProcessor:
             return "\n".join(values) if values else None
         text = str(value).strip()
         return text or None
+
+    @staticmethod
+    def normalize_upload_name_strategy(value: Any) -> str:
+        text = str(value or "").strip()
+        if text == UPLOAD_NAME_STRATEGY_TOP_LEVEL:
+            return UPLOAD_NAME_STRATEGY_TOP_LEVEL
+        return UPLOAD_NAME_STRATEGY_SUMMARY
 
     def merge_multiline_records(
         self,
@@ -140,8 +158,33 @@ class HierarchyProcessor:
         work["parent_row_id"] = parent_row_ids
         return work
 
+    @classmethod
+    def _top_level_upload_names(cls, hierarchy_df: pd.DataFrame, summary_col: str) -> list[Any]:
+        summary_values = hierarchy_df[summary_col].apply(cls.normalize_scalar).tolist()
+        parent_row_ids = hierarchy_df["parent_row_id"].tolist()
+        upload_names: list[Any] = []
+
+        for index, parent_row_id in enumerate(parent_row_ids):
+            root_index = index
+            visited = {index}
+
+            while parent_row_id is not None and not pd.isna(parent_row_id):
+                parent_index = int(parent_row_id)
+                if parent_index < 0 or parent_index >= len(summary_values) or parent_index in visited:
+                    break
+                visited.add(parent_index)
+                root_index = parent_index
+                parent_row_id = parent_row_ids[parent_index]
+
+            upload_names.append(summary_values[root_index])
+
+        return upload_names
+
     def build_upload_df(self, hierarchy_df: pd.DataFrame, list_cols: list[str] | None = None) -> pd.DataFrame:
         work = hierarchy_df.copy()
         del list_cols
-        work["upload_name"] = work[self.summary_col].apply(self.normalize_scalar)
+        if self.upload_name_strategy == UPLOAD_NAME_STRATEGY_TOP_LEVEL:
+            work["upload_name"] = self._top_level_upload_names(work, self.summary_col)
+        else:
+            work["upload_name"] = work[self.summary_col].apply(self.normalize_scalar)
         return work

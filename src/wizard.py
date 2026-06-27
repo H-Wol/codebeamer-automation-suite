@@ -1298,6 +1298,9 @@ class CodebeamerUploadWizard:
             if field_value is None:
                 continue
 
+            if tracker_field == "name" and self._has_row_value(row, "upload_name"):
+                field_value = row["upload_name"]
+
             field_info = self._schema_field_info(field_row, schema_field)
             item.set_field_value(tracker_field, field_value, field_info)
             applied_schema_fields.add(schema_field)

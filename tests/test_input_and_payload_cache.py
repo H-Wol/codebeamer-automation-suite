@@ -9,6 +9,7 @@ from typing import Any
 import pandas as pd
 
 from src.hierarchy_processor import HierarchyProcessor
+from src.hierarchy_processor import UPLOAD_NAME_STRATEGY_TOP_LEVEL
 from src.mapping_service import MappingService
 from src.models import PayloadStatus
 from src.models import UploadStatus
@@ -84,6 +85,23 @@ class HierarchyProcessorSplitTest(unittest.TestCase):
         self.assertEqual(int(hierarchy_df.iloc[1]["parent_row_id"]), 0)
         self.assertEqual(list(upload_df["upload_name"]), ["Parent", "Child"])
 
+    def test_processor_can_use_top_level_item_name_for_children(self) -> None:
+        processor = HierarchyProcessor(
+            summary_col="요약",
+            upload_name_strategy=UPLOAD_NAME_STRATEGY_TOP_LEVEL,
+        )
+        raw_df = pd.DataFrame([
+            {"요약": "Parent", "_excel_row": 2, "_summary_indent": 0},
+            {"요약": "Child", "_excel_row": 3, "_summary_indent": 1},
+            {"요약": "Grandchild", "_excel_row": 4, "_summary_indent": 2},
+        ])
+
+        merged_df = processor.merge_multiline_records(raw_df, list_cols=[])
+        hierarchy_df = processor.add_hierarchy_by_indent(merged_df)
+        upload_df = processor.build_upload_df(hierarchy_df, list_cols=[])
+
+        self.assertEqual(list(upload_df["upload_name"]), ["Parent", "Parent", "Parent"])
+
 
 class PayloadCacheWizardTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -154,6 +172,31 @@ class PayloadCacheWizardTest(unittest.TestCase):
             saved_payload = json.loads(first_line)
             self.assertEqual(saved_payload["payload_status"], PayloadStatus.READY.value)
             self.assertEqual(saved_payload["payload_json"]["name"], "REQ-001")
+
+    def test_payload_name_follows_upload_name_strategy(self) -> None:
+        processor = HierarchyProcessor(
+            summary_col="요약",
+            upload_name_strategy=UPLOAD_NAME_STRATEGY_TOP_LEVEL,
+        )
+        wizard = CountingWizard(
+            client=self.client,
+            processor=processor,
+            mapper=self.mapper,
+        )
+        wizard.select_project(1)
+        wizard.select_tracker(2)
+        raw_df = pd.DataFrame([
+            {"요약": "Parent", "_excel_row": 2, "_summary_indent": 0},
+            {"요약": "Child", "_excel_row": 3, "_summary_indent": 1},
+        ])
+        wizard.load_raw_dataframe(raw_df, list_cols=[])
+        wizard.load_schema_and_compare({"요약": "Summary"})
+        wizard.process_option_mapping({"요약": "Summary"})
+
+        child_payload = wizard.preview_payload(1)
+
+        self.assertEqual(wizard.state.upload_df.iloc[1]["upload_name"], "Parent")
+        self.assertEqual(child_payload["name"], "Parent")
 
     def test_upload_failure_persists_response_json(self) -> None:
         wizard = CountingWizard(

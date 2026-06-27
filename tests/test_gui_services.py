@@ -7,6 +7,7 @@ from pathlib import Path
 from openpyxl import Workbook
 import pandas as pd
 
+from src.hierarchy_processor import UPLOAD_NAME_STRATEGY_TOP_LEVEL
 from src.gui.services import GuiCodebeamerService
 from src.gui.services import GuiExcelService
 from src.gui.services import GuiUploadPipelineService
@@ -296,6 +297,50 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             self.assertEqual(
                 mapping_context.wizard.state.upload_df.iloc[0]["upload_name"],
                 "REQ-001",
+            )
+
+    def test_prepare_mapping_context_uses_selected_upload_name_strategy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary", "담당자"])
+            sheet.append(["REQ-001", "홍길동"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                upload_name_strategy="summary",
+                excel_sheet_name="Main",
+            )
+
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                    "upload_name_strategy": UPLOAD_NAME_STRATEGY_TOP_LEVEL,
+                },
+            )
+
+            self.assertEqual(
+                mapping_context.wizard.processor.upload_name_strategy,
+                UPLOAD_NAME_STRATEGY_TOP_LEVEL,
             )
 
     def test_build_user_issue_df_keeps_only_user_visible_issues(self) -> None:

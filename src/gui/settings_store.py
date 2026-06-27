@@ -22,6 +22,7 @@ class GuiSettings:
     default_tracker_id: str = ""
     excel_header_row: int = 1
     summary_column: str = "Summary"
+    upload_name_strategy: str = "summary"
     excel_sheet_name: str = "0"
     rate_limit_retry_delay_seconds: float = 1.0
     rate_limit_max_retries: int = 5
@@ -84,4 +85,3 @@ class GuiSettingsStore:
 
     def _decrypt_password(self, encrypted_password: str) -> str:
         return self._get_fernet().decrypt(encrypted_password.encode("utf-8")).decode("utf-8")
-

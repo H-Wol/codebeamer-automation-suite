@@ -8,6 +8,7 @@ import pandas as pd
 from src.codebeamer_client import CodebeamerClient
 from src.excel_reader import ExcelReader
 from src.hierarchy_processor import HierarchyProcessor
+from src.hierarchy_processor import UPLOAD_NAME_STRATEGY_SUMMARY
 from src.models import MappingStatus
 from src.mapping_service import MappingService
 from src.models import OptionCheckStatus
@@ -241,6 +242,7 @@ class GuiUploadPipelineService:
         processor = HierarchyProcessor(
             header_row=settings.excel_header_row,
             summary_col=settings.summary_column,
+            upload_name_strategy=getattr(settings, "upload_name_strategy", UPLOAD_NAME_STRATEGY_SUMMARY),
             logger=self.logger,
         )
         return CodebeamerUploadWizard(
@@ -332,6 +334,10 @@ class GuiUploadPipelineService:
             sheet_name=file_state["sheet_name"],
             header_row=int(file_state["header_row"]),
             summary_col=str(file_state["summary_column"]),
+            upload_name_strategy=str(
+                file_state.get("upload_name_strategy")
+                or getattr(settings, "upload_name_strategy", UPLOAD_NAME_STRATEGY_SUMMARY)
+            ),
             selected_mapping=raw_mapping,
             schema=schema,
             schema_df=mappable_schema_df,

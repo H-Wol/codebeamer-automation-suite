@@ -46,6 +46,7 @@ class GuiSettingsStoreTest(unittest.TestCase):
                 password="secret",
                 save_password=True,
                 summary_column="Summary",
+                upload_name_strategy="top_level_folder",
             )
 
             store.save(settings)
@@ -58,3 +59,4 @@ class GuiSettingsStoreTest(unittest.TestCase):
             self.assertEqual(loaded.password, "secret")
             self.assertTrue(loaded.save_password)
             self.assertEqual(loaded.summary_column, "Summary")
+            self.assertEqual(loaded.upload_name_strategy, "top_level_folder")

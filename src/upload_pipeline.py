@@ -68,6 +68,7 @@ def prepare_upload_dataframe(
     sheet_name: str | int,
     header_row: int | None = None,
     summary_col: str,
+    upload_name_strategy: str | None = None,
     selected_mapping: dict[str, str],
     schema: dict[str, Any] | None = None,
     schema_df: pd.DataFrame | None = None,
@@ -87,6 +88,13 @@ def prepare_upload_dataframe(
     wizard.reader.summary_col = summary_col
     if wizard.processor is not None:
         wizard.processor.summary_col = summary_col
+        if upload_name_strategy is not None:
+            if hasattr(wizard.processor, "normalize_upload_name_strategy"):
+                wizard.processor.upload_name_strategy = wizard.processor.normalize_upload_name_strategy(
+                    upload_name_strategy
+                )
+            else:
+                wizard.processor.upload_name_strategy = upload_name_strategy
     raw_df = wizard.reader.read_excel(file_path=file_path, sheet_name=sheet_name)
     wizard.load_raw_dataframe(raw_df, list_cols=list_cols)
     wizard.state.schema = schema
