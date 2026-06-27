@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import time
 from typing import Any
 
 import pandas as pd
@@ -168,7 +169,6 @@ GUI_EXCLUDED_MAPPING_COLUMNS = {
     "_start_excel_row",
     "_end_excel_row",
     "_excel_row",
-    "_synthetic_root",
 }
 GUI_EXCLUDED_TARGET_FIELDS = {"id", "parent"}
 DEFAULT_VALUE_COLUMN_LABEL = "(기본값)"
@@ -197,6 +197,8 @@ class MappingContext:
     default_value_candidates: list[DefaultValueCandidate]
     selected_default_values: dict[str, str]
     list_cols: list[str]
+    file_paths: list[str]
+    representative_file_path: str
 
 
 @dataclass
@@ -207,6 +209,16 @@ class ValidationContext:
     issue_df: pd.DataFrame
     has_blocking_issues: bool
     summary_stats: dict[str, int]
+
+
+@dataclass
+class BatchUploadJob:
+    file_path: str
+    file_label: str
+    root_item_name: str | None
+    ready_count: int
+    output_dir: str
+    wizard: CodebeamerUploadWizard
 
 
 class GuiUploadPipelineService:
@@ -311,13 +323,80 @@ class GuiUploadPipelineService:
         return candidates
 
     @staticmethod
-    def _root_item_name(file_path: str, create_root_item: bool) -> str | None:
-        if not create_root_item:
-            return None
-        name = Path(file_path).stem.strip()
-        return name or None
+    def _normalize_file_paths(file_state: dict[str, Any]) -> list[str]:
+        raw_paths = file_state.get("file_paths")
+        normalized: list[str] = []
+
+        if isinstance(raw_paths, (list, tuple)):
+            for raw_path in raw_paths:
+                text = str(raw_path or "").strip()
+                if text:
+                    normalized.append(text)
+
+        if normalized:
+            return normalized
+
+        single_path = str(file_state.get("file_path") or "").strip()
+        return [single_path] if single_path else []
+
+    @classmethod
+    def _representative_file_path(cls, file_state: dict[str, Any]) -> str:
+        file_paths = cls._normalize_file_paths(file_state)
+        if not file_paths:
+            return ""
+
+        preview_file_path = str(file_state.get("preview_file_path") or file_state.get("file_path") or "").strip()
+        if preview_file_path and preview_file_path in file_paths:
+            return preview_file_path
+        return file_paths[0]
+
+    def _visible_headers_for_file(
+        self,
+        file_path: str,
+        *,
+        sheet_name: str,
+        header_row: int,
+        summary_col: str,
+    ) -> list[str]:
+        reader = self.reader_cls(
+            header_row=header_row,
+            summary_col=summary_col,
+            logger=self.logger,
+        )
+        headers = reader.read_headers(file_path, sheet_name)
+        return [header for header in headers if not str(header).startswith("_")]
+
+    def _validate_batch_headers(
+        self,
+        file_paths: list[str],
+        *,
+        representative_file_path: str,
+        expected_headers: list[str],
+        sheet_name: str,
+        header_row: int,
+        summary_col: str,
+    ) -> None:
+        for file_path in file_paths:
+            if file_path == representative_file_path:
+                continue
+
+            current_headers = self._visible_headers_for_file(
+                file_path,
+                sheet_name=sheet_name,
+                header_row=header_row,
+                summary_col=summary_col,
+            )
+            if current_headers != expected_headers:
+                raise ValueError(
+                    f"'{Path(file_path).name}' 파일의 헤더가 기준 파일과 다릅니다."
+                )
 
     def prepare_mapping_context(self, settings, file_state: dict[str, Any]) -> MappingContext:
+        file_paths = self._normalize_file_paths(file_state)
+        representative_file_path = self._representative_file_path(file_state)
+        if not file_paths or not representative_file_path:
+            raise ValueError("Excel 파일을 먼저 선택해야 합니다.")
+
         wizard = self.create_wizard(settings)
         wizard.select_project(int(settings.default_project_id))
         wizard.select_tracker(int(settings.default_tracker_id))
@@ -328,27 +407,27 @@ class GuiUploadPipelineService:
         ].reset_index(drop=True)
 
         preview = self.excel_service.load_preview(
-            file_state["file_path"],
+            representative_file_path,
             sheet_name=file_state["sheet_name"],
             header_row=int(file_state["header_row"]),
         )
         headers = preview.headers
+        self._validate_batch_headers(
+            file_paths,
+            representative_file_path=representative_file_path,
+            expected_headers=headers,
+            sheet_name=str(file_state["sheet_name"]),
+            header_row=int(file_state["header_row"]),
+            summary_col=str(file_state["summary_column"]),
+        )
         raw_mapping = suggest_mapping_from_headers(headers, mappable_schema_df)
 
         _, list_cols = prepare_upload_dataframe(
             wizard,
-            file_path=file_state["file_path"],
+            file_path=representative_file_path,
             sheet_name=file_state["sheet_name"],
             header_row=int(file_state["header_row"]),
             summary_col=str(file_state["summary_column"]),
-            root_item_name=self._root_item_name(
-                str(file_state["file_path"]),
-                bool(
-                    file_state.get("create_file_root_item")
-                    if "create_file_root_item" in file_state
-                    else getattr(settings, "create_file_root_item", False)
-                ),
-            ),
             selected_mapping=raw_mapping,
             schema=schema,
             schema_df=mappable_schema_df,
@@ -370,6 +449,8 @@ class GuiUploadPipelineService:
             default_value_candidates=default_value_candidates,
             selected_default_values={},
             list_cols=list_cols,
+            file_paths=file_paths,
+            representative_file_path=representative_file_path,
         )
 
     def validate_mapping(
@@ -478,8 +559,6 @@ class GuiUploadPipelineService:
 
     @classmethod
     def _build_row_label(cls, row: pd.Series) -> str:
-        if bool(row.get("_synthetic_root")):
-            return "루트 폴더"
         start_row = cls._to_row_key(row.get("_start_excel_row"))
         end_row = cls._to_row_key(row.get("_end_excel_row"))
         excel_row = cls._to_row_key(row.get("_excel_row"))
@@ -536,6 +615,246 @@ class GuiUploadPipelineService:
             "row_id": row_key,
             "row_label": str(context.get("row_label") or (f"행 {row_key}" if row_key else "")),
             "item_name": str(context.get("item_name") or fallback_item_name or ""),
+        }
+
+    @staticmethod
+    def _root_item_name_for_file(file_path: str) -> str | None:
+        root_item_name = Path(file_path).stem.strip()
+        return root_item_name or None
+
+    @staticmethod
+    def _batch_output_dir(output_dir: str, file_path: str, index: int) -> str:
+        safe_name = Path(file_path).stem.strip() or f"file_{index:03d}"
+        return str(Path(output_dir) / f"{index:03d}_{safe_name}")
+
+    @staticmethod
+    def _ready_upload_count(wizard: CodebeamerUploadWizard, root_item_name: str | None) -> int:
+        payload_df = wizard.state.payload_df if wizard.state.payload_df is not None else wizard.build_payloads()
+        if payload_df is None or payload_df.empty:
+            return 0
+
+        ready_count = int((payload_df["payload_status"] == PayloadStatus.READY.value).sum())
+        if ready_count > 0 and root_item_name:
+            ready_count += 1
+        return ready_count
+
+    @staticmethod
+    def _annotate_batch_result_frame(
+        df: pd.DataFrame | None,
+        *,
+        file_label: str,
+        file_path: str,
+    ) -> pd.DataFrame:
+        if df is None or getattr(df, "empty", True):
+            return pd.DataFrame()
+
+        work = df.copy()
+        work.insert(0, "source_file", file_label)
+        work.insert(1, "source_file_path", file_path)
+        return work
+
+    def _prepare_wizard_for_file(
+        self,
+        settings,
+        mapping_context: MappingContext,
+        *,
+        file_path: str,
+        sheet_name: str,
+        header_row: int,
+        summary_col: str,
+    ) -> CodebeamerUploadWizard:
+        wizard = self.create_wizard(settings)
+        wizard.select_project(int(settings.default_project_id))
+        wizard.select_tracker(int(settings.default_tracker_id))
+
+        schema = mapping_context.wizard.state.schema
+        if schema is None:
+            schema, _ = load_tracker_schema_df(wizard)
+        schema_df = mapping_context.schema_df
+
+        prepare_upload_dataframe(
+            wizard,
+            file_path=file_path,
+            sheet_name=sheet_name,
+            header_row=header_row,
+            summary_col=summary_col,
+            selected_mapping=mapping_context.selected_mapping,
+            schema=schema,
+            schema_df=schema_df,
+        )
+
+        wizard.state.selected_mapping = dict(mapping_context.selected_mapping)
+        wizard.state.schema = schema
+        wizard.state.schema_df = schema_df
+        wizard.state.comparison_df = wizard.mapper.compare_upload_df_with_schema(
+            upload_df=wizard.state.upload_df,
+            schema_df=schema_df,
+            selected_mapping=wizard.state.selected_mapping,
+        )
+        wizard._detect_table_field_columns()
+        wizard.process_option_mapping(
+            wizard.state.selected_mapping,
+            selected_default_values=mapping_context.selected_default_values,
+        )
+        wizard.build_payloads(force=True)
+        return wizard
+
+    def run_batch_upload(
+        self,
+        settings,
+        file_state: dict[str, Any],
+        mapping_context: MappingContext,
+        *,
+        dry_run: bool,
+        continue_on_error: bool,
+        output_dir: str,
+        event_callback=None,
+        cancel_requested=None,
+        pause_requested=None,
+    ) -> dict[str, Any]:
+        file_paths = mapping_context.file_paths or self._normalize_file_paths(file_state)
+        if not file_paths:
+            raise ValueError("업로드할 Excel 파일이 없습니다.")
+        if not mapping_context.selected_mapping:
+            raise ValueError("검증된 매핑이 없습니다.")
+
+        sheet_name = str(file_state["sheet_name"])
+        header_row = int(file_state["header_row"])
+        summary_col = str(file_state["summary_column"])
+
+        prepared_jobs: list[BatchUploadJob] = []
+        success_frames: list[pd.DataFrame] = []
+        failed_frames: list[pd.DataFrame] = []
+        unresolved_frames: list[pd.DataFrame] = []
+        created_map_by_file: dict[str, dict[Any, Any]] = {}
+        total_count = 0
+
+        def _emit(event: dict[str, Any]) -> None:
+            if event_callback is not None:
+                event_callback(event)
+
+        def _sync_control() -> None:
+            while pause_requested is not None and pause_requested():
+                time.sleep(0.1)
+            if cancel_requested is not None and cancel_requested():
+                raise RuntimeError("__UPLOAD_CANCELLED__")
+
+        for index, file_path in enumerate(file_paths, start=1):
+            _sync_control()
+            file_label = Path(file_path).name
+            _emit({
+                "type": "log",
+                "message": f"[{file_label}] 업로드 데이터를 준비하는 중입니다.",
+            })
+            try:
+                wizard = self._prepare_wizard_for_file(
+                    settings,
+                    mapping_context,
+                    file_path=file_path,
+                    sheet_name=sheet_name,
+                    header_row=header_row,
+                    summary_col=summary_col,
+                )
+                root_item_name = self._root_item_name_for_file(file_path)
+                ready_count = self._ready_upload_count(wizard, root_item_name)
+                total_count += ready_count
+                prepared_jobs.append(BatchUploadJob(
+                    file_path=file_path,
+                    file_label=file_label,
+                    root_item_name=root_item_name,
+                    ready_count=ready_count,
+                    output_dir=self._batch_output_dir(output_dir, file_path, index),
+                    wizard=wizard,
+                ))
+            except Exception as exc:
+                failed_frames.append(pd.DataFrame([{
+                    "source_file": file_label,
+                    "source_file_path": file_path,
+                    "_row_id": None,
+                    "parent_row_id": None,
+                    "upload_name": self._root_item_name_for_file(file_path) or file_label,
+                    "error": str(exc),
+                    "status": PayloadStatus.FAILED.value,
+                }]))
+                _emit({
+                    "type": "log",
+                    "message": f"[{file_label}] 업로드 준비 실패: {exc}",
+                })
+                if not continue_on_error:
+                    break
+
+        _emit({
+            "type": "batch_total",
+            "total": total_count,
+        })
+
+        for job_index, job in enumerate(prepared_jobs, start=1):
+            _sync_control()
+            _emit({
+                "type": "log",
+                "message": f"[{job_index}/{len(prepared_jobs)}] {job.file_label} 업로드를 시작합니다.",
+            })
+
+            def _forward_event(event: dict[str, Any]) -> None:
+                forwarded = dict(event)
+                forwarded["source_file"] = job.file_label
+                forwarded["source_file_path"] = job.file_path
+
+                upload_name = str(forwarded.get("upload_name") or "").strip()
+                forwarded["upload_name"] = (
+                    f"[{job.file_label}] {upload_name}"
+                    if upload_name
+                    else f"[{job.file_label}]"
+                )
+
+                message = str(forwarded.get("message") or "").strip()
+                if message:
+                    forwarded["message"] = f"[{job.file_label}] {message}"
+
+                _emit(forwarded)
+
+            result = job.wizard.upload(
+                dry_run=dry_run,
+                continue_on_error=continue_on_error,
+                root_item_name=job.root_item_name,
+                event_callback=_forward_event,
+                cancel_requested=cancel_requested,
+                pause_requested=pause_requested,
+            )
+            job.wizard.save_state(job.output_dir)
+            created_map_by_file[job.file_path] = result.get("created_map", {})
+
+            success_df = self._annotate_batch_result_frame(
+                result.get("success_df"),
+                file_label=job.file_label,
+                file_path=job.file_path,
+            )
+            failed_df = self._annotate_batch_result_frame(
+                result.get("failed_df"),
+                file_label=job.file_label,
+                file_path=job.file_path,
+            )
+            unresolved_df = self._annotate_batch_result_frame(
+                result.get("unresolved_df"),
+                file_label=job.file_label,
+                file_path=job.file_path,
+            )
+
+            if not success_df.empty:
+                success_frames.append(success_df)
+            if not failed_df.empty:
+                failed_frames.append(failed_df)
+            if not unresolved_df.empty:
+                unresolved_frames.append(unresolved_df)
+
+            if not continue_on_error and (not failed_df.empty or not unresolved_df.empty):
+                break
+
+        return {
+            "created_map_by_file": created_map_by_file,
+            "success_df": pd.concat(success_frames, ignore_index=True) if success_frames else pd.DataFrame(),
+            "failed_df": pd.concat(failed_frames, ignore_index=True) if failed_frames else pd.DataFrame(),
+            "unresolved_df": pd.concat(unresolved_frames, ignore_index=True) if unresolved_frames else pd.DataFrame(),
         }
 
     @classmethod

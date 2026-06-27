@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 
 USER_HIDDEN_TABLE_COLUMNS = {
     "_row_id",
@@ -13,7 +15,7 @@ USER_HIDDEN_TABLE_COLUMNS = {
     "payload_status",
     "payload_error",
     "error_response_json",
-    "_synthetic_root",
+    "source_file_path",
 }
 
 
@@ -165,8 +167,6 @@ def create_settings_page(
     header_row.setMinimum(1)
     header_row.setValue(initial_settings.excel_header_row)
     summary_column = QLineEdit(initial_settings.summary_column)
-    create_file_root_item = QCheckBox("파일명으로 최상단 폴더 생성")
-    create_file_root_item.setChecked(getattr(initial_settings, "create_file_root_item", False))
     sheet_name = QLineEdit(initial_settings.excel_sheet_name)
     retry_delay = QDoubleSpinBox()
     retry_delay.setMinimum(0.0)
@@ -229,7 +229,6 @@ def create_settings_page(
 
     advanced_form.addRow("Header Row", header_row)
     advanced_form.addRow("Summary Column", summary_column)
-    advanced_form.addRow("", create_file_root_item)
     advanced_form.addRow("Sheet Name", sheet_name)
     advanced_form.addRow("Retry Delay", retry_delay)
     advanced_form.addRow("Max Retries", retry_count)
@@ -272,7 +271,6 @@ def create_settings_page(
             default_tracker_id=initial_settings.default_tracker_id,
             excel_header_row=header_row.value(),
             summary_column=summary_column.text().strip() or "Summary",
-            create_file_root_item=create_file_root_item.isChecked(),
             excel_sheet_name=sheet_name.text().strip() or "0",
             rate_limit_retry_delay_seconds=retry_delay.value(),
             rate_limit_max_retries=retry_count.value(),
@@ -295,7 +293,6 @@ def create_settings_page(
         save_password.setChecked(loaded.save_password)
         header_row.setValue(loaded.excel_header_row)
         summary_column.setText(loaded.summary_column)
-        create_file_root_item.setChecked(loaded.create_file_root_item)
         sheet_name.setText(loaded.excel_sheet_name)
         retry_delay.setValue(loaded.rate_limit_retry_delay_seconds)
         retry_count.setValue(loaded.rate_limit_max_retries)
@@ -498,7 +495,6 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     QLabel = qt["QLabel"]
     QLineEdit = qt["QLineEdit"]
     QPushButton = qt["QPushButton"]
-    QCheckBox = qt["QCheckBox"]
     QSpinBox = qt["QSpinBox"]
     QComboBox = qt["QComboBox"]
     QTableWidget = qt["QTableWidget"]
@@ -514,6 +510,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     form = QFormLayout()
     _configure_form_layout(form)
     file_path = QLineEdit(initial_settings.last_file_path)
+    file_path.setReadOnly(True)
     file_button = QPushButton("파일 선택")
     file_row_widget = QWidget()
     file_row = QHBoxLayout(file_row_widget)
@@ -521,6 +518,9 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     file_row.setSpacing(8)
     file_row.addWidget(file_path)
     file_row.addWidget(file_button)
+    preview_file = QComboBox()
+    preview_file.setEditable(False)
+    preview_file.setEnabled(False)
     sheet_name = QComboBox()
     sheet_name.setEditable(False)
     header_row = QSpinBox()
@@ -530,18 +530,17 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     summary_column.setEditable(True)
     summary_column.addItems(["Summary", "요약"])
     summary_column.setCurrentText(initial_settings.summary_column)
-    create_file_root_item = QCheckBox("파일명으로 최상단 폴더 생성")
-    create_file_root_item.setChecked(getattr(initial_settings, "create_file_root_item", False))
     _configure_form_field(file_path)
     _configure_form_field(file_row_widget, minimum_width=320)
+    _configure_form_field(preview_file)
     _configure_form_field(sheet_name)
     _configure_form_field(header_row)
     _configure_form_field(summary_column)
     form.addRow("Excel 파일", file_row_widget)
+    form.addRow("미리보기 파일", preview_file)
     form.addRow("시트", sheet_name)
     form.addRow("헤더 행", header_row)
     form.addRow("Summary 컬럼", summary_column)
-    form.addRow("", create_file_root_item)
     layout.addLayout(form)
 
     preview_label = QLabel("미리보기")
@@ -575,17 +574,50 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     layout.addLayout(buttons)
 
     page._preview_ready = False
+    page._selected_file_paths = [initial_settings.last_file_path] if initial_settings.last_file_path else []
 
     def _update_next_button_state() -> None:
-        next_button.setEnabled(bool(file_path.text().strip()) and page._preview_ready)
+        next_button.setEnabled(bool(page._selected_file_paths) and page._preview_ready)
+
+    def _selected_preview_file_path() -> str:
+        preview_path = str(preview_file.currentData() or "").strip()
+        if preview_path:
+            return preview_path
+        if page._selected_file_paths:
+            return str(page._selected_file_paths[0]).strip()
+        return ""
+
+    def _update_file_display() -> None:
+        selected_count = len(page._selected_file_paths)
+        if selected_count <= 0:
+            file_path.setText("")
+            return
+        if selected_count == 1:
+            file_path.setText(page._selected_file_paths[0])
+            return
+        first_name = Path(page._selected_file_paths[0]).name
+        file_path.setText(f"{selected_count}개 파일 선택됨 ({first_name} 외)")
+
+    def _set_preview_file_items(selected_file_paths: list[str], selected_path: str | None = None) -> None:
+        preview_file.blockSignals(True)
+        preview_file.clear()
+        for current_path in selected_file_paths:
+            preview_file.addItem(Path(current_path).name, current_path)
+        preview_file.setEnabled(bool(selected_file_paths))
+        if selected_file_paths:
+            target_path = selected_path if selected_path in selected_file_paths else selected_file_paths[0]
+            target_index = preview_file.findData(target_path)
+            preview_file.setCurrentIndex(target_index if target_index >= 0 else 0)
+        preview_file.blockSignals(False)
 
     def _collect_state():
         return {
-            "file_path": file_path.text().strip(),
+            "file_path": _selected_preview_file_path(),
+            "file_paths": list(page._selected_file_paths),
+            "preview_file_path": _selected_preview_file_path(),
             "sheet_name": sheet_name.currentText().strip() or "0",
             "header_row": header_row.value(),
             "summary_column": summary_column.currentText().strip() or "Summary",
-            "create_file_root_item": create_file_root_item.isChecked(),
         }
 
     def _set_preview(headers: list[str], rows: list[list[str]], suggested_summary: str) -> None:
@@ -620,7 +652,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         if message:
             status_label.setText(message)
             return
-        if file_path.text().strip():
+        if page._selected_file_paths:
             status_label.setText("설정을 바꿨습니다. '데이터 불러오기'를 눌러 다시 확인하세요.")
             return
         status_label.setText("Excel 파일과 옵션을 정한 뒤 '데이터 불러오기'를 누르세요.")
@@ -639,12 +671,12 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         state = _collect_state()
         page._preview_ready = False
         _update_next_button_state()
-        if not state["file_path"]:
+        if not state["file_paths"]:
             status_label.setText("Excel 파일을 먼저 선택해야 합니다.")
             return
         try:
             preview = on_file_preview_requested(
-                state["file_path"],
+                state["preview_file_path"],
                 sheet_name=state["sheet_name"],
                 header_row=state["header_row"],
             )
@@ -655,26 +687,36 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         _set_preview(preview.headers, preview.rows, preview.suggested_summary)
         page._preview_ready = True
         _update_next_button_state()
-        status_label.setText("시트 목록과 미리보기를 갱신했습니다.")
+        status_label.setText(f"{len(page._selected_file_paths)}개 파일 기준으로 시트 목록과 미리보기를 갱신했습니다.")
         on_file_state_changed(_collect_state())
 
-    def _choose_file():
-        selected, _ = QFileDialog.getOpenFileName(
+    def _choose_files():
+        dialog_path = page._selected_file_paths[0] if page._selected_file_paths else initial_settings.last_file_path
+        selected, _ = QFileDialog.getOpenFileNames(
             page,
             "Excel 파일 선택",
-            file_path.text().strip(),
+            dialog_path,
             "Excel Files (*.xlsx *.xlsm *.xls)",
         )
         if selected:
-            file_path.setText(selected)
+            page._selected_file_paths = [str(path) for path in selected]
+            _set_preview_file_items(page._selected_file_paths)
+            _update_file_display()
+            _mark_preview_dirty(
+                clear_sheet_names=True,
+                message=(
+                    f"{len(page._selected_file_paths)}개 파일을 선택했습니다. "
+                    "'데이터 불러오기'를 눌러 시트 목록과 미리보기를 확인하세요."
+                ),
+            )
 
     def _go_previous():
         page.request_previous()
 
     def _go_next():
         state = _collect_state()
-        if not state["file_path"]:
-            status_label.setText("Excel 파일 경로를 지정해야 합니다.")
+        if not state["file_paths"]:
+            status_label.setText("Excel 파일을 하나 이상 선택해야 합니다.")
             return
         if not page._preview_ready:
             status_label.setText("파일 설정을 마친 뒤 '데이터 불러오기'를 먼저 실행해야 합니다.")
@@ -682,25 +724,17 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         on_file_state_changed(state)
         page.request_next()
 
-    file_button.clicked.connect(_choose_file)
+    file_button.clicked.connect(_choose_files)
     load_button.clicked.connect(_refresh_preview)
-    file_path.textChanged.connect(
-        lambda _: _mark_preview_dirty(
-            clear_sheet_names=True,
-            message=(
-                "Excel 파일을 선택했습니다. '데이터 불러오기'를 눌러 시트 목록과 미리보기를 확인하세요."
-                if file_path.text().strip()
-                else "Excel 파일과 옵션을 정한 뒤 '데이터 불러오기'를 누르세요."
-            ),
-        )
-    )
+    preview_file.currentIndexChanged.connect(lambda _: _mark_preview_dirty())
     sheet_name.currentTextChanged.connect(lambda _: _mark_preview_dirty())
     header_row.valueChanged.connect(lambda _: _mark_preview_dirty())
     summary_column.currentTextChanged.connect(lambda _: _mark_preview_dirty())
-    create_file_root_item.toggled.connect(lambda _: on_file_state_changed(_collect_state()))
     previous_button.clicked.connect(_go_previous)
     next_button.clicked.connect(_go_next)
 
+    _set_preview_file_items(page._selected_file_paths, initial_settings.last_file_path)
+    _update_file_display()
     page.refresh_preview = _refresh_preview
 
     return page
@@ -1044,6 +1078,8 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     QPlainTextEdit = qt["QPlainTextEdit"]
     QProgressBar = qt["QProgressBar"]
     QCheckBox = qt["QCheckBox"]
+    QTableWidget = qt["QTableWidget"]
+    QTableWidgetItem = qt["QTableWidgetItem"]
 
     page = QWidget()
     layout = QVBoxLayout(page)
@@ -1061,6 +1097,10 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     layout.addWidget(page.counter_label)
     layout.addWidget(page.status_label)
 
+    page.time_label = QLabel("배치 시간: -")
+    page.time_label.setObjectName("section_label")
+    layout.addWidget(page.time_label)
+
     page.dry_run_checkbox = QCheckBox("Dry Run")
     page.continue_checkbox = QCheckBox("Continue on error")
     page.continue_checkbox.setChecked(True)
@@ -1070,9 +1110,21 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     opts.addStretch(1)
     layout.addLayout(opts)
 
+    activity_label = QLabel("항목별 진행 기록")
+    activity_label.setObjectName("section_label")
+    layout.addWidget(activity_label)
+
+    page.activity_table = QTableWidget(0, 7)
+    page.activity_table.setHorizontalHeaderLabels(["파일", "항목", "상태", "시작", "완료", "소요", "로그"])
+    page.activity_table.setAlternatingRowColors(True)
+    _configure_table_columns(page.activity_table, [160, 180, 100, 110, 110, 90, 320])
+    layout.addWidget(page.activity_table)
+
+    page._activity_row_map = {}
+
     page.log_view = QPlainTextEdit()
     page.log_view.setReadOnly(True)
-    page.log_view.setPlaceholderText("업로드 진행 로그가 여기에 표시됩니다.")
+    page.log_view.setPlaceholderText("업로드 진행 로그와 시각이 여기에 표시됩니다.")
     layout.addWidget(page.log_view)
 
     page.response_view = QPlainTextEdit()
@@ -1108,16 +1160,68 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     page.cancel_button.clicked.connect(on_cancel_requested)
     page.result_button.clicked.connect(lambda: page.request_next())
 
+    def _set_activity_cell(row_index: int, col_index: int, value: str) -> None:
+        item = page.activity_table.item(row_index, col_index)
+        if item is None:
+            item = QTableWidgetItem(value)
+            page.activity_table.setItem(row_index, col_index, item)
+            return
+        item.setText(value)
+
+    def _ensure_activity_row(row_key: str, file_label: str, item_name: str) -> int:
+        if row_key in page._activity_row_map:
+            row_index = int(page._activity_row_map[row_key])
+        else:
+            row_index = page.activity_table.rowCount()
+            page.activity_table.insertRow(row_index)
+            page._activity_row_map[row_key] = row_index
+        _set_activity_cell(row_index, 0, file_label)
+        _set_activity_cell(row_index, 1, item_name)
+        return row_index
+
+    def record_activity_started(row_key: str, file_label: str, item_name: str, started_at: str) -> None:
+        row_index = _ensure_activity_row(row_key, file_label, item_name)
+        _set_activity_cell(row_index, 2, "진행 중")
+        _set_activity_cell(row_index, 3, started_at)
+        _set_activity_cell(row_index, 4, "")
+        _set_activity_cell(row_index, 5, "")
+        _set_activity_cell(row_index, 6, "업로드 시작")
+        _configure_table_columns(page.activity_table, [160, 180, 100, 110, 110, 90, 320])
+
+    def record_activity_finished(
+        row_key: str,
+        file_label: str,
+        item_name: str,
+        *,
+        status: str,
+        finished_at: str,
+        duration_text: str,
+        message: str,
+    ) -> None:
+        row_index = _ensure_activity_row(row_key, file_label, item_name)
+        _set_activity_cell(row_index, 2, status)
+        if not page.activity_table.item(row_index, 3):
+            _set_activity_cell(row_index, 3, finished_at)
+        _set_activity_cell(row_index, 4, finished_at)
+        _set_activity_cell(row_index, 5, duration_text)
+        _set_activity_cell(row_index, 6, message)
+        _configure_table_columns(page.activity_table, [160, 180, 100, 110, 110, 90, 320])
+
     def reset(total_count: int) -> None:
         page.progress_bar.setMaximum(max(total_count, 1))
         page.progress_bar.setValue(0)
         page.current_label.setText("현재 항목: -")
         page.counter_label.setText("성공 0 / 실패 0 / 재시도 0")
         page.status_label.setText("준비")
+        page.time_label.setText("배치 시간: -")
+        page.activity_table.setRowCount(0)
+        page._activity_row_map = {}
         page.log_view.clear()
         page.response_view.clear()
         page.result_button.setEnabled(False)
 
+    page.record_activity_started = record_activity_started
+    page.record_activity_finished = record_activity_finished
     page.reset = reset
     return page
 

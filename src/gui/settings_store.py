@@ -22,7 +22,6 @@ class GuiSettings:
     default_tracker_id: str = ""
     excel_header_row: int = 1
     summary_column: str = "Summary"
-    create_file_root_item: bool = False
     excel_sheet_name: str = "0"
     rate_limit_retry_delay_seconds: float = 1.0
     rate_limit_max_retries: int = 5

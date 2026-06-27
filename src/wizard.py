@@ -109,20 +109,6 @@ class CodebeamerUploadWizard:
         self.state.upload_result = None
         self._invalidate_payload_cache()
 
-    def prepend_root_item(self, root_name: str) -> None:
-        """현재 계층 데이터 앞에 synthetic root item을 추가한다."""
-        if self.processor is None:
-            raise ValueError("processor is required to prepend a root item.")
-        if self.state.hierarchy_df is None or self.state.hierarchy_df.empty:
-            return
-
-        rooted_hierarchy_df = self.processor.prepend_root_item(self.state.hierarchy_df, root_name)
-        self.state.hierarchy_df = rooted_hierarchy_df
-        self.state.upload_df = self.processor.build_upload_df(rooted_hierarchy_df, list_cols=self.state.list_cols)
-        self.state.converted_upload_df = None
-        self.state.upload_result = None
-        self._invalidate_payload_cache()
-
     def read_excel(self, file_path: str, sheet_name: str | int = 0, list_cols: list[str] | None = None) -> None:
         """호환용 메서드다. reader로 raw DataFrame을 만든 뒤 processor로 후처리한다."""
         if self.reader is not None:
@@ -1359,9 +1345,30 @@ class CodebeamerUploadWizard:
         return self._serialize_payload_value(payload)
 
     @staticmethod
-    def _unresolved_parent_error(parent_row_id: Any) -> str:
+    def _normalize_root_item_name(root_item_name: str | None) -> str | None:
+        if root_item_name is None:
+            return None
+        normalized = str(root_item_name).strip()
+        return normalized or None
+
+    def _build_root_item_payload(self, root_item_name: str) -> dict[str, Any]:
+        """업로드 시작 전에 생성할 최상위 부모 item payload를 만든다."""
+        item = TrackerItemBase()
+        item.name = root_item_name
+        applied_schema_fields: set[str] = set()
+        self._apply_default_field_values(
+            item,
+            row_id=-1,
+            applied_schema_fields=applied_schema_fields,
+        )
+        return self._serialize_payload_value(item.create_new_item_payload())
+
+    @staticmethod
+    def _unresolved_parent_error(parent_row_id: Any, *, root_item_name: str | None = None) -> str:
         if parent_row_id is None or pd.isna(parent_row_id):
-            return "Parent row is unresolved."
+            if root_item_name:
+                return f"Top-level parent {root_item_name!r} is unavailable."
+            return "Top-level row was not uploaded."
         return f"Parent row {int(parent_row_id)} was not uploaded successfully."
 
     def build_payloads(self, force: bool = False) -> pd.DataFrame:
@@ -1418,6 +1425,7 @@ class CodebeamerUploadWizard:
         dry_run: bool = False,
         continue_on_error: bool = True,
         *,
+        root_item_name: str | None = None,
         event_callback=None,
         cancel_requested=None,
         pause_requested=None,
@@ -1425,12 +1433,16 @@ class CodebeamerUploadWizard:
         """부모-자식 순서를 지키며 업로드를 실행하고 결과를 모아 돌려준다."""
         if self.state.tracker_id is None:
             raise ValueError("tracker_id is not set.")
+
+        root_item_name = self._normalize_root_item_name(root_item_name)
         payload_df = self.build_payloads()
         ready_df = payload_df[payload_df["payload_status"] == PayloadStatus.READY.value].copy()
         payload_failed_df = payload_df[payload_df["payload_status"] == PayloadStatus.FAILED.value].copy()
+        should_create_root_item = root_item_name is not None and not ready_df.empty
 
         pending = set(ready_df["_row_id"].tolist())
         created_map = {}
+        root_item_id = None
         success_logs = []
         failed_logs = [
             {
@@ -1442,6 +1454,96 @@ class CodebeamerUploadWizard:
             }
             for _, row in payload_failed_df.iterrows()
         ]
+
+        def _finalize(unresolved_df: pd.DataFrame) -> dict[str, Any]:
+            self.state.upload_result = {
+                "root_item_id": root_item_id,
+                "created_map": created_map,
+                "success_df": pd.DataFrame(success_logs),
+                "failed_df": pd.DataFrame(failed_logs),
+                "unresolved_df": unresolved_df,
+            }
+            return self.state.upload_result
+
+        if should_create_root_item:
+            while pause_requested is not None and pause_requested():
+                time.sleep(0.1)
+            if cancel_requested is not None and cancel_requested():
+                unresolved_df = ready_df.copy()
+                if not unresolved_df.empty:
+                    unresolved_df["status"] = UploadStatus.UNRESOLVED_PARENT.value
+                    unresolved_df["error"] = unresolved_df["parent_row_id"].apply(
+                        lambda value: self._unresolved_parent_error(value, root_item_name=root_item_name)
+                    )
+                return _finalize(unresolved_df)
+
+            if event_callback is not None:
+                event_callback({
+                    "type": "row_started",
+                    "row_id": None,
+                    "upload_name": root_item_name,
+                })
+
+            try:
+                root_payload = self._build_root_item_payload(root_item_name)
+                if dry_run:
+                    result = {"id": "DRYRUN-ROOT"}
+                else:
+                    result = self.client.create_item(
+                        tracker_id=self.state.tracker_id,
+                        payload=root_payload,
+                        parent_item_id=None,
+                    )
+
+                root_item_id = result["id"]
+                success_logs.append({
+                    "_row_id": None,
+                    "parent_row_id": None,
+                    "upload_name": root_item_name,
+                    "created_item_id": root_item_id,
+                    "status": UploadStatus.SUCCESS.value,
+                })
+                message = f"Row {root_item_name} uploaded successfully: item_id={root_item_id}"
+                print(message)
+                if event_callback is not None:
+                    event_callback({
+                        "type": "row_success",
+                        "row_id": None,
+                        "upload_name": root_item_name,
+                        "item_id": root_item_id,
+                        "message": message,
+                    })
+            except Exception as exc:
+                error_status_code = self._http_status_code(exc)
+                error_response_json = self._response_json(exc)
+                error_message = str(error_response_json) if error_response_json is not None else str(exc)
+
+                failed_logs.append({
+                    "_row_id": None,
+                    "parent_row_id": None,
+                    "upload_name": root_item_name,
+                    "error_status_code": error_status_code,
+                    "error_response_json": error_response_json,
+                    "error": error_message,
+                    "status": UploadStatus.FAILED.value,
+                })
+                if event_callback is not None:
+                    event_callback({
+                        "type": "row_failed",
+                        "row_id": None,
+                        "upload_name": root_item_name,
+                        "message": error_message,
+                        "status_code": error_status_code,
+                        "response_json": error_response_json,
+                    })
+
+                unresolved_df = ready_df.copy()
+                if not unresolved_df.empty:
+                    unresolved_df["status"] = UploadStatus.UNRESOLVED_PARENT.value
+                    unresolved_df["error"] = unresolved_df["parent_row_id"].apply(
+                        lambda value: self._unresolved_parent_error(value, root_item_name=root_item_name)
+                    )
+                return _finalize(unresolved_df)
 
         while pending:
             progress = False
@@ -1458,7 +1560,7 @@ class CodebeamerUploadWizard:
 
                 parent_row_id = row["parent_row_id"]
                 if parent_row_id is None or pd.isna(parent_row_id):
-                    parent_item_id = None
+                    parent_item_id = root_item_id if should_create_root_item else None
                 else:
                     parent_row_id = int(parent_row_id)
                     if parent_row_id not in created_map:
@@ -1534,13 +1636,7 @@ class CodebeamerUploadWizard:
                         })
 
                     if not continue_on_error:
-                        self.state.upload_result = {
-                            "created_map": created_map,
-                            "success_df": pd.DataFrame(success_logs),
-                            "failed_df": pd.DataFrame(failed_logs),
-                            "unresolved_df": ready_df[ready_df["_row_id"].isin(sorted(pending))].copy(),
-                        }
-                        return self.state.upload_result
+                        return _finalize(ready_df[ready_df["_row_id"].isin(sorted(pending))].copy())
 
                     pending.remove(row_id)
                     progress = True
@@ -1553,15 +1649,14 @@ class CodebeamerUploadWizard:
         unresolved_df = ready_df[ready_df["_row_id"].isin(sorted(pending))].copy()
         if not unresolved_df.empty:
             unresolved_df["status"] = UploadStatus.UNRESOLVED_PARENT.value
-            unresolved_df["error"] = unresolved_df["parent_row_id"].apply(self._unresolved_parent_error)
+            unresolved_df["error"] = unresolved_df["parent_row_id"].apply(
+                lambda value: self._unresolved_parent_error(
+                    value,
+                    root_item_name=root_item_name if should_create_root_item else None,
+                )
+            )
 
-        self.state.upload_result = {
-            "created_map": created_map,
-            "success_df": pd.DataFrame(success_logs),
-            "failed_df": pd.DataFrame(failed_logs),
-            "unresolved_df": unresolved_df,
-        }
-        return self.state.upload_result
+        return _finalize(unresolved_df)
 
     def save_state(self, output_dir: str) -> None:
         """현재 세션의 DataFrame, schema, 결과를 파일로 저장한다."""

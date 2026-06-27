@@ -68,7 +68,6 @@ def prepare_upload_dataframe(
     sheet_name: str | int,
     header_row: int | None = None,
     summary_col: str,
-    root_item_name: str | None = None,
     selected_mapping: dict[str, str],
     schema: dict[str, Any] | None = None,
     schema_df: pd.DataFrame | None = None,
@@ -90,8 +89,6 @@ def prepare_upload_dataframe(
         wizard.processor.summary_col = summary_col
     raw_df = wizard.reader.read_excel(file_path=file_path, sheet_name=sheet_name)
     wizard.load_raw_dataframe(raw_df, list_cols=list_cols)
-    if root_item_name:
-        wizard.prepend_root_item(root_item_name)
     wizard.state.schema = schema
     wizard.state.schema_df = schema_df
     wizard._detect_table_field_columns()

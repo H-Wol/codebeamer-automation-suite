@@ -148,6 +148,10 @@ class FakeClient:
             ]
         }
 
+    def create_item(self, tracker_id: int, payload: dict, parent_item_id: int | None = None):
+        del tracker_id, payload, parent_item_id
+        return {"id": 1}
+
 
 class GuiCodebeamerServiceTest(unittest.TestCase):
     def test_connection_and_tracker_loading(self) -> None:
@@ -249,6 +253,8 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
                 ["Status"],
             )
             self.assertEqual(mapping_context.default_value_candidates[0].options, ["Open", "Review"])
+            self.assertEqual(mapping_context.file_paths, [str(path)])
+            self.assertEqual(mapping_context.representative_file_path, str(path))
 
     def test_prepare_mapping_context_uses_file_selection_header_and_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -298,7 +304,7 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
                 "REQ-001",
             )
 
-    def test_prepare_mapping_context_can_prepend_file_root_item(self) -> None:
+    def test_prepare_mapping_context_keeps_original_upload_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "sample.xlsx"
             workbook = Workbook()
@@ -322,7 +328,6 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
                 default_tracker_id="1000",
                 excel_header_row=1,
                 summary_column="Summary",
-                create_file_root_item=False,
                 excel_sheet_name="Main",
             )
 
@@ -333,16 +338,131 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
                     "sheet_name": "Main",
                     "header_row": 1,
                     "summary_column": "Summary",
-                    "create_file_root_item": True,
                 },
             )
 
             upload_df = mapping_context.wizard.state.upload_df
 
-            self.assertEqual(upload_df.iloc[0]["upload_name"], "sample")
-            self.assertTrue(bool(upload_df.iloc[0]["_synthetic_root"]))
-            self.assertEqual(upload_df.iloc[1]["parent_row_id"], 0)
-            self.assertEqual(upload_df.iloc[1]["upload_name"], "REQ-001")
+            self.assertEqual(list(upload_df["upload_name"]), ["REQ-001"])
+            self.assertNotIn("_synthetic_root", upload_df.columns)
+
+    def test_prepare_mapping_context_rejects_mismatched_batch_headers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            first_path = Path(tmp_dir) / "sample_a.xlsx"
+            second_path = Path(tmp_dir) / "sample_b.xlsx"
+
+            first_book = Workbook()
+            first_sheet = first_book.active
+            first_sheet.title = "Main"
+            first_sheet.append(["Summary", "담당자", "비고"])
+            first_sheet.append(["REQ-001", "홍길동", "메모"])
+            first_book.save(first_path)
+            first_book.close()
+
+            second_book = Workbook()
+            second_sheet = second_book.active
+            second_sheet.title = "Main"
+            second_sheet.append(["Summary", "상태", "비고"])
+            second_sheet.append(["REQ-002", "Open", "메모2"])
+            second_book.save(second_path)
+            second_book.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+
+            with self.assertRaisesRegex(ValueError, "헤더가 기준 파일과 다릅니다"):
+                service.prepare_mapping_context(
+                    settings,
+                    {
+                        "file_path": str(first_path),
+                        "file_paths": [str(first_path), str(second_path)],
+                        "preview_file_path": str(first_path),
+                        "sheet_name": "Main",
+                        "header_row": 1,
+                        "summary_column": "Summary",
+                    },
+                )
+
+    def test_run_batch_upload_aggregates_multiple_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            first_path = Path(tmp_dir) / "sample_a.xlsx"
+            second_path = Path(tmp_dir) / "sample_b.xlsx"
+
+            for path, summary in (
+                (first_path, "REQ-001"),
+                (second_path, "REQ-002"),
+            ):
+                workbook = Workbook()
+                sheet = workbook.active
+                sheet.title = "Main"
+                sheet.append(["Summary"])
+                sheet.append([summary])
+                workbook.save(path)
+                workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+            file_state = {
+                "file_path": str(first_path),
+                "file_paths": [str(first_path), str(second_path)],
+                "preview_file_path": str(first_path),
+                "sheet_name": "Main",
+                "header_row": 1,
+                "summary_column": "Summary",
+            }
+
+            mapping_context = service.prepare_mapping_context(settings, file_state)
+            validation_context = service.validate_mapping(
+                mapping_context,
+                mapping_context.selected_mapping,
+            )
+
+            self.assertFalse(validation_context.has_blocking_issues)
+
+            result = service.run_batch_upload(
+                settings,
+                file_state,
+                mapping_context,
+                dry_run=True,
+                continue_on_error=True,
+                output_dir=str(Path(tmp_dir) / "output"),
+            )
+
+            success_df = result["success_df"]
+            self.assertEqual(len(success_df), 4)
+            self.assertEqual(set(success_df["source_file"].tolist()), {"sample_a.xlsx", "sample_b.xlsx"})
+            self.assertEqual(
+                sorted(success_df["upload_name"].tolist()),
+                ["REQ-001", "REQ-002", "sample_a", "sample_b"],
+            )
+            self.assertTrue(result["failed_df"].empty)
+            self.assertTrue(result["unresolved_df"].empty)
 
     def test_build_user_issue_df_keeps_only_user_visible_issues(self) -> None:
         service = GuiUploadPipelineService(client_factory=FakeClient)

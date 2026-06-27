@@ -140,36 +140,6 @@ class HierarchyProcessor:
         work["parent_row_id"] = parent_row_ids
         return work
 
-    def prepend_root_item(self, hierarchy_df: pd.DataFrame, root_name: str) -> pd.DataFrame:
-        work = hierarchy_df.copy().reset_index(drop=True)
-        normalized_root_name = self.normalize_scalar(root_name)
-        if work.empty or normalized_root_name is None:
-            return work
-
-        if "_synthetic_root" in work.columns and bool(work["_synthetic_root"].fillna(False).iloc[0]):
-            return work
-
-        work["_row_id"] = work["_row_id"].apply(lambda value: int(value) + 1)
-        work["parent_row_id"] = work["parent_row_id"].apply(
-            lambda value: 0 if self.is_blank(value) else int(value) + 1
-        )
-        if "depth" in work.columns:
-            work["depth"] = work["depth"].apply(
-                lambda value: 1 if self.is_blank(value) else int(value) + 1
-            )
-        else:
-            work["depth"] = 1
-
-        work["_synthetic_root"] = False
-
-        root_row = {column: None for column in work.columns}
-        root_row[self.summary_col] = normalized_root_name
-        root_row["_row_id"] = 0
-        root_row["parent_row_id"] = None
-        root_row["depth"] = 0
-        root_row["_synthetic_root"] = True
-        return pd.concat([pd.DataFrame([root_row]), work], ignore_index=True)
-
     def build_upload_df(self, hierarchy_df: pd.DataFrame, list_cols: list[str] | None = None) -> pd.DataFrame:
         work = hierarchy_df.copy()
         del list_cols

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+import time
 
 from .pages import create_file_selection_page
 from .pages import create_mapping_page
@@ -95,6 +97,9 @@ class MainWindow:
                 self.busy_task = None
                 self.upload_success_count = 0
                 self.upload_failed_count = 0
+                self.upload_retry_count = 0
+                self._upload_event_started_at = {}
+                self._upload_batch_started_at = None
                 self.setWindowTitle("Codebeamer Upload GUI")
                 self.resize(qt["QSize"](920, 500))
                 self.setMinimumSize(qt["QSize"](760, 400))
@@ -484,11 +489,7 @@ class MainWindow:
                 self._show_page(self.validation_page)
 
             def _enter_upload_page(self) -> None:
-                self.upload_page.reset(
-                    len(self.session_state.mapping_context.wizard.state.upload_df)
-                    if self.session_state.mapping_context is not None
-                    else 0
-                )
+                self.upload_page.reset(0)
                 self._show_page(self.upload_page)
 
             def _enter_result_page(self) -> None:
@@ -548,18 +549,23 @@ class MainWindow:
                 if self.session_state.mapping_context is None:
                     self.upload_page.status_label.setText("업로드 컨텍스트가 없습니다.")
                     return
-                wizard = self.session_state.mapping_context.wizard
                 output_dir = str(Path(self.session_state.settings.output_dir))
                 self.upload_success_count = 0
                 self.upload_failed_count = 0
+                self.upload_retry_count = 0
+                self._upload_event_started_at = {}
+                self._upload_batch_started_at = time.perf_counter()
                 self.upload_worker = UploadWorker(
-                    wizard,
+                    self.pipeline_service,
+                    settings=self.session_state.settings,
+                    file_state=self.session_state.file_state,
+                    mapping_context=self.session_state.mapping_context,
                     dry_run=self.upload_page.dry_run_checkbox.isChecked(),
                     continue_on_error=self.upload_page.continue_checkbox.isChecked(),
                     output_dir=output_dir,
                 )
-                self.upload_worker.log_message.connect(self._on_upload_log_message)
                 self.upload_worker.progress_changed.connect(self._on_upload_progress)
+                self.upload_worker.upload_event.connect(self._on_upload_event)
                 self.upload_worker.upload_finished.connect(self._on_upload_finished)
                 self.upload_worker.upload_failed.connect(self._on_upload_failed)
                 self.upload_page.start_button.setEnabled(False)
@@ -587,13 +593,126 @@ class MainWindow:
                     self.upload_worker.request_cancel()
                     self.upload_page.status_label.setText("중단 요청됨")
 
-            def _on_upload_log_message(self, message: str) -> None:
-                self.upload_page.log_view.appendPlainText(message)
+            @staticmethod
+            def _format_clock(timestamp: float | None = None) -> str:
+                if timestamp is None:
+                    timestamp = time.time()
+                return datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
+
+            @staticmethod
+            def _format_duration(seconds: float | None) -> str:
+                if seconds is None:
+                    return "-"
+                if seconds < 1:
+                    return f"{seconds:.2f}초"
+                if seconds < 60:
+                    return f"{seconds:.1f}초"
+                minutes = int(seconds // 60)
+                remainder = seconds - (minutes * 60)
+                return f"{minutes}분 {remainder:.1f}초"
+
+            @staticmethod
+            def _upload_event_key(event: dict[str, object]) -> str:
+                source_file_path = str(event.get("source_file_path") or "").strip()
+                row_id = event.get("row_id")
+                if row_id is None:
+                    return f"{source_file_path}::__root__::{str(event.get('upload_name') or '').strip()}"
+                return f"{source_file_path}::{row_id}"
+
+            @staticmethod
+            def _display_item_name(file_label: str, upload_name: str) -> str:
+                prefix = f"[{file_label}] "
+                if file_label and upload_name.startswith(prefix):
+                    return upload_name[len(prefix):].strip() or upload_name
+                return upload_name or "-"
+
+            def _append_timestamped_log(self, message: str) -> None:
+                text = str(message or "").strip()
+                if not text:
+                    return
+                self.upload_page.log_view.appendPlainText(f"{self._format_clock()} | {text}")
+
+            def _update_upload_counter(self) -> None:
+                self.upload_page.counter_label.setText(
+                    f"성공 {self.upload_success_count} / 실패 {self.upload_failed_count} / 재시도 {self.upload_retry_count}"
+                )
+
+            def _update_upload_time_label(self) -> None:
+                if self._upload_batch_started_at is None:
+                    self.upload_page.time_label.setText("배치 시간: -")
+                    return
+                elapsed = time.perf_counter() - self._upload_batch_started_at
+                self.upload_page.time_label.setText(
+                    f"배치 시간: {self._format_duration(elapsed)} 경과 (현재 시각 {self._format_clock()})"
+                )
+
+            def _on_upload_event(self, event: dict) -> None:
+                event_type = str(event.get("type") or "")
+                message = str(event.get("message") or "").strip()
+                raw_item_name = str(event.get("upload_name") or "-").strip() or "-"
+                file_label = str(event.get("source_file") or "").strip() or "-"
+                item_name = self._display_item_name(file_label, raw_item_name)
+                row_key = self._upload_event_key(event)
+
+                self._update_upload_time_label()
+
+                if event_type == "log":
+                    self._append_timestamped_log(message)
+                    return
+
+                if event_type == "batch_total":
+                    self._append_timestamped_log(f"총 업로드 예정 건수: {int(event.get('total') or 0)}")
+                    return
+
+                if event_type == "row_started":
+                    started_at = time.perf_counter()
+                    self._upload_event_started_at[row_key] = started_at
+                    self.upload_page.record_activity_started(
+                        row_key,
+                        file_label,
+                        item_name,
+                        self._format_clock(),
+                    )
+                    self._append_timestamped_log(f"시작 | {raw_item_name}")
+                    return
+
+                if event_type not in {"row_success", "row_failed"}:
+                    return
+
+                started_at = self._upload_event_started_at.get(row_key)
+                elapsed = None if started_at is None else (time.perf_counter() - started_at)
+                if event_type == "row_success":
+                    self.upload_success_count += 1
+                    status_text = "성공"
+                    if not message:
+                        message = "업로드 완료"
+                else:
+                    self.upload_failed_count += 1
+                    status_text = "실패"
+                    if not message:
+                        message = "업로드 실패"
+                    response_json = event.get("response_json")
+                    if response_json not in (None, ""):
+                        self.upload_page.response_view.setPlainText(str(response_json))
+
+                self.upload_page.record_activity_finished(
+                    row_key,
+                    file_label,
+                    item_name,
+                    status=status_text,
+                    finished_at=self._format_clock(),
+                    duration_text=self._format_duration(elapsed),
+                    message=message,
+                )
+                self._update_upload_counter()
+                self._update_upload_time_label()
+                self._append_timestamped_log(f"{status_text} | {message}")
 
             def _on_upload_progress(self, current: int, total: int, upload_name: str) -> None:
                 self.upload_page.progress_bar.setMaximum(max(total, 1))
                 self.upload_page.progress_bar.setValue(current)
                 self.upload_page.current_label.setText(f"현재 항목: {upload_name or '-'}")
+                self._update_upload_time_label()
 
             def _on_upload_finished(self, result: dict) -> None:
                 self.session_state.upload_result = result
@@ -601,11 +720,11 @@ class MainWindow:
                 failed_df = result.get("failed_df")
                 self.upload_success_count = 0 if success_df is None else len(success_df)
                 self.upload_failed_count = 0 if failed_df is None else len(failed_df)
-                self.upload_page.counter_label.setText(
-                    f"성공 {self.upload_success_count} / 실패 {self.upload_failed_count} / 재시도 0"
-                )
+                self._update_upload_counter()
                 if failed_df is not None and not getattr(failed_df, "empty", True) and "error_response_json" in failed_df.columns:
                     self.upload_page.response_view.setPlainText(str(failed_df.iloc[0].get("error_response_json") or ""))
+                self._update_upload_time_label()
+                self._append_timestamped_log("배치 업로드가 완료되었습니다.")
                 self.upload_page.status_label.setText("업로드 완료")
                 self.upload_page.pause_button.setEnabled(False)
                 self.upload_page.resume_button.setEnabled(False)
@@ -614,7 +733,8 @@ class MainWindow:
 
             def _on_upload_failed(self, message: str) -> None:
                 self.upload_page.status_label.setText(message)
-                self.upload_page.log_view.appendPlainText(message)
+                self._update_upload_time_label()
+                self._append_timestamped_log(message)
                 self.upload_page.pause_button.setEnabled(False)
                 self.upload_page.resume_button.setEnabled(False)
                 self.upload_page.cancel_button.setEnabled(False)

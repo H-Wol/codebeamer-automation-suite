@@ -46,7 +46,6 @@ class GuiSettingsStoreTest(unittest.TestCase):
                 password="secret",
                 save_password=True,
                 summary_column="Summary",
-                create_file_root_item=True,
             )
 
             store.save(settings)
@@ -59,4 +58,3 @@ class GuiSettingsStoreTest(unittest.TestCase):
             self.assertEqual(loaded.password, "secret")
             self.assertTrue(loaded.save_password)
             self.assertEqual(loaded.summary_column, "Summary")
-            self.assertTrue(loaded.create_file_root_item)
