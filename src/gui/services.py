@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 import re
 import time
@@ -35,6 +36,7 @@ class PreviewData:
     rows: list[list[str]]
     suggested_summary: str
     raw_df: pd.DataFrame
+    raw_df_by_file: dict[str, pd.DataFrame] = field(default_factory=dict)
 
 
 class GuiCodebeamerService:
@@ -106,6 +108,7 @@ class GuiExcelService:
         self,
         file_path: str,
         *,
+        file_paths: list[str] | None = None,
         sheet_name: str | None = None,
         header_row: int = 1,
         summary_column: str | None = None,
@@ -134,6 +137,17 @@ class GuiExcelService:
             logger=self.logger,
         )
         raw_df = data_reader.read_excel(file_path=file_path, sheet_name=target_sheet_name)
+        raw_df_by_file: dict[str, pd.DataFrame] = {
+            str(file_path).strip(): raw_df,
+        }
+        for other_file_path in file_paths or []:
+            normalized_file_path = str(other_file_path).strip()
+            if not normalized_file_path or normalized_file_path in raw_df_by_file:
+                continue
+            raw_df_by_file[normalized_file_path] = data_reader.read_excel(
+                file_path=normalized_file_path,
+                sheet_name=target_sheet_name,
+            )
 
         preview_headers = [header for header in headers if not str(header).startswith("_")]
         preview_rows: list[list[str]] = []
@@ -154,6 +168,7 @@ class GuiExcelService:
             rows=preview_rows,
             suggested_summary=suggested_summary,
             raw_df=raw_df,
+            raw_df_by_file=raw_df_by_file,
         )
 
 
@@ -1105,6 +1120,41 @@ class GuiUploadPipelineService:
             return None
         return preview_data
 
+    @staticmethod
+    def _preview_raw_df_map(preview_data: PreviewData | None) -> dict[str, pd.DataFrame]:
+        if preview_data is None:
+            return {}
+
+        raw_df_by_file = getattr(preview_data, "raw_df_by_file", None)
+        if isinstance(raw_df_by_file, dict) and raw_df_by_file:
+            return {
+                str(path).strip(): df
+                for path, df in raw_df_by_file.items()
+                if str(path).strip() and isinstance(df, pd.DataFrame)
+            }
+
+        raw_df = getattr(preview_data, "raw_df", None)
+        file_path = str(getattr(preview_data, "file_path", "") or "").strip()
+        if file_path and isinstance(raw_df, pd.DataFrame):
+            return {file_path: raw_df}
+        return {}
+
+    @classmethod
+    def _cached_raw_df_for_file(
+        cls,
+        preview_data: PreviewData | None,
+        file_path: str,
+    ) -> pd.DataFrame | None:
+        return cls._preview_raw_df_map(preview_data).get(str(file_path).strip())
+
+    @staticmethod
+    def _visible_headers_from_raw_df(raw_df: pd.DataFrame) -> list[str]:
+        return [
+            str(column)
+            for column in raw_df.columns
+            if not str(column).startswith("_")
+        ]
+
     def _visible_headers_for_file(
         self,
         file_path: str,
@@ -1130,17 +1180,22 @@ class GuiUploadPipelineService:
         sheet_name: str,
         header_row: int,
         summary_col: str,
+        preview_data: PreviewData | None = None,
     ) -> None:
         for file_path in file_paths:
             if file_path == representative_file_path:
                 continue
 
-            current_headers = self._visible_headers_for_file(
-                file_path,
-                sheet_name=sheet_name,
-                header_row=header_row,
-                summary_col=summary_col,
-            )
+            cached_raw_df = self._cached_raw_df_for_file(preview_data, file_path)
+            if cached_raw_df is not None:
+                current_headers = self._visible_headers_from_raw_df(cached_raw_df)
+            else:
+                current_headers = self._visible_headers_for_file(
+                    file_path,
+                    sheet_name=sheet_name,
+                    header_row=header_row,
+                    summary_col=summary_col,
+                )
             if current_headers != expected_headers:
                 raise ValueError(
                     f"'{Path(file_path).name}' 파일의 헤더가 기준 파일과 다릅니다."
@@ -1154,7 +1209,18 @@ class GuiUploadPipelineService:
         header_row: int,
         summary_col: str,
         list_cols: list[str],
+        preview_data: PreviewData | None = None,
     ) -> int:
+        cached_raw_df = self._cached_raw_df_for_file(preview_data, file_path)
+        if cached_raw_df is not None:
+            processor = HierarchyProcessor(
+                header_row=header_row,
+                summary_col=summary_col,
+                logger=self.logger,
+            )
+            merged_df = processor.merge_multiline_records(cached_raw_df.copy(), list_cols=list_cols)
+            return int(len(merged_df.index))
+
         reader = self.reader_cls(
             header_row=header_row,
             summary_col=summary_col,
@@ -1183,17 +1249,15 @@ class GuiUploadPipelineService:
     ) -> int:
         total_rows = 0
         for file_path in mapping_context.file_paths:
-            if (
-                mapping_context.preview_data is not None
-                and str(mapping_context.preview_data.file_path).strip() == str(file_path).strip()
-            ):
+            cached_raw_df = self._cached_raw_df_for_file(mapping_context.preview_data, file_path)
+            if cached_raw_df is not None:
                 processor = HierarchyProcessor(
                     header_row=mapping_context.header_row,
                     summary_col=mapping_context.summary_column,
                     logger=self.logger,
                 )
                 merged_df = processor.merge_multiline_records(
-                    mapping_context.preview_data.raw_df.copy(),
+                    cached_raw_df.copy(),
                     list_cols=list_cols,
                 )
                 total_rows += int(len(merged_df.index))
@@ -1205,6 +1269,7 @@ class GuiUploadPipelineService:
                 header_row=mapping_context.header_row,
                 summary_col=mapping_context.summary_column,
                 list_cols=list_cols,
+                preview_data=mapping_context.preview_data,
             )
         return total_rows
 
@@ -1243,6 +1308,7 @@ class GuiUploadPipelineService:
         if preview is None:
             preview = self.excel_service.load_preview(
                 representative_file_path,
+                file_paths=file_paths,
                 sheet_name=target_sheet_name,
                 header_row=target_header_row,
                 summary_column=target_summary_column,
@@ -1255,6 +1321,7 @@ class GuiUploadPipelineService:
             sheet_name=target_sheet_name,
             header_row=target_header_row,
             summary_col=target_summary_column,
+            preview_data=preview,
         )
         raw_mapping = suggest_mapping_from_headers(headers, mappable_schema_df)
 
@@ -1556,12 +1623,7 @@ class GuiUploadPipelineService:
 
         unique_values_by_field: dict[str, set[str]] = {}
         for file_path in mapping_context.file_paths:
-            preview_raw_df = None
-            if (
-                mapping_context.preview_data is not None
-                and str(mapping_context.preview_data.file_path).strip() == str(file_path).strip()
-            ):
-                preview_raw_df = mapping_context.preview_data.raw_df
+            preview_raw_df = self._cached_raw_df_for_file(mapping_context.preview_data, file_path)
 
             prepare_upload_dataframe(
                 cache_wizard,
@@ -1644,6 +1706,7 @@ class GuiUploadPipelineService:
             selected_mapping=mapping_context.selected_mapping,
             schema=schema,
             schema_df=schema_df,
+            raw_df=self._cached_raw_df_for_file(mapping_context.preview_data, file_path),
         )
 
         wizard.state.selected_mapping = dict(mapping_context.selected_mapping)

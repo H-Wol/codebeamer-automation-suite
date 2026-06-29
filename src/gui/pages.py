@@ -724,6 +724,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         try:
             preview = on_file_preview_requested(
                 state["preview_file_path"],
+                file_paths=state["file_paths"],
                 sheet_name=state["sheet_name"],
                 header_row=state["header_row"],
                 summary_column=state["summary_column"],

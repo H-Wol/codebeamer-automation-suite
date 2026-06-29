@@ -208,6 +208,30 @@ class CountingGuiExcelService(GuiExcelService):
         return super().load_preview(*args, **kwargs)
 
 
+class CountingBatchExcelReader(FakeExcelReader):
+    read_excel_calls: list[str] = []
+    read_headers_calls: list[str] = []
+    list_sheet_calls: list[str] = []
+
+    @classmethod
+    def reset_counts(cls) -> None:
+        cls.read_excel_calls = []
+        cls.read_headers_calls = []
+        cls.list_sheet_calls = []
+
+    def list_sheet_names(self, file_path: str) -> list[str]:
+        self.__class__.list_sheet_calls.append(str(file_path))
+        return super().list_sheet_names(file_path)
+
+    def read_headers(self, file_path: str, sheet_name: str | int) -> list[str]:
+        self.__class__.read_headers_calls.append(str(file_path))
+        return super().read_headers(file_path, sheet_name)
+
+    def read_excel(self, file_path: str, sheet_name: str | int = 0, visible: bool = False) -> pd.DataFrame:
+        self.__class__.read_excel_calls.append(str(file_path))
+        return super().read_excel(file_path, sheet_name=sheet_name, visible=visible)
+
+
 class GuiCodebeamerServiceTest(unittest.TestCase):
     def test_connection_and_tracker_loading(self) -> None:
         service = GuiCodebeamerService(client_factory=FakeClient)
@@ -253,6 +277,40 @@ class GuiExcelServiceTest(unittest.TestCase):
             self.assertEqual(preview.headers, ["Summary", "담당자", "비고"])
             self.assertEqual(preview.rows[0], ["REQ-001", "홍길동", "메모"])
             self.assertEqual(preview.suggested_summary, "Summary")
+
+    def test_load_preview_preloads_raw_data_for_all_selected_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            first_path = Path(tmp_dir) / "first.xlsx"
+            second_path = Path(tmp_dir) / "second.xlsx"
+            for path, summary in (
+                (first_path, "REQ-001"),
+                (second_path, "REQ-002"),
+            ):
+                workbook = Workbook()
+                sheet = workbook.active
+                sheet.title = "Main"
+                sheet.append(["Summary", "담당자"])
+                sheet.append([summary, "홍길동"])
+                workbook.save(path)
+                workbook.close()
+
+            CountingBatchExcelReader.reset_counts()
+            preview = GuiExcelService(reader_cls=CountingBatchExcelReader).load_preview(
+                str(first_path),
+                file_paths=[str(first_path), str(second_path)],
+                sheet_name="Main",
+                header_row=1,
+                summary_column="Summary",
+            )
+
+            self.assertEqual(
+                sorted(preview.raw_df_by_file.keys()),
+                sorted([str(first_path), str(second_path)]),
+            )
+            self.assertEqual(
+                CountingBatchExcelReader.read_excel_calls,
+                [str(first_path), str(second_path)],
+            )
 
 
 class GuiUploadPipelineServiceTest(unittest.TestCase):
@@ -886,6 +944,83 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             self.assertEqual(root_rows["upload_name"].tolist(), ["REQ-001", "REQ-002"])
             self.assertTrue(result["failed_df"].empty)
             self.assertTrue(result["unresolved_df"].empty)
+
+    def test_run_batch_upload_reuses_preloaded_raw_data_for_all_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            first_path = Path(tmp_dir) / "ABC_REQ-001.xlsx"
+            second_path = Path(tmp_dir) / "DEF_REQ-002.xlsx"
+
+            for path, summary in (
+                (first_path, "REQ-001"),
+                (second_path, "REQ-002"),
+            ):
+                workbook = Workbook()
+                sheet = workbook.active
+                sheet.title = "Main"
+                sheet.append(["Summary"])
+                sheet.append([summary])
+                workbook.save(path)
+                workbook.close()
+
+            CountingBatchExcelReader.reset_counts()
+            excel_service = GuiExcelService(reader_cls=CountingBatchExcelReader)
+            preview = excel_service.load_preview(
+                str(first_path),
+                file_paths=[str(first_path), str(second_path)],
+                sheet_name="Main",
+                header_row=1,
+                summary_column="Summary",
+            )
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=excel_service,
+                reader_cls=CountingBatchExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+            file_state = {
+                "file_path": str(first_path),
+                "file_paths": [str(first_path), str(second_path)],
+                "preview_file_path": str(first_path),
+                "sheet_name": "Main",
+                "header_row": 1,
+                "summary_column": "Summary",
+                "preview_data": preview,
+            }
+
+            mapping_context = service.prepare_mapping_context(settings, file_state)
+            self.assertEqual(
+                CountingBatchExcelReader.read_excel_calls,
+                [str(first_path), str(second_path)],
+            )
+
+            service.validate_mapping(
+                mapping_context,
+                mapping_context.selected_mapping,
+            )
+            result = service.run_batch_upload(
+                settings,
+                file_state,
+                mapping_context,
+                dry_run=True,
+                continue_on_error=True,
+                output_dir=str(Path(tmp_dir) / "output"),
+            )
+
+            self.assertEqual(
+                CountingBatchExcelReader.read_excel_calls,
+                [str(first_path), str(second_path)],
+            )
+            self.assertEqual(len(result["success_df"]), 4)
 
     def test_build_user_issue_df_keeps_only_user_visible_issues(self) -> None:
         service = GuiUploadPipelineService(client_factory=FakeClient)
