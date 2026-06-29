@@ -16,6 +16,7 @@ from src.mapping_service import MappingService
 from src.models import OptionMapKind
 from src.models import OptionCheckStatus
 from src.models import PayloadStatus
+from src.models import TrackerItemResolutionMode
 from src.upload_pipeline import load_tracker_schema_df
 from src.upload_pipeline import prepare_upload_dataframe
 from src.upload_pipeline import run_validation_pipeline
@@ -25,10 +26,15 @@ from src.wizard import CodebeamerUploadWizard
 
 @dataclass
 class PreviewData:
+    file_path: str
+    sheet_name: str
+    header_row: int
+    summary_column: str
     sheet_names: list[str]
     headers: list[str]
     rows: list[list[str]]
     suggested_summary: str
+    raw_df: pd.DataFrame
 
 
 class GuiCodebeamerService:
@@ -102,6 +108,7 @@ class GuiExcelService:
         *,
         sheet_name: str | None = None,
         header_row: int = 1,
+        summary_column: str | None = None,
         max_preview_rows: int = 10,
     ) -> PreviewData:
         if header_row < 1:
@@ -118,9 +125,12 @@ class GuiExcelService:
 
         headers = header_reader.read_headers(file_path, target_sheet_name)
         suggested_summary = self._suggest_summary(headers)
+        target_summary = str(summary_column or "").strip() or suggested_summary
+        if target_summary not in headers:
+            target_summary = suggested_summary
         data_reader = self.reader_cls(
             header_row=header_row,
-            summary_col=suggested_summary,
+            summary_col=target_summary,
             logger=self.logger,
         )
         raw_df = data_reader.read_excel(file_path=file_path, sheet_name=target_sheet_name)
@@ -135,10 +145,15 @@ class GuiExcelService:
                 )
 
         return PreviewData(
+            file_path=str(file_path),
+            sheet_name=str(target_sheet_name),
+            header_row=int(header_row),
+            summary_column=target_summary,
             sheet_names=sheet_names,
             headers=preview_headers,
             rows=preview_rows,
             suggested_summary=suggested_summary,
+            raw_df=raw_df,
         )
 
 
@@ -150,6 +165,9 @@ BLOCKING_OPTION_STATUSES = {
     OptionCheckStatus.OPTION_MAP_MISSING.value,
     OptionCheckStatus.OPTION_NOT_FOUND.value,
     OptionCheckStatus.OPTION_SOURCE_UNAVAILABLE.value,
+    OptionCheckStatus.TRACKER_ITEM_LOOKUP_AMBIGUOUS.value,
+    OptionCheckStatus.TRACKER_ITEM_LOOKUP_NOT_FOUND.value,
+    OptionCheckStatus.TRACKER_ITEM_REGEX_MISSING.value,
 }
 USER_LOOKUP_FAILURE_SUFFIXES = (
     "USER_LOOKUP_NOT_RUN",
@@ -187,6 +205,7 @@ ROOT_REGEX_TARGET_FILE_NAME = "file_name"
 ROOT_REGEX_TARGET_FILE_STEM = "file_stem"
 ROOT_ASSIGNMENT_MODE_FILE_SOURCE = "file_source"
 ROOT_ASSIGNMENT_MODE_FIXED_VALUE = "fixed_value"
+DEFAULT_TRACKER_ITEM_ID_REGEX = r"\[(?:[^:\]]+:)?(\d+)[^\]]*\]|^(\d+)(?:\.0)?$"
 
 
 @dataclass
@@ -198,6 +217,15 @@ class DefaultValueCandidate:
 
 
 @dataclass
+class TrackerItemFieldCandidate:
+    df_column: str
+    schema_field: str
+    field_type: str
+    source_tracker_ids: list[int]
+    supports_query: bool
+
+
+@dataclass
 class MappingContext:
     wizard: CodebeamerUploadWizard
     schema_df: pd.DataFrame
@@ -205,9 +233,16 @@ class MappingContext:
     selected_mapping: dict[str, str]
     default_value_candidates: list[DefaultValueCandidate]
     selected_default_values: dict[str, str]
+    selected_tracker_item_settings: dict[str, dict[str, Any]]
+    tracker_item_field_candidates: list[TrackerItemFieldCandidate]
+    tracker_item_lookup_cache: dict[tuple[str, str], tuple[Any, str | None, str | None]]
     list_cols: list[str]
     file_paths: list[str]
     representative_file_path: str
+    sheet_name: str
+    header_row: int
+    summary_column: str
+    preview_data: PreviewData | None
     root_item_config: dict[str, Any]
 
 
@@ -278,8 +313,8 @@ class GuiUploadPipelineService:
         self.logger = logger
         self.mapper = MappingService(logger=logger)
         self.client_factory = client_factory
-        self.excel_service = excel_service or GuiExcelService(logger=logger)
         self.reader_cls = reader_cls
+        self.excel_service = excel_service or GuiExcelService(logger=logger, reader_cls=reader_cls)
 
     def create_wizard(self, settings) -> CodebeamerUploadWizard:
         client = self.client_factory(
@@ -364,6 +399,207 @@ class GuiUploadPipelineService:
                 mandatory=bool(candidate.get("mandatory", False)),
             ))
         return candidates
+
+    @staticmethod
+    def _normalize_lookup_text(value: Any) -> str:
+        text = str(value or "").strip()
+        return "" if text.lower() == "nan" else text
+
+    @classmethod
+    def _extract_configuration_field_records(cls, payload: Any) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+
+        def _walk(node: Any) -> None:
+            if isinstance(node, list):
+                for item in node:
+                    _walk(item)
+                return
+            if not isinstance(node, dict):
+                return
+
+            if (
+                any(key in node for key in ("choiceConfigOptionsSetApi", "referenceFilters"))
+                and any(key in node for key in ("label", "name", "title"))
+            ):
+                records.append(node)
+
+            for value in node.values():
+                _walk(value)
+
+        _walk(payload)
+        return records
+
+    @staticmethod
+    def _tracker_item_source_tracker_ids_from_config(field_config: dict[str, Any]) -> list[int]:
+        if not isinstance(field_config, dict):
+            return []
+
+        source_configs: list[dict[str, Any]] = []
+        if isinstance(field_config.get("choiceConfigOptionsSetApi"), dict):
+            source_configs.append(field_config["choiceConfigOptionsSetApi"])
+        source_configs.append(field_config)
+
+        tracker_ids: list[int] = []
+        seen_ids: set[int] = set()
+        for source in source_configs:
+            filters = source.get("referenceFilters")
+            if not isinstance(filters, list):
+                continue
+            for filter_entry in filters:
+                if not isinstance(filter_entry, dict):
+                    continue
+                if str(filter_entry.get("domainType") or "").strip().upper() != "TRACKER":
+                    continue
+                domain_id = filter_entry.get("domainId")
+                if domain_id is None:
+                    continue
+                try:
+                    normalized_id = int(domain_id)
+                except Exception:
+                    continue
+                if normalized_id in seen_ids:
+                    continue
+                seen_ids.add(normalized_id)
+                tracker_ids.append(normalized_id)
+        return tracker_ids
+
+    @classmethod
+    def _enrich_schema_df_with_tracker_configuration(
+        cls,
+        schema_df: pd.DataFrame,
+        tracker_configuration: Any,
+    ) -> pd.DataFrame:
+        if schema_df is None or schema_df.empty:
+            return schema_df
+
+        config_fields = cls._extract_configuration_field_records(tracker_configuration)
+        if not config_fields:
+            work = schema_df.copy()
+            work["tracker_item_source_tracker_ids"] = [[] for _ in range(len(work.index))]
+            return work
+
+        def _normalized_candidates(payload: dict[str, Any]) -> set[str]:
+            values = {
+                cls._normalize_lookup_text(payload.get("label")).casefold(),
+                cls._normalize_lookup_text(payload.get("name")).casefold(),
+                cls._normalize_lookup_text(payload.get("title")).casefold(),
+            }
+            return {value for value in values if value}
+
+        config_by_name: dict[str, dict[str, Any]] = {}
+        for field_config in config_fields:
+            for candidate in _normalized_candidates(field_config):
+                config_by_name.setdefault(candidate, field_config)
+
+        work = schema_df.copy()
+        source_tracker_ids_column: list[list[int]] = []
+
+        for _, row in work.iterrows():
+            normalized_names = {
+                cls._normalize_lookup_text(row.get("field_name")).casefold(),
+                cls._normalize_lookup_text(row.get("field_label")).casefold(),
+            }
+            normalized_names.discard("")
+            matched_config = None
+            for candidate in normalized_names:
+                matched_config = config_by_name.get(candidate)
+                if matched_config is not None:
+                    break
+            source_tracker_ids_column.append(
+                cls._tracker_item_source_tracker_ids_from_config(matched_config or {})
+            )
+
+        work["tracker_item_source_tracker_ids"] = source_tracker_ids_column
+        return work
+
+    @classmethod
+    def _build_tracker_item_field_candidates(
+        cls,
+        schema_df: pd.DataFrame,
+        selected_mapping: dict[str, str],
+    ) -> list[TrackerItemFieldCandidate]:
+        candidates: list[TrackerItemFieldCandidate] = []
+        if schema_df is None or schema_df.empty:
+            return candidates
+
+        schema_rows_by_name = {
+            str(row.get("field_name") or "").strip(): row
+            for _, row in schema_df.iterrows()
+            if str(row.get("field_name") or "").strip()
+        }
+        for df_column, schema_field in selected_mapping.items():
+            schema_row = schema_rows_by_name.get(str(schema_field).strip())
+            if schema_row is None:
+                continue
+            if str(schema_row.get("field_type") or "").strip() != "TrackerItemChoiceField":
+                continue
+            source_tracker_ids = [
+                int(item)
+                for item in (schema_row.get("tracker_item_source_tracker_ids") or [])
+                if str(item).strip()
+            ]
+            candidates.append(TrackerItemFieldCandidate(
+                df_column=str(df_column).strip(),
+                schema_field=str(schema_field).strip(),
+                field_type=str(schema_row.get("field_type") or ""),
+                source_tracker_ids=source_tracker_ids,
+                supports_query=bool(source_tracker_ids),
+            ))
+        return candidates
+
+    @classmethod
+    def _default_tracker_item_settings(
+        cls,
+        tracker_item_candidates: list[TrackerItemFieldCandidate],
+    ) -> dict[str, dict[str, Any]]:
+        settings: dict[str, dict[str, Any]] = {}
+        for candidate in tracker_item_candidates:
+            settings[candidate.schema_field] = {
+                "mode": (
+                    TrackerItemResolutionMode.QUERY.value
+                    if candidate.supports_query
+                    else TrackerItemResolutionMode.REGEX.value
+                ),
+                "regex_pattern": DEFAULT_TRACKER_ITEM_ID_REGEX,
+                "source_tracker_ids": list(candidate.source_tracker_ids),
+            }
+        return settings
+
+    @classmethod
+    def _normalize_tracker_item_settings(
+        cls,
+        schema_df: pd.DataFrame,
+        selected_mapping: dict[str, str],
+        tracker_item_settings: dict[str, dict[str, Any]] | None,
+    ) -> tuple[list[TrackerItemFieldCandidate], dict[str, dict[str, Any]]]:
+        candidates = cls._build_tracker_item_field_candidates(schema_df, selected_mapping)
+        default_settings = cls._default_tracker_item_settings(candidates)
+        normalized_settings = dict(default_settings)
+
+        for candidate in candidates:
+            raw_setting = (tracker_item_settings or {}).get(candidate.schema_field)
+            if not isinstance(raw_setting, dict):
+                continue
+            raw_mode = str(raw_setting.get("mode") or normalized_settings[candidate.schema_field]["mode"]).strip()
+            if raw_mode not in {
+                TrackerItemResolutionMode.REGEX.value,
+                TrackerItemResolutionMode.QUERY.value,
+            }:
+                raw_mode = normalized_settings[candidate.schema_field]["mode"]
+            normalized_settings[candidate.schema_field] = {
+                "mode": (
+                    raw_mode
+                    if raw_mode != TrackerItemResolutionMode.QUERY.value or candidate.supports_query
+                    else TrackerItemResolutionMode.REGEX.value
+                ),
+                "regex_pattern": str(
+                    raw_setting.get("regex_pattern")
+                    or normalized_settings[candidate.schema_field]["regex_pattern"]
+                ).strip() or DEFAULT_TRACKER_ITEM_ID_REGEX,
+                "source_tracker_ids": list(candidate.source_tracker_ids),
+            }
+
+        return candidates, normalized_settings
 
     @staticmethod
     def _root_regex_target_options() -> list[tuple[str, str]]:
@@ -784,6 +1020,28 @@ class GuiUploadPipelineService:
             return preview_file_path
         return file_paths[0]
 
+    @staticmethod
+    def _cached_preview_data(
+        file_state: dict[str, Any],
+        *,
+        file_path: str,
+        sheet_name: str,
+        header_row: int,
+        summary_column: str,
+    ) -> PreviewData | None:
+        preview_data = file_state.get("preview_data")
+        if not isinstance(preview_data, PreviewData):
+            return None
+        if str(preview_data.file_path).strip() != str(file_path).strip():
+            return None
+        if str(preview_data.sheet_name).strip() != str(sheet_name).strip():
+            return None
+        if int(preview_data.header_row) != int(header_row):
+            return None
+        if str(preview_data.summary_column).strip() != str(summary_column).strip():
+            return None
+        return preview_data
+
     def _visible_headers_for_file(
         self,
         file_path: str,
@@ -825,6 +1083,68 @@ class GuiUploadPipelineService:
                     f"'{Path(file_path).name}' 파일의 헤더가 기준 파일과 다릅니다."
                 )
 
+    def _count_upload_rows_for_file(
+        self,
+        file_path: str,
+        *,
+        sheet_name: str,
+        header_row: int,
+        summary_col: str,
+        list_cols: list[str],
+    ) -> int:
+        reader = self.reader_cls(
+            header_row=header_row,
+            summary_col=summary_col,
+            logger=self.logger,
+        )
+        if hasattr(reader, "count_upload_rows"):
+            try:
+                return int(reader.count_upload_rows(file_path=file_path, sheet_name=sheet_name))
+            except Exception:
+                pass
+
+        raw_df = reader.read_excel(file_path=file_path, sheet_name=sheet_name)
+        processor = HierarchyProcessor(
+            header_row=header_row,
+            summary_col=summary_col,
+            logger=self.logger,
+        )
+        merged_df = processor.merge_multiline_records(raw_df, list_cols=list_cols)
+        return int(len(merged_df.index))
+
+    def _count_batch_upload_rows(
+        self,
+        mapping_context: MappingContext,
+        *,
+        list_cols: list[str],
+    ) -> int:
+        total_rows = 0
+        for file_path in mapping_context.file_paths:
+            if (
+                mapping_context.preview_data is not None
+                and str(mapping_context.preview_data.file_path).strip() == str(file_path).strip()
+            ):
+                processor = HierarchyProcessor(
+                    header_row=mapping_context.header_row,
+                    summary_col=mapping_context.summary_column,
+                    logger=self.logger,
+                )
+                merged_df = processor.merge_multiline_records(
+                    mapping_context.preview_data.raw_df.copy(),
+                    list_cols=list_cols,
+                )
+                total_rows += int(len(merged_df.index))
+                continue
+
+            total_rows += self._count_upload_rows_for_file(
+                file_path,
+                sheet_name=mapping_context.sheet_name,
+                header_row=mapping_context.header_row,
+                summary_col=mapping_context.summary_column,
+                list_cols=list_cols,
+            )
+        return total_rows
+
     def prepare_mapping_context(self, settings, file_state: dict[str, Any]) -> MappingContext:
         file_paths = self._normalize_file_paths(file_state)
         representative_file_path = self._representative_file_path(file_state)
@@ -836,35 +1156,55 @@ class GuiUploadPipelineService:
         wizard.select_tracker(int(settings.default_tracker_id))
 
         schema, schema_df = load_tracker_schema_df(wizard)
+        tracker_configuration = None
+        if hasattr(wizard.client, "get_tracker_configuration"):
+            try:
+                tracker_configuration = wizard.client.get_tracker_configuration(int(settings.default_tracker_id))
+            except Exception:
+                tracker_configuration = None
+        schema_df = self._enrich_schema_df_with_tracker_configuration(schema_df, tracker_configuration)
         mappable_schema_df = schema_df[
             ~schema_df.apply(self._is_gui_excluded_schema_field, axis=1)
         ].reset_index(drop=True)
 
-        preview = self.excel_service.load_preview(
-            representative_file_path,
-            sheet_name=file_state["sheet_name"],
-            header_row=int(file_state["header_row"]),
+        target_sheet_name = str(file_state["sheet_name"])
+        target_header_row = int(file_state["header_row"])
+        target_summary_column = str(file_state["summary_column"])
+        preview = self._cached_preview_data(
+            file_state,
+            file_path=representative_file_path,
+            sheet_name=target_sheet_name,
+            header_row=target_header_row,
+            summary_column=target_summary_column,
         )
+        if preview is None:
+            preview = self.excel_service.load_preview(
+                representative_file_path,
+                sheet_name=target_sheet_name,
+                header_row=target_header_row,
+                summary_column=target_summary_column,
+            )
         headers = preview.headers
         self._validate_batch_headers(
             file_paths,
             representative_file_path=representative_file_path,
             expected_headers=headers,
-            sheet_name=str(file_state["sheet_name"]),
-            header_row=int(file_state["header_row"]),
-            summary_col=str(file_state["summary_column"]),
+            sheet_name=target_sheet_name,
+            header_row=target_header_row,
+            summary_col=target_summary_column,
         )
         raw_mapping = suggest_mapping_from_headers(headers, mappable_schema_df)
 
         _, list_cols = prepare_upload_dataframe(
             wizard,
             file_path=representative_file_path,
-            sheet_name=file_state["sheet_name"],
-            header_row=int(file_state["header_row"]),
-            summary_col=str(file_state["summary_column"]),
+            sheet_name=target_sheet_name,
+            header_row=target_header_row,
+            summary_col=target_summary_column,
             selected_mapping=raw_mapping,
             schema=schema,
             schema_df=mappable_schema_df,
+            raw_df=preview.raw_df,
         )
 
         upload_columns = self._gui_upload_columns(wizard.state.upload_df)
@@ -874,6 +1214,11 @@ class GuiUploadPipelineService:
             if column in upload_columns
         }
         default_value_candidates = self._build_default_value_candidates(mappable_schema_df)
+        tracker_item_field_candidates, selected_tracker_item_settings = self._normalize_tracker_item_settings(
+            mappable_schema_df,
+            selected_mapping,
+            None,
+        )
 
         return MappingContext(
             wizard=wizard,
@@ -882,9 +1227,16 @@ class GuiUploadPipelineService:
             selected_mapping=selected_mapping,
             default_value_candidates=default_value_candidates,
             selected_default_values={},
+            selected_tracker_item_settings=selected_tracker_item_settings,
+            tracker_item_field_candidates=tracker_item_field_candidates,
+            tracker_item_lookup_cache={},
             list_cols=list_cols,
             file_paths=file_paths,
             representative_file_path=representative_file_path,
+            sheet_name=target_sheet_name,
+            header_row=target_header_row,
+            summary_column=target_summary_column,
+            preview_data=preview,
             root_item_config=self._default_root_item_config(mappable_schema_df),
         )
 
@@ -893,6 +1245,7 @@ class GuiUploadPipelineService:
         mapping_context: MappingContext,
         selected_mapping: dict[str, str],
         selected_default_values: dict[str, str] | None = None,
+        selected_tracker_item_settings: dict[str, dict[str, Any]] | None = None,
     ) -> ValidationContext:
         wizard = mapping_context.wizard
         list_cols = self.mapper.get_list_columns_for_mapping(selected_mapping, mapping_context.schema_df)
@@ -902,13 +1255,24 @@ class GuiUploadPipelineService:
             for field_name, raw_value in (selected_default_values or {}).items()
             if str(field_name).strip() and str(raw_value).strip()
         }
+        tracker_item_field_candidates, normalized_tracker_item_settings = self._normalize_tracker_item_settings(
+            mapping_context.schema_df,
+            selected_mapping,
+            selected_tracker_item_settings,
+        )
         mapping_context.selected_mapping = selected_mapping
         mapping_context.selected_default_values = normalized_default_values
+        mapping_context.selected_tracker_item_settings = normalized_tracker_item_settings
+        mapping_context.tracker_item_field_candidates = tracker_item_field_candidates
+        wizard.state.selected_tracker_item_settings = dict(normalized_tracker_item_settings)
+        wizard.state.tracker_item_lookup_cache = dict(mapping_context.tracker_item_lookup_cache)
         validation_result = run_validation_pipeline(
             wizard,
             selected_mapping,
             selected_default_values=normalized_default_values,
+            selected_tracker_item_settings=normalized_tracker_item_settings,
         )
+        mapping_context.tracker_item_lookup_cache = dict(wizard.state.tracker_item_lookup_cache)
         comparison_df = validation_result.comparison_df
         comparison_df = self._gui_visible_comparison_df(comparison_df)
         option_check_df = (
@@ -941,6 +1305,11 @@ class GuiUploadPipelineService:
             selected_default_values=normalized_default_values,
         )
         summary_stats = self._build_summary_stats(issue_df, row_context_df)
+        summary_stats["file_count"] = len(mapping_context.file_paths)
+        summary_stats["batch_total_rows"] = self._count_batch_upload_rows(
+            mapping_context,
+            list_cols=list_cols,
+        )
         if not issue_df.empty and issue_df["severity"].eq("오류").any():
             has_blocking = True
 
@@ -1091,6 +1460,69 @@ class GuiUploadPipelineService:
         return root_item_name, root_field_values
 
     @staticmethod
+    def _tracker_item_query_mapping(mapping_context: MappingContext) -> dict[str, str]:
+        query_mapping: dict[str, str] = {}
+        for df_column, schema_field in mapping_context.selected_mapping.items():
+            setting = mapping_context.selected_tracker_item_settings.get(str(schema_field).strip(), {})
+            if str(setting.get("mode") or "").strip() != TrackerItemResolutionMode.QUERY.value:
+                continue
+            query_mapping[str(df_column).strip()] = str(schema_field).strip()
+        return query_mapping
+
+    def _prime_tracker_item_lookup_cache_for_batch(
+        self,
+        settings,
+        mapping_context: MappingContext,
+    ) -> None:
+        query_mapping = self._tracker_item_query_mapping(mapping_context)
+        if not query_mapping:
+            return
+
+        cache_wizard = self.create_wizard(settings)
+        cache_wizard.select_project(int(settings.default_project_id))
+        cache_wizard.select_tracker(int(settings.default_tracker_id))
+        cache_wizard.state.schema = mapping_context.wizard.state.schema
+        cache_wizard.state.schema_df = mapping_context.schema_df
+        cache_wizard.state.selected_mapping = dict(mapping_context.selected_mapping)
+        cache_wizard.state.selected_tracker_item_settings = dict(mapping_context.selected_tracker_item_settings)
+        cache_wizard.state.tracker_item_lookup_cache = dict(mapping_context.tracker_item_lookup_cache)
+
+        option_maps = cache_wizard.mapper.build_option_maps_from_schema(mapping_context.schema_df)
+        option_maps = cache_wizard._decorate_tracker_item_option_maps(option_maps)
+        cache_wizard.state.option_maps = option_maps
+
+        unique_values_by_field: dict[str, set[str]] = {}
+        for file_path in mapping_context.file_paths:
+            preview_raw_df = None
+            if (
+                mapping_context.preview_data is not None
+                and str(mapping_context.preview_data.file_path).strip() == str(file_path).strip()
+            ):
+                preview_raw_df = mapping_context.preview_data.raw_df
+
+            prepare_upload_dataframe(
+                cache_wizard,
+                file_path=file_path,
+                sheet_name=mapping_context.sheet_name,
+                header_row=mapping_context.header_row,
+                summary_col=mapping_context.summary_column,
+                selected_mapping=mapping_context.selected_mapping,
+                schema=mapping_context.wizard.state.schema,
+                schema_df=mapping_context.schema_df,
+                raw_df=preview_raw_df,
+            )
+            current_values = cache_wizard.collect_tracker_item_query_values(
+                cache_wizard.state.upload_df,
+                query_mapping,
+                option_maps,
+            )
+            for schema_field, values in current_values.items():
+                unique_values_by_field.setdefault(schema_field, set()).update(values)
+
+        cache_wizard.prime_tracker_item_query_values(option_maps, unique_values_by_field)
+        mapping_context.tracker_item_lookup_cache = dict(cache_wizard.state.tracker_item_lookup_cache)
+
+    @staticmethod
     def _batch_output_dir(output_dir: str, file_path: str, index: int) -> str:
         safe_name = Path(file_path).stem.strip() or f"file_{index:03d}"
         return str(Path(output_dir) / f"{index:03d}_{safe_name}")
@@ -1154,6 +1586,8 @@ class GuiUploadPipelineService:
         wizard.state.selected_mapping = dict(mapping_context.selected_mapping)
         wizard.state.schema = schema
         wizard.state.schema_df = schema_df
+        wizard.state.selected_tracker_item_settings = dict(mapping_context.selected_tracker_item_settings)
+        wizard.state.tracker_item_lookup_cache = dict(mapping_context.tracker_item_lookup_cache)
         wizard.state.comparison_df = wizard.mapper.compare_upload_df_with_schema(
             upload_df=wizard.state.upload_df,
             schema_df=schema_df,
@@ -1163,6 +1597,7 @@ class GuiUploadPipelineService:
         wizard.process_option_mapping(
             wizard.state.selected_mapping,
             selected_default_values=mapping_context.selected_default_values,
+            selected_tracker_item_settings=mapping_context.selected_tracker_item_settings,
         )
         wizard.build_payloads(force=True)
         return wizard
@@ -1206,6 +1641,13 @@ class GuiUploadPipelineService:
                 time.sleep(0.1)
             if cancel_requested is not None and cancel_requested():
                 raise RuntimeError("__UPLOAD_CANCELLED__")
+
+        if self._tracker_item_query_mapping(mapping_context):
+            _emit({
+                "type": "log",
+                "message": "Tracker item query 대상 값을 파일 전체에서 모아 사전 조회하는 중입니다.",
+            })
+            self._prime_tracker_item_lookup_cache_for_batch(settings, mapping_context)
 
         for index, file_path in enumerate(file_paths, start=1):
             _sync_control()
@@ -1400,6 +1842,24 @@ class GuiUploadPipelineService:
                 "오류",
                 f"{df_column} 값을 아이디 형식으로 해석하지 못했습니다.",
                 "셀 값을 숫자 ID처럼 허용되는 형식으로 수정하세요.",
+            )
+        if status == OptionCheckStatus.TRACKER_ITEM_REGEX_MISSING.value:
+            return (
+                "오류",
+                f"{field_name or df_column} 필드의 정규식이 비어 있습니다.",
+                "매핑 단계에서 Tracker Item 처리 방식을 다시 선택하거나 정규식을 입력하세요.",
+            )
+        if status == OptionCheckStatus.TRACKER_ITEM_LOOKUP_NOT_FOUND.value:
+            return (
+                "오류",
+                f"{df_column} 값으로 source tracker에서 일치하는 항목을 찾지 못했습니다.",
+                "입력 문구를 확인하거나 정규식 ID 추출 방식으로 바꾼 뒤 다시 검증하세요.",
+            )
+        if status == OptionCheckStatus.TRACKER_ITEM_LOOKUP_AMBIGUOUS.value:
+            return (
+                "오류",
+                f"{df_column} 값이 source tracker에서 여러 항목과 겹칩니다.",
+                "더 구체적인 문구를 쓰거나 정규식 ID 추출 방식으로 바꾼 뒤 다시 검증하세요.",
             )
         if status == OptionCheckStatus.DF_COLUMN_MISSING.value:
             return (

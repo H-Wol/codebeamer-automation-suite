@@ -71,6 +71,7 @@ def prepare_upload_dataframe(
     selected_mapping: dict[str, str],
     schema: dict[str, Any] | None = None,
     schema_df: pd.DataFrame | None = None,
+    raw_df: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     """CLI와 GUI가 공통으로 쓰는 업로드용 DataFrame 준비 함수다."""
     if wizard.reader is None:
@@ -87,24 +88,29 @@ def prepare_upload_dataframe(
     wizard.reader.summary_col = summary_col
     if wizard.processor is not None:
         wizard.processor.summary_col = summary_col
-    raw_df = wizard.reader.read_excel(file_path=file_path, sheet_name=sheet_name)
-    wizard.load_raw_dataframe(raw_df, list_cols=list_cols)
+    prepared_raw_df = raw_df.copy() if raw_df is not None else wizard.reader.read_excel(
+        file_path=file_path,
+        sheet_name=sheet_name,
+    )
+    wizard.load_raw_dataframe(prepared_raw_df, list_cols=list_cols)
     wizard.state.schema = schema
     wizard.state.schema_df = schema_df
     wizard._detect_table_field_columns()
-    return raw_df, list_cols
+    return prepared_raw_df, list_cols
 
 
 def run_validation_pipeline(
     wizard: CodebeamerUploadWizard,
     selected_mapping: dict[str, str],
     selected_default_values: dict[str, Any] | None = None,
+    selected_tracker_item_settings: dict[str, dict[str, Any]] | None = None,
 ) -> ValidationPreparation:
     """CLI와 GUI가 공통으로 쓰는 검증 및 payload 생성 시퀀스다."""
     comparison_df = wizard.load_schema_and_compare(selected_mapping)
     selected_option_mapping, option_check_df = wizard.process_option_mapping(
         selected_mapping,
         selected_default_values=selected_default_values,
+        selected_tracker_item_settings=selected_tracker_item_settings,
     )
     payload_df = wizard.build_payloads(force=True)
     return ValidationPreparation(

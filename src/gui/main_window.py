@@ -99,6 +99,7 @@ class MainWindow:
                 self.upload_success_count = 0
                 self.upload_failed_count = 0
                 self.upload_retry_count = 0
+                self.upload_total_count = 0
                 self._upload_event_started_at = {}
                 self._upload_batch_started_at = None
                 self.setWindowTitle("Codebeamer Upload GUI")
@@ -315,14 +316,19 @@ class MainWindow:
                     self._on_settings_changed,
                     self._test_connection,
                     self._load_trackers,
+                    self._show_error_dialog,
                 )
                 self.file_page = create_file_selection_page(
                     self.session_state.settings,
                     self._on_file_state_changed,
                     self._load_file_preview,
+                    self._show_error_dialog,
                 )
                 self.root_item_page = create_root_item_page(self._preview_root_item_config)
-                self.mapping_page = create_mapping_page(self._validate_mapping)
+                self.mapping_page = create_mapping_page(
+                    self._validate_mapping,
+                    self._show_error_dialog,
+                )
                 self.validation_page = create_validation_page()
                 self.upload_page = create_upload_page(
                     self._start_upload,
@@ -433,19 +439,32 @@ class MainWindow:
                         self._show_page(previous_page)
 
                 def _go_next():
-                    if next_handler is not None:
-                        next_handler()
-                        return
-                    if next_page is not None:
-                        self._show_page(next_page)
+                    try:
+                        if next_handler is not None:
+                            next_handler()
+                            return
+                        if next_page is not None:
+                            self._show_page(next_page)
+                    except Exception as exc:
+                        self.statusBar().showMessage(str(exc))
+                        self._show_error_dialog("작업 실패", str(exc))
 
                 def _restart():
-                    if restart_handler is not None:
-                        restart_handler()
+                    try:
+                        if restart_handler is not None:
+                            restart_handler()
+                    except Exception as exc:
+                        self.statusBar().showMessage(str(exc))
+                        self._show_error_dialog("작업 실패", str(exc))
 
                 page.request_previous = _go_previous
                 page.request_next = _go_next
                 page.request_restart = _restart
+
+            def _show_error_dialog(self, title: str, message: str) -> None:
+                QMessageBox = self.qt["QMessageBox"]
+                text = str(message or "").strip() or "알 수 없는 오류가 발생했습니다."
+                QMessageBox.critical(self, str(title or "오류"), text)
 
             def _on_settings_changed(self, settings: GuiSettings | None) -> GuiSettings:
                 if settings is None:
@@ -481,13 +500,21 @@ class MainWindow:
                 self.statusBar().showMessage("트래커 목록을 불러왔습니다.")
                 return trackers
 
-            def _load_file_preview(self, file_path: str, *, sheet_name: str, header_row: int):
+            def _load_file_preview(
+                self,
+                file_path: str,
+                *,
+                sheet_name: str,
+                header_row: int,
+                summary_column: str,
+            ):
                 preview = self._run_with_busy(
                     "Excel 시트와 미리보기를 불러오는 중입니다.",
                     self.excel_service.load_preview,
                     file_path,
                     sheet_name=sheet_name,
                     header_row=header_row,
+                    summary_column=summary_column,
                 )
                 self.statusBar().showMessage("Excel 미리보기를 불러왔습니다.")
                 return preview
@@ -550,6 +577,7 @@ class MainWindow:
                     self.session_state.mapping_context.selected_mapping,
                     self.session_state.mapping_context.default_value_candidates,
                     self.session_state.mapping_context.selected_default_values,
+                    self.session_state.mapping_context.selected_tracker_item_settings,
                 )
                 self._show_page(self.mapping_page)
 
@@ -557,6 +585,7 @@ class MainWindow:
                 self,
                 selected_mapping: dict[str, str],
                 selected_default_values: dict[str, str],
+                selected_tracker_item_settings: dict[str, dict[str, object]],
             ) -> None:
                 if self.session_state.mapping_context is None:
                     raise ValueError("매핑 컨텍스트가 준비되지 않았습니다.")
@@ -566,6 +595,7 @@ class MainWindow:
                     self.session_state.mapping_context,
                     selected_mapping,
                     selected_default_values,
+                    selected_tracker_item_settings,
                 )
                 self.session_state.validation_context = validation_context
                 self.validation_page.set_results(
@@ -582,6 +612,7 @@ class MainWindow:
                 self.upload_success_count = 0
                 self.upload_failed_count = 0
                 self.upload_retry_count = 0
+                self.upload_total_count = 0
                 self._upload_event_started_at = {}
                 self._upload_batch_started_at = time.perf_counter()
                 self.upload_worker = UploadWorker(
@@ -665,6 +696,10 @@ class MainWindow:
                 self.upload_page.counter_label.setText(
                     f"성공 {self.upload_success_count} / 실패 {self.upload_failed_count} / 재시도 {self.upload_retry_count}"
                 )
+                completed_count = self.upload_success_count + self.upload_failed_count
+                self.upload_page.total_label.setText(
+                    f"총 대상 {self.upload_total_count}건 / 완료 {completed_count}건"
+                )
 
             def _update_upload_time_label(self) -> None:
                 if self._upload_batch_started_at is None:
@@ -690,7 +725,9 @@ class MainWindow:
                     return
 
                 if event_type == "batch_total":
-                    self._append_timestamped_log(f"총 업로드 예정 건수: {int(event.get('total') or 0)}")
+                    self.upload_total_count = int(event.get("total") or 0)
+                    self._update_upload_counter()
+                    self._append_timestamped_log(f"총 업로드 예정 건수: {self.upload_total_count}")
                     return
 
                 if event_type == "row_started":
@@ -747,6 +784,7 @@ class MainWindow:
                 self.session_state.upload_result = result
                 success_df = result.get("success_df")
                 failed_df = result.get("failed_df")
+                unresolved_df = result.get("unresolved_df")
                 self.upload_success_count = 0 if success_df is None else len(success_df)
                 self.upload_failed_count = 0 if failed_df is None else len(failed_df)
                 self._update_upload_counter()
@@ -759,6 +797,12 @@ class MainWindow:
                 self.upload_page.resume_button.setEnabled(False)
                 self.upload_page.cancel_button.setEnabled(False)
                 self.upload_page.result_button.setEnabled(True)
+                unresolved_count = 0 if unresolved_df is None else len(unresolved_df)
+                if self.upload_failed_count or unresolved_count:
+                    self._show_error_dialog(
+                        "업로드 결과 확인 필요",
+                        f"배치 업로드는 종료되었지만 실패 {self.upload_failed_count}건, 미해결 {unresolved_count}건이 남아 있습니다.",
+                    )
 
             def _on_upload_failed(self, message: str) -> None:
                 self.upload_page.status_label.setText(message)
@@ -768,5 +812,7 @@ class MainWindow:
                 self.upload_page.resume_button.setEnabled(False)
                 self.upload_page.cancel_button.setEnabled(False)
                 self.upload_page.result_button.setEnabled(True)
+                if "사용자 요청으로 중단" not in str(message):
+                    self._show_error_dialog("업로드 오류", message)
 
         return _MainWindow(settings_store)

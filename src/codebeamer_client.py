@@ -6,6 +6,7 @@ from typing import Any
 
 import requests
 
+from .models import ITEM_SEARCH_RESULT_KEYS
 from .models import OPTION_CONTAINER_KEYS
 from .models import USER_SEARCH_RESULT_KEYS
 from .models import UserInfo
@@ -72,6 +73,30 @@ class CodebeamerClient:
         return []
 
     @staticmethod
+    def _extract_item_payloads(data: Any) -> list[dict[str, Any]]:
+        """아이템 검색 응답에서 실제 아이템 목록만 골라낸다."""
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            for key in ITEM_SEARCH_RESULT_KEYS:
+                value = data.get(key)
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, dict)]
+        return []
+
+    @staticmethod
+    def _tracker_item_display_name(item: dict[str, Any]) -> str:
+        """아이템 검색 결과에서 화면에 표시할 이름을 우선순위대로 고른다."""
+        for key in ("name", "summary", "itemName", "title"):
+            value = item.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return ""
+
+    @staticmethod
     def _is_rate_limited(exc: Exception) -> bool:
         """예외가 rate limit 상황인지 판정한다."""
         response = getattr(exc, "response", None)
@@ -105,6 +130,23 @@ class CodebeamerClient:
         """트래커 스키마를 가져와 필드 구조를 분석할 수 있게 한다."""
         return self._get(f"/v3/trackers/{tracker_id}/schema")
 
+    def get_tracker_configuration(self, tracker_id: int) -> Any:
+        """트래커 configuration 메타데이터를 가져온다."""
+        candidate_paths = (
+            f"/v3/tracker/{tracker_id}/configuration",
+            f"/v3/trackers/{tracker_id}/configuration",
+            f"/tracker/{tracker_id}/configuration",
+        )
+        last_exc: Exception | None = None
+        for path in candidate_paths:
+            try:
+                return self._get(path)
+            except Exception as exc:
+                last_exc = exc
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("tracker configuration endpoint lookup failed unexpectedly")
+
     def get_project_members(self, project_id: int) -> Any:
         """프로젝트 멤버 목록을 가져온다."""
         return self._get(f"/v3/projects/{project_id}/members")
@@ -131,6 +173,78 @@ class CodebeamerClient:
     def get_item(self, item_id: int) -> dict:
         """아이템 한 개의 상세 정보를 가져온다."""
         return self._get(f"/v3/items/{item_id}")
+
+    def search_items(
+        self,
+        *,
+        query_string: str,
+        baseline_id: int | None = None,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> dict:
+        """조건에 맞는 아이템 검색 결과를 원본 JSON 형태로 돌려준다."""
+        params: dict[str, Any] = {
+            "queryString": query_string,
+            "page": max(int(page), 1),
+            "pageSize": min(max(int(page_size), 1), 500),
+        }
+        if baseline_id is not None:
+            params["baselineId"] = int(baseline_id)
+        return self._get("/v3/items/query", params=params)
+
+    def search_tracker_items_by_name(
+        self,
+        *,
+        tracker_id: int,
+        name: str,
+        baseline_id: int | None = None,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> list[dict[str, Any]]:
+        """특정 트래커 안에서 이름 또는 summary와 유사한 아이템을 찾는다."""
+        lookup_text = str(name or "").strip()
+        if not lookup_text:
+            return []
+
+        escaped = lookup_text.replace("'", "''")
+        query_string = f"Summary LIKE '%{escaped}%' AND tracker.id = {int(tracker_id)}"
+        data = self.search_items(
+            query_string=query_string,
+            baseline_id=baseline_id,
+            page=page,
+            page_size=page_size,
+        )
+        item_payloads = self._extract_item_payloads(data)
+        normalized_lookup = lookup_text.casefold()
+        exact_matches: list[dict[str, Any]] = []
+        partial_matches: list[dict[str, Any]] = []
+        seen_ids: set[int] = set()
+
+        for item in item_payloads:
+            item_id = item.get("id")
+            if item_id is None:
+                continue
+            try:
+                normalized_id = int(item_id)
+            except Exception:
+                continue
+            if normalized_id in seen_ids:
+                continue
+            seen_ids.add(normalized_id)
+
+            item_name = self._tracker_item_display_name(item)
+            normalized_item = item_name.casefold()
+            payload = {
+                "id": normalized_id,
+                "name": item_name or lookup_text,
+                "type": "TrackerItemReference",
+            }
+            if normalized_item == normalized_lookup:
+                exact_matches.append(payload)
+            else:
+                partial_matches.append(payload)
+
+        return exact_matches or partial_matches
 
     def get_user(self, user_id: int) -> UserInfo:
         """사용자 ID로 사용자 상세 정보를 가져온다."""

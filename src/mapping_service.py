@@ -131,9 +131,65 @@ class MappingService:
         raise ValueError(f"Cannot parse tracker item id from value: {raw_value!r}")
 
     @classmethod
+    def _parse_tracker_item_reference_id_with_regex(
+        cls,
+        raw_value: Any,
+        *,
+        pattern: str,
+    ) -> int:
+        """사용자 지정 정규식에서 tracker item id를 추출한다."""
+        if isinstance(raw_value, dict) and raw_value.get("id") is not None:
+            return int(raw_value["id"])
+
+        regex_pattern = str(pattern or "").strip()
+        if not regex_pattern:
+            raise ValueError("Tracker item regex pattern is empty.")
+
+        text = str(raw_value).strip()
+        match = re.search(regex_pattern, text)
+        if match is None:
+            raise ValueError(f"Tracker item regex did not match value: {raw_value!r}")
+
+        groups = [group for group in match.groups() if group is not None and str(group).strip()]
+        candidate = groups[0] if groups else match.group(0)
+        candidate_text = str(candidate).strip()
+        if not candidate_text:
+            raise ValueError(f"Tracker item regex produced empty match: {raw_value!r}")
+        if candidate_text.endswith(".0") and candidate_text[:-2].isdigit():
+            return int(candidate_text[:-2])
+        if candidate_text.isdigit():
+            return int(candidate_text)
+        raise ValueError(f"Tracker item regex did not produce numeric id: {candidate_text!r}")
+
+    @classmethod
     def _to_tracker_item_reference_payload(cls, raw_value: Any) -> dict[str, Any]:
         """원본 값을 tracker item reference payload dict로 정규화한다."""
         item_id = cls._parse_tracker_item_reference_id(raw_value)
+        if isinstance(raw_value, dict):
+            normalized = dict(raw_value)
+            normalized["id"] = item_id
+            normalized.setdefault("type", ReferenceType.TRACKER_ITEM.value)
+            result = {
+                "id": normalized.get("id"),
+                "name": normalized.get("name"),
+                "type": normalized.get("type"),
+            }
+            return {key: value for key, value in result.items() if value is not None}
+
+        return {
+            "id": item_id,
+            "type": ReferenceType.TRACKER_ITEM.value,
+        }
+
+    @classmethod
+    def _to_tracker_item_reference_payload_with_regex(
+        cls,
+        raw_value: Any,
+        *,
+        pattern: str,
+    ) -> dict[str, Any]:
+        """정규식 결과를 tracker item reference payload dict로 정규화한다."""
+        item_id = cls._parse_tracker_item_reference_id_with_regex(raw_value, pattern=pattern)
         if isinstance(raw_value, dict):
             normalized = dict(raw_value)
             normalized["id"] = item_id
@@ -171,6 +227,31 @@ class MappingService:
             return resolved_values or None
 
         return cls._to_tracker_item_reference_payload(raw_value)
+
+    @classmethod
+    def resolve_tracker_item_reference_value_with_regex(
+        cls,
+        raw_value: Any,
+        *,
+        multiple_values: bool,
+        pattern: str,
+    ) -> Any:
+        """TrackerItemChoiceField 입력을 사용자 지정 정규식으로 업로드용 reference payload로 바꾼다."""
+        if raw_value is None or str(raw_value).strip() == "":
+            return None
+
+        if multiple_values:
+            values = raw_value if isinstance(raw_value, list) else [raw_value]
+            resolved_values = []
+            for item in values:
+                if item is None or str(item).strip() == "":
+                    continue
+                resolved_values.append(
+                    cls._to_tracker_item_reference_payload_with_regex(item, pattern=pattern)
+                )
+            return resolved_values or None
+
+        return cls._to_tracker_item_reference_payload_with_regex(raw_value, pattern=pattern)
 
     @classmethod
     def _resolve_payload_target_kind(cls, field: dict[str, Any]) -> str:
@@ -1044,17 +1125,51 @@ class MappingService:
                 continue
 
             if option_info.get("kind") == OptionMapKind.TRACKER_ITEM_DIRECT.value:
+                resolved_col = f"{df_col}__resolved"
+                status_col = f"{df_col}__lookup_status"
+                error_col = f"{df_col}__lookup_error"
+                tracker_item_mode = str(option_info.get("tracker_item_mode") or "")
                 multiple_values = option_info.get("multiple_values", False)
                 for _, row in upload_df.iterrows():
                     raw_value = row[df_col]
                     if raw_value is None or str(raw_value).strip() == "":
                         continue
 
+                    resolved_value = row.get(resolved_col) if resolved_col in row.index else None
+                    if resolved_value is not None:
+                        continue
+
+                    if tracker_item_mode == "query":
+                        errors.append({
+                            **self._validation_context(
+                                df_col,
+                                schema_field,
+                                option_info,
+                                row_id=row.get("_row_id"),
+                                raw_value=raw_value,
+                                error=(row.get(error_col) if error_col in row.index else None),
+                            ),
+                            "status": (
+                                row.get(status_col)
+                                if status_col in row.index and row.get(status_col)
+                                else OptionCheckStatus.LOOKUP_REQUIRED.value
+                            ),
+                        })
+                        continue
+
+                    regex_pattern = str(option_info.get("tracker_item_regex_pattern") or "").strip()
                     try:
-                        self.resolve_tracker_item_reference_value(
-                            raw_value,
-                            multiple_values=multiple_values,
-                        )
+                        if regex_pattern:
+                            self.resolve_tracker_item_reference_value_with_regex(
+                                raw_value,
+                                multiple_values=multiple_values,
+                                pattern=regex_pattern,
+                            )
+                        else:
+                            self.resolve_tracker_item_reference_value(
+                                raw_value,
+                                multiple_values=multiple_values,
+                            )
                     except Exception as exc:
                         errors.append({
                             **self._validation_context(
@@ -1065,7 +1180,11 @@ class MappingService:
                                 raw_value=raw_value,
                                 error=str(exc),
                             ),
-                            "status": OptionCheckStatus.DIRECT_PARSE_FAILED.value,
+                            "status": (
+                                OptionCheckStatus.DIRECT_PARSE_FAILED.value
+                                if regex_pattern or "tracker_item_mode" not in option_info
+                                else OptionCheckStatus.TRACKER_ITEM_REGEX_MISSING.value
+                            ),
                         })
                 continue
 
@@ -1144,8 +1263,12 @@ class MappingService:
 
             option_info = option_maps[schema_field]
             if option_info.get("kind") == OptionMapKind.TRACKER_ITEM_DIRECT.value:
+                resolved_col = f"{df_col}__resolved"
+                if resolved_col in work.columns:
+                    continue
                 resolved_values = []
                 multiple_values = option_info.get("multiple_values", False)
+                regex_pattern = str(option_info.get("tracker_item_regex_pattern") or "").strip()
 
                 for _, row in work.iterrows():
                     raw_value = row[df_col]
@@ -1155,7 +1278,11 @@ class MappingService:
 
                     try:
                         resolved_values.append(
-                            self.resolve_tracker_item_reference_value(
+                            self.resolve_tracker_item_reference_value_with_regex(
+                                raw_value,
+                                multiple_values=multiple_values,
+                                pattern=regex_pattern,
+                            ) if regex_pattern else self.resolve_tracker_item_reference_value(
                                 raw_value,
                                 multiple_values=multiple_values,
                             )
