@@ -224,6 +224,9 @@ DEFAULT_TRACKER_ITEM_ID_REGEX = r"\[(?:[^:\]]+:)?(\d+)[^\]]*\]|^(\d+)(?:\.0)?$"
 GUI_VALUE_KIND_STATIC_OPTIONS = "static_options"
 GUI_VALUE_KIND_BOOL = "bool"
 GUI_VALUE_KIND_SCALAR = "scalar"
+TRACKER_ITEM_QUERY_STATUS_SUPPORTED = "supported"
+TRACKER_ITEM_QUERY_STATUS_UNSUPPORTED = "unsupported"
+TRACKER_ITEM_QUERY_STATUS_UNAVAILABLE = "unavailable"
 
 
 @dataclass
@@ -243,6 +246,7 @@ class TrackerItemFieldCandidate:
     field_type: str
     source_tracker_ids: list[int]
     supports_query: bool
+    query_status: str
 
 
 @dataclass
@@ -494,9 +498,9 @@ class GuiUploadPipelineService:
         return records
 
     @staticmethod
-    def _tracker_item_source_tracker_ids_from_config(field_config: dict[str, Any]) -> list[int]:
+    def _tracker_item_query_support_from_config(field_config: dict[str, Any]) -> tuple[list[int], str]:
         if not isinstance(field_config, dict):
-            return []
+            return [], TRACKER_ITEM_QUERY_STATUS_UNAVAILABLE
 
         source_configs: list[dict[str, Any]] = []
         if isinstance(field_config.get("choiceConfigOptionsSetApi"), dict):
@@ -505,27 +509,35 @@ class GuiUploadPipelineService:
 
         tracker_ids: list[int] = []
         seen_ids: set[int] = set()
+        saw_reference_filters = False
         for source in source_configs:
             filters = source.get("referenceFilters")
             if not isinstance(filters, list):
                 continue
+            saw_reference_filters = True
+            if not filters:
+                return [], TRACKER_ITEM_QUERY_STATUS_UNSUPPORTED
             for filter_entry in filters:
                 if not isinstance(filter_entry, dict):
-                    continue
+                    return [], TRACKER_ITEM_QUERY_STATUS_UNSUPPORTED
                 if str(filter_entry.get("domainType") or "").strip().upper() != "TRACKER":
-                    continue
+                    return [], TRACKER_ITEM_QUERY_STATUS_UNSUPPORTED
                 domain_id = filter_entry.get("domainId")
                 if domain_id is None:
-                    continue
+                    return [], TRACKER_ITEM_QUERY_STATUS_UNSUPPORTED
                 try:
                     normalized_id = int(domain_id)
                 except Exception:
-                    continue
+                    return [], TRACKER_ITEM_QUERY_STATUS_UNSUPPORTED
                 if normalized_id in seen_ids:
                     continue
                 seen_ids.add(normalized_id)
                 tracker_ids.append(normalized_id)
-        return tracker_ids
+        if not saw_reference_filters:
+            return [], TRACKER_ITEM_QUERY_STATUS_UNAVAILABLE
+        if tracker_ids:
+            return tracker_ids, TRACKER_ITEM_QUERY_STATUS_SUPPORTED
+        return [], TRACKER_ITEM_QUERY_STATUS_UNSUPPORTED
 
     @classmethod
     def _enrich_schema_df_with_tracker_configuration(
@@ -540,6 +552,7 @@ class GuiUploadPipelineService:
         if not config_fields:
             work = schema_df.copy()
             work["tracker_item_source_tracker_ids"] = [[] for _ in range(len(work.index))]
+            work["tracker_item_query_status"] = [TRACKER_ITEM_QUERY_STATUS_UNAVAILABLE for _ in range(len(work.index))]
             return work
 
         def _normalized_candidates(payload: dict[str, Any]) -> set[str]:
@@ -557,6 +570,7 @@ class GuiUploadPipelineService:
 
         work = schema_df.copy()
         source_tracker_ids_column: list[list[int]] = []
+        query_status_column: list[str] = []
 
         for _, row in work.iterrows():
             normalized_names = {
@@ -569,11 +583,12 @@ class GuiUploadPipelineService:
                 matched_config = config_by_name.get(candidate)
                 if matched_config is not None:
                     break
-            source_tracker_ids_column.append(
-                cls._tracker_item_source_tracker_ids_from_config(matched_config or {})
-            )
+            tracker_ids, query_status = cls._tracker_item_query_support_from_config(matched_config or {})
+            source_tracker_ids_column.append(tracker_ids)
+            query_status_column.append(query_status)
 
         work["tracker_item_source_tracker_ids"] = source_tracker_ids_column
+        work["tracker_item_query_status"] = query_status_column
         return work
 
     @classmethod
@@ -608,6 +623,7 @@ class GuiUploadPipelineService:
                 field_type=str(schema_row.get("field_type") or ""),
                 source_tracker_ids=source_tracker_ids,
                 supports_query=bool(source_tracker_ids),
+                query_status=str(schema_row.get("tracker_item_query_status") or TRACKER_ITEM_QUERY_STATUS_UNAVAILABLE),
             ))
         return candidates
 

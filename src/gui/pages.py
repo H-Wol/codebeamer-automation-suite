@@ -1264,6 +1264,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
                 "schema_field": schema_field,
                 "source_tracker_ids": source_tracker_ids,
                 "supports_query": bool(source_tracker_ids),
+                "query_status": str(schema_row.get("tracker_item_query_status") or "unavailable").strip(),
             })
         return candidates
 
@@ -1290,6 +1291,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
             schema_field = str(candidate.get("schema_field") or "")
             supports_query = bool(candidate.get("supports_query"))
             source_tracker_ids = list(candidate.get("source_tracker_ids") or [])
+            query_status = str(candidate.get("query_status") or "unavailable").strip()
             selected_setting = page._tracker_item_settings.get(schema_field, {})
             default_mode = (
                 TrackerItemResolutionMode.QUERY.value
@@ -1324,7 +1326,11 @@ def create_mapping_page(on_validate_requested, on_error=None):
             source_text = (
                 ", ".join(f"tracker {tracker_id}" for tracker_id in source_tracker_ids)
                 if source_tracker_ids
-                else "configuration source 없음"
+                else (
+                    "미지원 구조(정규식만 지원)"
+                    if query_status == "unsupported"
+                    else "configuration source 없음"
+                )
             )
             tracker_item_table.setItem(row_index, 4, QTableWidgetItem(source_text))
 

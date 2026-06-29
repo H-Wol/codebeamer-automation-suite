@@ -710,9 +710,7 @@ class CodebeamerUploadWizard:
     ) -> dict[str, Any]:
         """필드별 TrackerItemChoiceField 처리 방식을 정규화한다."""
         raw_setting = self.state.selected_tracker_item_settings.get(str(schema_field).strip(), {})
-        source_tracker_ids = raw_setting.get("source_tracker_ids")
-        if source_tracker_ids is None:
-            source_tracker_ids = option_info.get("tracker_item_source_tracker_ids") or []
+        source_tracker_ids = option_info.get("tracker_item_source_tracker_ids") or []
 
         normalized_source_tracker_ids: list[int] = []
         seen_ids: set[int] = set()

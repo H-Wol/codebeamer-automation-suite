@@ -41,6 +41,7 @@ class WizardTrackerItemLookupTest(unittest.TestCase):
                 "valueModel": "ChoiceFieldValue<TrackerItemReference>",
             }
         ])
+        self.wizard.state.schema_df["tracker_item_source_tracker_ids"] = [[13526611]]
         self.wizard.state.upload_df = pd.DataFrame([
             {"_row_id": 1, "related_items": ["REQ-100", "REQ-200"]},
             {"_row_id": 2, "related_items": ["REQ-100"]},
@@ -68,6 +69,25 @@ class WizardTrackerItemLookupTest(unittest.TestCase):
         second_values = converted.iloc[1]["related_items__resolved"]
         self.assertEqual([value["id"] for value in first_values], [101, 202])
         self.assertEqual([value["id"] for value in second_values], [101])
+
+    def test_process_option_mapping_ignores_manual_query_ids_without_tracker_config(self) -> None:
+        self.wizard.state.schema_df["tracker_item_source_tracker_ids"] = [[]]
+        self.client.search_calls = []
+
+        _, option_check_df = self.wizard.process_option_mapping(
+            {"related_items": "연관 요구사항"},
+            selected_tracker_item_settings={
+                "연관 요구사항": {
+                    "mode": TrackerItemResolutionMode.QUERY.value,
+                    "source_tracker_ids": [13526611],
+                }
+            },
+        )
+
+        self.assertEqual(self.client.search_calls, [])
+        self.assertIn("DIRECT_PARSE_FAILED", option_check_df["status"].tolist())
+        self.assertNotIn("TRACKER_ITEM_LOOKUP_NOT_FOUND", option_check_df["status"].tolist())
+        self.assertNotIn("TRACKER_ITEM_LOOKUP_AMBIGUOUS", option_check_df["status"].tolist())
 
 
 if __name__ == "__main__":
