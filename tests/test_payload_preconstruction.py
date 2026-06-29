@@ -422,6 +422,38 @@ class WizardPayloadResolutionTest(unittest.TestCase):
         self.assertEqual(payload["name"], "REQ-1")
         self.assertEqual(payload["status"]["name"], "Open")
 
+    def test_preview_payload_applies_default_text_field_when_row_value_is_missing(self) -> None:
+        """행 값이 없으면 선택한 공통 기본값으로 텍스트 custom field를 채워야 한다."""
+        self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
+            {
+                "id": 1,
+                "name": "Summary",
+                "type": "TextField",
+                "trackerItemField": "name",
+                "valueModel": "TextFieldValue",
+            },
+            {
+                "id": 2,
+                "name": "담당자",
+                "type": "TextField",
+                "valueModel": "TextFieldValue",
+            },
+        ])
+        self.wizard.state.selected_mapping = {"summary": "Summary"}
+        self.wizard.state.upload_df = pd.DataFrame([
+            {"_row_id": 1, "upload_name": "REQ-1", "summary": "REQ-1"}
+        ])
+        self.wizard.process_option_mapping(
+            self.wizard.state.selected_mapping,
+            selected_default_values={"담당자": "홍길동"},
+        )
+
+        payload = self.wizard.preview_payload(1)
+
+        self.assertEqual(payload["name"], "REQ-1")
+        self.assertEqual(payload["customFields"][0]["name"], "담당자")
+        self.assertEqual(payload["customFields"][0]["value"], "홍길동")
+
     def test_process_option_mapping_reports_invalid_default_status_value(self) -> None:
         """잘못된 기본값은 option 검증 단계에서 바로 드러나야 한다."""
         self.wizard.state.schema_df = self.mapper.flatten_schema_fields([

@@ -305,9 +305,10 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             self.assertEqual(mapping_context.selected_mapping["테이블필드.컬럼A"], "테이블필드")
             self.assertEqual(
                 [candidate.schema_field for candidate in mapping_context.default_value_candidates],
-                ["Status"],
+                ["Summary", "Status", "담당자"],
             )
-            self.assertEqual(mapping_context.default_value_candidates[0].options, ["Open", "Review"])
+            self.assertTrue(mapping_context.default_value_candidates[0].allows_custom_value)
+            self.assertEqual(mapping_context.default_value_candidates[1].options, ["Open", "Review"])
             self.assertEqual(mapping_context.file_paths, [str(path)])
             self.assertEqual(mapping_context.representative_file_path, str(path))
 
@@ -628,8 +629,15 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
                 for candidate in preview_context.field_candidates
                 if candidate.schema_field == "Status"
             )
+            summary_candidate = next(
+                candidate
+                for candidate in preview_context.field_candidates
+                if candidate.schema_field == "Summary"
+            )
             self.assertTrue(status_candidate.allows_fixed_value)
             self.assertEqual(status_candidate.fixed_options, ["Open", "Review"])
+            self.assertTrue(summary_candidate.allows_fixed_value)
+            self.assertTrue(summary_candidate.allows_custom_value)
 
     def test_build_root_item_payload_spec_uses_regex_mapped_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -690,6 +698,60 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             self.assertEqual(root_item_name, "REQ-001")
             self.assertEqual(root_field_values["Summary"], "REQ-001")
             self.assertEqual(root_field_values["Status"], "Open")
+
+    def test_build_root_item_payload_spec_accepts_custom_scalar_fixed_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "ABC_REQ-001.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary"])
+            sheet.append(["REQ-001"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "file_paths": [str(path)],
+                    "preview_file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                },
+            )
+            mapping_context.root_item_config = {
+                "regex_pattern": "",
+                "regex_target": "file_stem",
+                "field_assignments": {
+                    "담당자": {
+                        "enabled": True,
+                        "mode": "fixed_value",
+                        "value": "홍길동",
+                    },
+                },
+            }
+
+            root_item_name, root_field_values = service.build_root_item_payload_spec(mapping_context, str(path))
+
+            self.assertEqual(root_item_name, "ABC_REQ-001")
+            self.assertEqual(root_field_values["담당자"], "홍길동")
 
     def test_prepare_mapping_context_rejects_mismatched_batch_headers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

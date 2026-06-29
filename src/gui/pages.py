@@ -848,10 +848,15 @@ def create_root_item_page(on_preview_requested):
             field_item = field_table.item(row_index, 1)
             if enabled_widget is None or mode_combo is None or value_combo is None or field_item is None:
                 continue
+            mode_key = str(mode_combo.currentData() or ROOT_ASSIGNMENT_MODE_FILE_SOURCE)
             field_assignments[field_item.text()] = {
                 "enabled": bool(enabled_widget.isChecked()),
-                "mode": str(mode_combo.currentData() or ROOT_ASSIGNMENT_MODE_FILE_SOURCE),
-                "value": str(value_combo.currentData() or "").strip(),
+                "mode": mode_key,
+                "value": (
+                    str(value_combo.currentData() or "").strip()
+                    if mode_key == ROOT_ASSIGNMENT_MODE_FILE_SOURCE
+                    else value_combo.currentText().strip()
+                ),
             }
         return field_assignments
 
@@ -891,23 +896,35 @@ def create_root_item_page(on_preview_requested):
         if bool(candidate.allows_file_source):
             options.append(("파일명/정규식", ROOT_ASSIGNMENT_MODE_FILE_SOURCE))
         if bool(candidate.allows_fixed_value):
-            options.append(("스키마 선택값", ROOT_ASSIGNMENT_MODE_FIXED_VALUE))
+            options.append((
+                "직접 입력" if bool(getattr(candidate, "allows_custom_value", False)) else "고정값",
+                ROOT_ASSIGNMENT_MODE_FIXED_VALUE,
+            ))
         return options
 
     def _populate_value_combo(value_combo, candidate, preview_context, mode_key: str, selected_value: str) -> None:
         value_combo.blockSignals(True)
         value_combo.clear()
+        value_combo.setEditable(False)
         value_combo.addItem("", "")
 
         if mode_key == ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
             for option in preview_context.source_options:
                 value_combo.addItem(str(option.label), str(option.key))
         elif mode_key == ROOT_ASSIGNMENT_MODE_FIXED_VALUE:
-            for option_name in getattr(candidate, "fixed_options", []):
-                value_combo.addItem(str(option_name), str(option_name))
-
-        selected_index = value_combo.findData(selected_value)
-        value_combo.setCurrentIndex(selected_index if selected_index >= 0 else 0)
+            if bool(getattr(candidate, "allows_custom_value", False)):
+                value_combo.setEditable(True)
+                if value_combo.lineEdit() is not None:
+                    value_combo.lineEdit().setPlaceholderText("직접 입력")
+                value_combo.setCurrentText(selected_value)
+            else:
+                for option_name in getattr(candidate, "fixed_options", []):
+                    value_combo.addItem(str(option_name), str(option_name))
+                selected_index = value_combo.findData(selected_value)
+                value_combo.setCurrentIndex(selected_index if selected_index >= 0 else 0)
+        else:
+            selected_index = value_combo.findData(selected_value)
+            value_combo.setCurrentIndex(selected_index if selected_index >= 0 else 0)
         value_combo.blockSignals(False)
 
     def _sync_row_enabled_state(enabled_widget, mode_combo, value_combo, *, candidate) -> None:
@@ -1021,7 +1038,7 @@ def create_root_item_page(on_preview_requested):
 
             enabled_widget.toggled.connect(_on_enabled_toggled)
             mode_combo.currentIndexChanged.connect(_on_mode_changed)
-            value_combo.currentIndexChanged.connect(lambda _index: _refresh_preview())
+            value_combo.currentTextChanged.connect(lambda _text: _refresh_preview())
 
         _configure_table_columns(field_table, [80, 240, 180, 90, 160, 240])
         status_label.setText(str(preview_context.status_message or ""))
@@ -1246,6 +1263,26 @@ def create_mapping_page(on_validate_requested, on_error=None):
         else:
             tracker_item_help_label.setText("현재 매핑에는 별도 Tracker Item 처리 설정이 필요한 필드가 없습니다.")
 
+    def _configure_default_value_widget(combo, candidate, selected_default: str) -> None:
+        combo.blockSignals(True)
+        combo.clear()
+        combo.setEditable(False)
+        combo.addItem("")
+
+        options = list(getattr(candidate, "options", []) or [])
+        for option_name in options:
+            combo.addItem(str(option_name))
+
+        if bool(getattr(candidate, "allows_custom_value", False)):
+            combo.setEditable(True)
+            if combo.lineEdit() is not None:
+                combo.lineEdit().setPlaceholderText("직접 입력")
+            combo.setCurrentText(selected_default)
+        else:
+            target_index = combo.findText(selected_default)
+            combo.setCurrentIndex(target_index if target_index >= 0 else 0)
+        combo.blockSignals(False)
+
     def load_context(
         upload_columns: list[str],
         schema_df,
@@ -1303,11 +1340,8 @@ def create_mapping_page(on_validate_requested, on_error=None):
             default_table.setItem(row_index, 1, QTableWidgetItem(str(getattr(candidate, "field_type", ""))))
 
             combo = QComboBox()
-            combo.addItem("")
-            combo.addItems(list(getattr(candidate, "options", [])))
             selected_default = str(selected_default_values.get(schema_field, "") or "")
-            if selected_default and combo.findText(selected_default) >= 0:
-                combo.setCurrentText(selected_default)
+            _configure_default_value_widget(combo, candidate, selected_default)
             combo.currentTextChanged.connect(lambda _text: _mark_dirty())
             default_table.setCellWidget(row_index, 2, combo)
 

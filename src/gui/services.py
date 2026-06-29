@@ -206,14 +206,19 @@ ROOT_REGEX_TARGET_FILE_STEM = "file_stem"
 ROOT_ASSIGNMENT_MODE_FILE_SOURCE = "file_source"
 ROOT_ASSIGNMENT_MODE_FIXED_VALUE = "fixed_value"
 DEFAULT_TRACKER_ITEM_ID_REGEX = r"\[(?:[^:\]]+:)?(\d+)[^\]]*\]|^(\d+)(?:\.0)?$"
+GUI_VALUE_KIND_STATIC_OPTIONS = "static_options"
+GUI_VALUE_KIND_BOOL = "bool"
+GUI_VALUE_KIND_SCALAR = "scalar"
 
 
 @dataclass
 class DefaultValueCandidate:
     schema_field: str
     field_type: str
+    value_kind: str
     options: list[str]
     mandatory: bool
+    allows_custom_value: bool
 
 
 @dataclass
@@ -273,9 +278,11 @@ class RootFieldCandidate:
     field_type: str
     mandatory: bool
     supported: bool
+    fixed_value_kind: str
     fixed_options: list[str]
     allows_file_source: bool
     allows_fixed_value: bool
+    allows_custom_value: bool
 
 
 @dataclass
@@ -390,13 +397,55 @@ class GuiUploadPipelineService:
         self,
         schema_df: pd.DataFrame,
     ) -> list[DefaultValueCandidate]:
+        if schema_df.empty:
+            return []
+
+        option_maps = self.mapper.build_option_maps_from_schema(schema_df)
         candidates: list[DefaultValueCandidate] = []
-        for candidate in self.mapper.get_default_value_candidates(schema_df):
+        for _, row in schema_df.iterrows():
+            schema_field = str(row.get("field_name") or "").strip()
+            if not schema_field:
+                continue
+            if bool(row.get("is_table_field", False)):
+                continue
+            if bool(row.get("multiple_values", False)):
+                continue
+            if not bool(row.get("is_supported", True)):
+                continue
+
+            value_kind = ""
+            options: list[str] = []
+            allows_custom_value = False
+
+            if bool(row.get("is_option_like", False)):
+                option_info = option_maps.get(schema_field, {})
+                if option_info.get("kind") == OptionMapKind.STATIC_OPTIONS.value:
+                    value_kind = GUI_VALUE_KIND_STATIC_OPTIONS
+                    options = [
+                        str(option.get("name")).strip()
+                        for option in option_info.get("options") or []
+                        if str(option.get("name") or "").strip()
+                    ]
+                    if not options:
+                        continue
+                else:
+                    continue
+            else:
+                field_type = str(row.get("field_type") or "").strip()
+                if field_type == "BoolField":
+                    value_kind = GUI_VALUE_KIND_BOOL
+                    options = ["true", "false"]
+                else:
+                    value_kind = GUI_VALUE_KIND_SCALAR
+                    allows_custom_value = True
+
             candidates.append(DefaultValueCandidate(
-                schema_field=str(candidate.get("field_name") or ""),
-                field_type=str(candidate.get("field_type") or ""),
-                options=list(candidate.get("options") or []),
-                mandatory=bool(candidate.get("mandatory", False)),
+                schema_field=schema_field,
+                field_type=str(row.get("field_type") or ""),
+                value_kind=value_kind,
+                options=options,
+                mandatory=bool(row.get("mandatory", False)),
+                allows_custom_value=allows_custom_value,
             ))
         return candidates
 
@@ -760,17 +809,15 @@ class GuiUploadPipelineService:
             if bool(row.get("is_table_field", False)):
                 continue
 
-            tracker_item_field = str(row.get("tracker_item_field") or "").strip()
-            if not tracker_item_field:
-                continue
-
             schema_field = str(row.get("field_name") or "").strip()
             if not schema_field:
                 continue
 
             supported = bool(row.get("is_supported", True))
+            fixed_value_kind = ""
             fixed_options: list[str] = []
             allows_fixed_value = False
+            allows_custom_value = False
             if bool(row.get("is_option_like", False)):
                 option_info = option_maps.get(schema_field, {})
                 kind = option_info.get("kind")
@@ -784,21 +831,34 @@ class GuiUploadPipelineService:
                     and not bool(row.get("multiple_values", False))
                     and kind == OptionMapKind.STATIC_OPTIONS.value
                 ):
+                    fixed_value_kind = GUI_VALUE_KIND_STATIC_OPTIONS
                     fixed_options = [
                         str(option.get("name")).strip()
                         for option in option_info.get("options") or []
                         if str(option.get("name") or "").strip()
                     ]
                     allows_fixed_value = bool(fixed_options)
+            elif supported and not bool(row.get("multiple_values", False)):
+                field_type = str(row.get("field_type") or "").strip()
+                if field_type == "BoolField":
+                    fixed_value_kind = GUI_VALUE_KIND_BOOL
+                    fixed_options = ["true", "false"]
+                    allows_fixed_value = True
+                else:
+                    fixed_value_kind = GUI_VALUE_KIND_SCALAR
+                    allows_fixed_value = True
+                    allows_custom_value = True
 
             candidates.append(RootFieldCandidate(
                 schema_field=schema_field,
                 field_type=str(row.get("field_type") or ""),
                 mandatory=bool(row.get("mandatory", False)),
                 supported=supported,
+                fixed_value_kind=fixed_value_kind,
                 fixed_options=fixed_options,
                 allows_file_source=supported,
                 allows_fixed_value=allows_fixed_value,
+                allows_custom_value=allows_custom_value,
             ))
 
         return candidates
@@ -928,7 +988,10 @@ class GuiUploadPipelineService:
                 if not candidate.allows_fixed_value:
                     invalid_assignments.append(schema_field)
                     continue
-                if not assignment["value"] or assignment["value"] not in candidate.fixed_options:
+                if not assignment["value"]:
+                    invalid_assignments.append(schema_field)
+                    continue
+                if candidate.fixed_options and assignment["value"] not in candidate.fixed_options:
                     invalid_assignments.append(schema_field)
                     continue
                 continue
