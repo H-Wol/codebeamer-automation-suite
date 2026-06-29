@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 import time
@@ -18,6 +19,7 @@ from .services import GuiExcelService
 from .services import GuiUploadPipelineService
 from .settings_store import GuiSettings
 from .settings_store import GuiSettingsStore
+from .settings_store import GuiWorkflowPreset
 from .worker import BackgroundTask
 from .worker import UploadWorker
 
@@ -34,6 +36,7 @@ def _require_qt():
         from PySide6.QtWidgets import QMainWindow
         from PySide6.QtWidgets import QMessageBox
         from PySide6.QtWidgets import QProgressBar
+        from PySide6.QtWidgets import QPushButton
         from PySide6.QtWidgets import QStackedWidget
         from PySide6.QtWidgets import QStatusBar
         from PySide6.QtWidgets import QVBoxLayout
@@ -50,6 +53,7 @@ def _require_qt():
         "QMainWindow": QMainWindow,
         "QMessageBox": QMessageBox,
         "QProgressBar": QProgressBar,
+        "QPushButton": QPushButton,
         "QSize": QSize,
         "QStackedWidget": QStackedWidget,
         "QStatusBar": QStatusBar,
@@ -65,6 +69,7 @@ class GuiSessionState:
     file_state: dict[str, object]
     projects: list[dict[str, object]]
     trackers: list[dict[str, object]]
+    workflow_preset: GuiWorkflowPreset | None
     mapping_context: object | None
     validation_context: object | None
     upload_result: dict[str, object] | None
@@ -87,6 +92,7 @@ class MainWindow:
                     file_state={},
                     projects=[],
                     trackers=[],
+                    workflow_preset=store.load_workflow_preset(),
                     mapping_context=None,
                     validation_context=None,
                     upload_result=None,
@@ -117,6 +123,7 @@ class MainWindow:
                 QProgressBar = self.qt["QProgressBar"]
                 Qt = self.qt["Qt"]
                 QFrame = self.qt["QFrame"]
+                QPushButton = self.qt["QPushButton"]
 
                 root = QWidget()
                 root.setObjectName("app_root")
@@ -135,7 +142,18 @@ class MainWindow:
                 title.setObjectName("app_title")
                 subtitle = QLabel("현대케피코용 업로드 작업을 단계별로 확인하고 실행하는 도구")
                 subtitle.setObjectName("app_subtitle")
-                header_layout.addWidget(title)
+
+                title_row = QHBoxLayout()
+                title_row.setSpacing(8)
+                title_row.addWidget(title)
+                title_row.addStretch(1)
+
+                self.load_workflow_button = QPushButton("전체 설정 불러오기")
+                self.save_workflow_button = QPushButton("전체 설정 저장")
+                title_row.addWidget(self.load_workflow_button)
+                title_row.addWidget(self.save_workflow_button)
+
+                header_layout.addLayout(title_row)
                 header_layout.addWidget(subtitle)
 
                 steps_row = QHBoxLayout()
@@ -338,6 +356,9 @@ class MainWindow:
                 )
                 self.result_page = create_result_page()
 
+                self.load_workflow_button.clicked.connect(self._load_workflow_preset)
+                self.save_workflow_button.clicked.connect(self._save_workflow_preset)
+
                 self._attach_navigation(self.settings_page, next_page=self.project_page)
                 self._attach_navigation(
                     self.project_page,
@@ -412,7 +433,10 @@ class MainWindow:
                 ):
                     page.request_content_reflow = self._fit_window_to_current_page
                 self._show_page(self.settings_page)
-                self.statusBar().showMessage("GUI 스켈레톤이 준비되었습니다.")
+                if self.session_state.workflow_preset is not None:
+                    self._apply_workflow_preset(self.session_state.workflow_preset, startup=True)
+                else:
+                    self.statusBar().showMessage("GUI 스켈레톤이 준비되었습니다.")
 
             def _show_page(self, page) -> None:
                 self.stack.setCurrentWidget(page)
@@ -519,6 +543,158 @@ class MainWindow:
                 self.statusBar().showMessage("Excel 미리보기를 불러왔습니다.")
                 return preview
 
+            def _current_settings_snapshot(self) -> GuiSettings:
+                settings = replace(self.session_state.settings)
+                get_settings = getattr(self.settings_page, "get_settings", None)
+                if callable(get_settings):
+                    settings = replace(get_settings())
+
+                get_selection = getattr(self.project_page, "get_selection", None)
+                if callable(get_selection):
+                    selection = dict(get_selection() or {})
+                    settings.default_project_id = str(selection.get("project_id") or settings.default_project_id or "")
+                    settings.default_tracker_id = str(selection.get("tracker_id") or settings.default_tracker_id or "")
+
+                file_state = self._current_file_state_snapshot()
+                file_paths = [
+                    str(path).strip()
+                    for path in file_state.get("file_paths") or []
+                    if str(path).strip()
+                ]
+                if file_paths:
+                    settings.last_file_path = file_paths[0]
+                return settings
+
+            def _current_file_state_snapshot(self) -> dict[str, object]:
+                current_state = dict(self.session_state.file_state or {})
+                get_state = getattr(self.file_page, "get_state", None)
+                if callable(get_state):
+                    current_state.update(dict(get_state() or {}))
+                return current_state
+
+            def _apply_workflow_preset_to_mapping_context(self, mapping_context, preset: GuiWorkflowPreset) -> None:
+                if preset.root_item_config:
+                    mapping_context.root_item_config = dict(preset.root_item_config)
+                if preset.selected_mapping:
+                    mapping_context.selected_mapping = {
+                        str(df_column): str(schema_field)
+                        for df_column, schema_field in preset.selected_mapping.items()
+                        if str(df_column).strip() and str(schema_field).strip()
+                    }
+                if preset.selected_default_values:
+                    mapping_context.selected_default_values = {
+                        str(field_name): str(value)
+                        for field_name, value in preset.selected_default_values.items()
+                        if str(field_name).strip() and str(value).strip()
+                    }
+                if preset.selected_tracker_item_settings:
+                    mapping_context.selected_tracker_item_settings = {
+                        str(field_name): dict(setting)
+                        for field_name, setting in preset.selected_tracker_item_settings.items()
+                        if str(field_name).strip() and isinstance(setting, dict)
+                    }
+
+            def _collect_workflow_preset(self) -> GuiWorkflowPreset:
+                settings = self._current_settings_snapshot()
+                file_state = self._current_file_state_snapshot()
+                file_options = {
+                    "sheet_name": str(file_state.get("sheet_name") or settings.excel_sheet_name or "0"),
+                    "header_row": int(file_state.get("header_row") or settings.excel_header_row or 1),
+                    "summary_column": str(file_state.get("summary_column") or settings.summary_column or "Summary"),
+                }
+
+                root_item_config: dict[str, object] = {}
+                mapping_context = self.session_state.mapping_context
+                if mapping_context is not None:
+                    root_item_config = dict(getattr(mapping_context, "root_item_config", {}) or {})
+                if self.stack.currentWidget() is self.root_item_page and mapping_context is not None:
+                    root_item_config = dict(self.root_item_page.get_config() or root_item_config)
+
+                selected_mapping: dict[str, str] = {}
+                selected_default_values: dict[str, str] = {}
+                selected_tracker_item_settings: dict[str, dict[str, object]] = {}
+                if callable(getattr(self.mapping_page, "get_selected_mapping", None)):
+                    selected_mapping = dict(self.mapping_page.get_selected_mapping() or {})
+                if callable(getattr(self.mapping_page, "get_selected_default_values", None)):
+                    selected_default_values = dict(self.mapping_page.get_selected_default_values() or {})
+                if callable(getattr(self.mapping_page, "get_selected_tracker_item_settings", None)):
+                    selected_tracker_item_settings = dict(self.mapping_page.get_selected_tracker_item_settings() or {})
+
+                if not selected_mapping and mapping_context is not None:
+                    selected_mapping = dict(getattr(mapping_context, "selected_mapping", {}) or {})
+                if not selected_default_values and mapping_context is not None:
+                    selected_default_values = dict(getattr(mapping_context, "selected_default_values", {}) or {})
+                if not selected_tracker_item_settings and mapping_context is not None:
+                    selected_tracker_item_settings = dict(getattr(mapping_context, "selected_tracker_item_settings", {}) or {})
+
+                return GuiWorkflowPreset(
+                    settings=settings,
+                    file_options=file_options,
+                    root_item_config=root_item_config,
+                    selected_mapping=selected_mapping,
+                    selected_default_values=selected_default_values,
+                    selected_tracker_item_settings=selected_tracker_item_settings,
+                )
+
+            def _apply_workflow_preset(self, preset: GuiWorkflowPreset, *, startup: bool = False) -> None:
+                self.session_state.workflow_preset = preset
+                self.session_state.settings = replace(preset.settings)
+
+                set_settings = getattr(self.settings_page, "set_settings", None)
+                if callable(set_settings):
+                    set_settings(replace(preset.settings))
+
+                load_selection = getattr(self.project_page, "load_selection", None)
+                if callable(load_selection):
+                    load_selection(preset.settings.default_project_id, preset.settings.default_tracker_id)
+
+                load_file_state = getattr(self.file_page, "load_state", None)
+                if callable(load_file_state):
+                    load_file_state(dict(preset.file_options or {}))
+                else:
+                    self.session_state.file_state.update(dict(preset.file_options or {}))
+
+                if self.session_state.mapping_context is not None:
+                    self._apply_workflow_preset_to_mapping_context(self.session_state.mapping_context, preset)
+                    preview_context = self.pipeline_service.build_root_item_preview_context(
+                        self.session_state.mapping_context,
+                        self.session_state.mapping_context.root_item_config,
+                    )
+                    self.root_item_page.load_context(preview_context)
+                    self.mapping_page.load_context(
+                        self.session_state.mapping_context.upload_columns,
+                        self.session_state.mapping_context.schema_df,
+                        self.session_state.mapping_context.selected_mapping,
+                        self.session_state.mapping_context.default_value_candidates,
+                        self.session_state.mapping_context.selected_default_values,
+                        self.session_state.mapping_context.selected_tracker_item_settings,
+                    )
+                    self.session_state.validation_context = None
+                    self.session_state.upload_result = None
+                    if self.stack.currentWidget() in {self.validation_page, self.upload_page, self.result_page}:
+                        self._show_page(self.mapping_page)
+
+                message = (
+                    "저장된 전체 설정을 자동으로 불러왔습니다."
+                    if startup
+                    else "전체 설정을 불러왔습니다. 파일을 선택한 뒤 검증을 다시 실행하세요."
+                )
+                self.statusBar().showMessage(message)
+
+            def _save_workflow_preset(self) -> None:
+                preset = self._collect_workflow_preset()
+                self.settings_store.save_workflow_preset(preset)
+                self.session_state.workflow_preset = preset
+                self.settings_store.save(preset.settings)
+                self.statusBar().showMessage("전체 설정을 저장했습니다.")
+
+            def _load_workflow_preset(self) -> None:
+                preset = self.settings_store.load_workflow_preset()
+                if preset is None:
+                    self._show_error_dialog("전체 설정 없음", "저장된 전체 설정이 없습니다.")
+                    return
+                self._apply_workflow_preset(preset)
+
             def _show_mapping_page(self) -> None:
                 self._show_page(self.mapping_page)
 
@@ -559,6 +735,11 @@ class MainWindow:
                     settings,
                     self.session_state.file_state,
                 )
+                if self.session_state.workflow_preset is not None:
+                    self._apply_workflow_preset_to_mapping_context(
+                        mapping_context,
+                        self.session_state.workflow_preset,
+                    )
                 self.session_state.mapping_context = mapping_context
                 root_preview_context = self.pipeline_service.build_root_item_preview_context(
                     mapping_context,

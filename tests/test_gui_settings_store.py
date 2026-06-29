@@ -7,6 +7,7 @@ from pathlib import Path
 
 from src.gui.settings_store import GuiSettings
 from src.gui.settings_store import GuiSettingsStore
+from src.gui.settings_store import GuiWorkflowPreset
 
 
 try:
@@ -58,3 +59,64 @@ class GuiSettingsStoreTest(unittest.TestCase):
             self.assertEqual(loaded.password, "secret")
             self.assertTrue(loaded.save_password)
             self.assertEqual(loaded.summary_column, "Summary")
+
+    def test_save_and_load_workflow_preset_preserves_nested_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = GuiSettingsStore(Path(tmp_dir))
+            preset = GuiWorkflowPreset(
+                settings=GuiSettings(
+                    base_url="https://example.com/cb",
+                    username="user",
+                    password="secret",
+                    save_password=True,
+                    default_project_id="10",
+                    default_tracker_id="1000",
+                    excel_header_row=2,
+                    summary_column="요약",
+                    excel_sheet_name="Main",
+                ),
+                file_options={
+                    "sheet_name": "Main",
+                    "header_row": 2,
+                    "summary_column": "요약",
+                },
+                root_item_config={
+                    "regex_pattern": r"^(?P<name>.+)$",
+                    "field_assignments": {
+                        "Summary": {
+                            "enabled": True,
+                            "mode": "file_source",
+                            "value": "group1",
+                        }
+                    },
+                },
+                selected_mapping={"Summary": "Summary", "담당자": "담당자"},
+                selected_default_values={"담당자": "홍길동"},
+                selected_tracker_item_settings={
+                    "연관 요구사항": {
+                        "mode": "query",
+                        "regex_pattern": r"(\\d+)",
+                        "source_tracker_ids": [13526611],
+                    }
+                },
+            )
+
+            store.save_workflow_preset(preset)
+            payload = json.loads(store.workflow_preset_path.read_text(encoding="utf-8"))
+
+            self.assertIn("settings", payload)
+            self.assertNotIn("secret", store.workflow_preset_path.read_text(encoding="utf-8"))
+
+            loaded = store.load_workflow_preset()
+            self.assertIsNotNone(loaded)
+            assert loaded is not None
+            self.assertEqual(loaded.settings.password, "secret")
+            self.assertEqual(loaded.settings.default_project_id, "10")
+            self.assertEqual(loaded.file_options["sheet_name"], "Main")
+            self.assertEqual(loaded.root_item_config["regex_pattern"], r"^(?P<name>.+)$")
+            self.assertEqual(loaded.selected_mapping["담당자"], "담당자")
+            self.assertEqual(loaded.selected_default_values["담당자"], "홍길동")
+            self.assertEqual(
+                loaded.selected_tracker_item_settings["연관 요구사항"]["source_tracker_ids"],
+                [13526611],
+            )

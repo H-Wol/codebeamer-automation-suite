@@ -245,6 +245,7 @@ def create_settings_page(
     status_label.setObjectName("status_label")
     status_label.hide()
     layout.addWidget(status_label)
+    page._current_settings = initial_settings
 
     buttons = QHBoxLayout()
     load_button = QPushButton("불러오기")
@@ -267,20 +268,21 @@ def create_settings_page(
         )
 
     def _collect_settings():
+        current_settings = getattr(page, "_current_settings", initial_settings)
         return type(initial_settings)(
             base_url=base_url.text().strip(),
             username=username.text().strip(),
             password=password.text(),
             save_password=save_password.isChecked(),
-            default_project_id=initial_settings.default_project_id,
-            default_tracker_id=initial_settings.default_tracker_id,
+            default_project_id=str(getattr(current_settings, "default_project_id", "") or ""),
+            default_tracker_id=str(getattr(current_settings, "default_tracker_id", "") or ""),
             excel_header_row=header_row.value(),
             summary_column=summary_column.text().strip() or "Summary",
             excel_sheet_name=sheet_name.text().strip() or "0",
             rate_limit_retry_delay_seconds=retry_delay.value(),
             rate_limit_max_retries=retry_count.value(),
             output_dir=output_dir.text().strip() or "output",
-            last_file_path=initial_settings.last_file_path,
+            last_file_path=str(getattr(current_settings, "last_file_path", "") or ""),
         )
 
     def _set_status(message: str) -> None:
@@ -290,8 +292,8 @@ def create_settings_page(
         if callable(request_content_reflow):
             request_content_reflow(allow_grow=bool(message))
 
-    def _load():
-        loaded = settings_store.load()
+    def _apply_settings(loaded) -> None:
+        page._current_settings = loaded
         base_url.setText(loaded.base_url)
         username.setText(loaded.username)
         password.setText(loaded.password)
@@ -303,11 +305,16 @@ def create_settings_page(
         retry_count.setValue(loaded.rate_limit_max_retries)
         output_dir.setText(loaded.output_dir)
         _update_next_button_state()
+
+    def _load():
+        loaded = settings_store.load()
+        _apply_settings(loaded)
         on_settings_changed(loaded)
         _set_status("설정을 불러왔습니다.")
 
     def _save():
         current = _collect_settings()
+        page._current_settings = current
         settings_store.save(current)
         on_settings_changed(current)
         _set_status("설정을 저장했습니다.")
@@ -336,6 +343,8 @@ def create_settings_page(
         )
     )
 
+    page.get_settings = _collect_settings
+    page.set_settings = _apply_settings
     return page
 
 
@@ -495,6 +504,27 @@ def create_project_selection_page(
     project_combo.currentIndexChanged.connect(_handle_project_changed)
     tracker_combo.currentIndexChanged.connect(_handle_tracker_changed)
 
+    def _load_selection(project_id: str, tracker_id: str) -> None:
+        page.selected_project_id = str(project_id or "")
+        page.selected_tracker_id = str(tracker_id or "")
+        if page.selected_project_id.isdigit() and project_combo.count() > 0:
+            project_index = project_combo.findData(int(page.selected_project_id))
+            if project_index >= 0:
+                project_combo.setCurrentIndex(project_index)
+        if page.selected_tracker_id.isdigit() and tracker_combo.count() > 0:
+            tracker_index = tracker_combo.findData(int(page.selected_tracker_id))
+            if tracker_index >= 0:
+                tracker_combo.setCurrentIndex(tracker_index)
+        _update_next_button_state()
+
+    def _get_selection() -> dict[str, str]:
+        return {
+            "project_id": str(page.selected_project_id or ""),
+            "tracker_id": str(page.selected_tracker_id or ""),
+        }
+
+    page.load_selection = _load_selection
+    page.get_selection = _get_selection
     return page
 
 
@@ -757,6 +787,53 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
 
     _set_preview_file_items(page._selected_file_paths, initial_settings.last_file_path)
     _update_file_display()
+
+    def _load_state(state: dict[str, object]) -> None:
+        loaded_state = dict(state or {})
+        loaded_file_paths = [
+            str(path).strip()
+            for path in loaded_state.get("file_paths") or []
+            if str(path).strip()
+        ]
+        if loaded_file_paths:
+            page._selected_file_paths = loaded_file_paths
+            _set_preview_file_items(
+                page._selected_file_paths,
+                str(loaded_state.get("preview_file_path") or ""),
+            )
+            _update_file_display()
+
+        sheet_name.blockSignals(True)
+        header_row.blockSignals(True)
+        summary_column.blockSignals(True)
+        try:
+            loaded_sheet_name = str(loaded_state.get("sheet_name") or "").strip()
+            loaded_header_row = int(loaded_state.get("header_row") or initial_settings.excel_header_row or 1)
+            loaded_summary = str(
+                loaded_state.get("summary_column") or initial_settings.summary_column or "Summary"
+            ).strip() or "Summary"
+
+            if loaded_sheet_name and sheet_name.findText(loaded_sheet_name) < 0:
+                sheet_name.addItem(loaded_sheet_name)
+            if loaded_summary and summary_column.findText(loaded_summary) < 0:
+                summary_column.addItem(loaded_summary)
+
+            if loaded_sheet_name:
+                sheet_name.setCurrentText(loaded_sheet_name)
+            header_row.setValue(max(1, loaded_header_row))
+            summary_column.setCurrentText(loaded_summary)
+        finally:
+            sheet_name.blockSignals(False)
+            header_row.blockSignals(False)
+            summary_column.blockSignals(False)
+
+        _mark_preview_dirty(
+            message="저장된 파일 설정을 불러왔습니다. '데이터 불러오기'를 눌러 다시 확인하세요.",
+        )
+        on_file_state_changed(_collect_state())
+
+    page.get_state = _collect_state
+    page.load_state = _load_state
     page.refresh_preview = _refresh_preview
 
     return page
