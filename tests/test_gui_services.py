@@ -181,7 +181,7 @@ class TrackerItemQueryFakeClient(FakeClient):
             "fields": [
                 {
                     "label": "연관 요구사항",
-                    "choiceConfigOptionsSetApi": {
+                    "choiceConfigOptionsSetting": {
                         "referenceFilters": [
                             {
                                 "domainType": "TRACKER",
@@ -215,7 +215,7 @@ class TrackerItemNonTrackerConfigFakeClient(TrackerItemQueryFakeClient):
             "fields": [
                 {
                     "label": "연관 요구사항",
-                    "choiceConfigOptionsSetApi": {
+                    "choiceConfigOptionsSetting": {
                         "referenceFilters": [
                             {
                                 "domainType": "PROJECT",
@@ -233,6 +233,7 @@ class TrackerItemReferenceIdConfigFakeClient(TrackerItemQueryFakeClient):
         schema = super().get_tracker_schema(tracker_id)
         for field in schema["fields"]:
             if field.get("id") == 7:
+                field["id"] = 17
                 field["name"] = "SUDS 링크"
         return schema
 
@@ -245,9 +246,9 @@ class TrackerItemReferenceIdConfigFakeClient(TrackerItemQueryFakeClient):
             },
             "fields": [
                 {
-                    "referenceId": 7,
+                    "referenceId": 17,
                     "label": "Software Unit Design Specification",
-                    "choiceConfigOptionsSetApi": {
+                    "choiceConfigOptionsSetting": {
                         "referenceFilters": [
                             {
                                 "domainType": "TRACKER",
@@ -678,6 +679,11 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
                 mapping_context.selected_tracker_item_settings["SUDS 링크"]["source_tracker_ids"],
                 [13526611],
             )
+            tracker_field_row = mapping_context.schema_df[
+                mapping_context.schema_df["field_name"] == "SUDS 링크"
+            ].iloc[0]
+            self.assertEqual(int(tracker_field_row["field_id"]), 17)
+            self.assertEqual(tracker_field_row["tracker_item_source_tracker_ids"], [13526611])
 
     def test_prepare_mapping_context_disables_query_for_non_tracker_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

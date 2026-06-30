@@ -495,7 +495,10 @@ class GuiUploadPipelineService:
                 return False
             if "referenceId" in node:
                 return True
-            if not any(key in node for key in ("choiceConfigOptionsSetApi", "referenceFilters")):
+            if not any(
+                key in node
+                for key in ("choiceConfigOptionsSetting", "choiceConfigOptionsSetApi", "referenceFilters")
+            ):
                 return False
             return any(key in node for key in ("label", "name", "title"))
 
@@ -540,6 +543,8 @@ class GuiUploadPipelineService:
             return [], TRACKER_ITEM_QUERY_STATUS_UNAVAILABLE
 
         source_configs: list[dict[str, Any]] = []
+        if isinstance(field_config.get("choiceConfigOptionsSetting"), dict):
+            source_configs.append(field_config["choiceConfigOptionsSetting"])
         if isinstance(field_config.get("choiceConfigOptionsSetApi"), dict):
             source_configs.append(field_config["choiceConfigOptionsSetApi"])
         source_configs.append(field_config)
