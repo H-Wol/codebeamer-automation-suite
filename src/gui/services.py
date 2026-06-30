@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import field
+import json
 from pathlib import Path
 import re
 import time
@@ -39,6 +40,139 @@ class PreviewData:
     raw_df_by_file: dict[str, pd.DataFrame] = field(default_factory=dict)
 
 
+DEFAULT_OFFLINE_PROJECT_ID = 1
+DEFAULT_OFFLINE_TRACKER_ID = 1
+DEFAULT_OFFLINE_PROJECT_NAME = "Offline Project"
+DEFAULT_OFFLINE_TRACKER_NAME = "Offline Tracker"
+
+
+def _normalize_offline_id(value: Any, default_value: int) -> int:
+    try:
+        normalized = int(value)
+    except Exception:
+        return default_value
+    return normalized if normalized > 0 else default_value
+
+
+def _load_json_snapshot(path_value: Any, *, label: str) -> Any:
+    path_text = str(path_value or "").strip()
+    if not path_text:
+        raise ValueError(f"{label} 경로가 비어 있습니다.")
+
+    snapshot_path = Path(path_text).expanduser()
+    if not snapshot_path.is_file():
+        raise ValueError(f"{label} 파일을 찾을 수 없습니다: {snapshot_path}")
+
+    try:
+        return json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"{label} JSON을 읽을 수 없습니다: {exc}") from exc
+
+
+class OfflineGuiClient:
+    """로컬 schema/config snapshot만으로 GUI 오프라인 테스트를 지원한다."""
+
+    def __init__(
+        self,
+        *,
+        schema: dict[str, Any],
+        schema_path: str,
+        tracker_configuration: Any = None,
+        project_id: int = DEFAULT_OFFLINE_PROJECT_ID,
+        tracker_id: int = DEFAULT_OFFLINE_TRACKER_ID,
+    ) -> None:
+        self.schema = dict(schema or {})
+        self.schema_path = str(schema_path)
+        self.tracker_configuration = tracker_configuration
+        self.project_id = int(project_id)
+        self.tracker_id = int(tracker_id)
+        self.project_name = DEFAULT_OFFLINE_PROJECT_NAME
+        self.tracker_name = (
+            str(self.schema.get("name") or "").strip()
+            or Path(self.schema_path).stem
+            or DEFAULT_OFFLINE_TRACKER_NAME
+        )
+
+    @classmethod
+    def from_settings(cls, settings) -> "OfflineGuiClient":
+        schema_path = str(getattr(settings, "offline_schema_path", "") or "").strip()
+        schema = _load_json_snapshot(schema_path, label="오프라인 schema")
+        tracker_configuration = None
+        configuration_path = str(
+            getattr(settings, "offline_tracker_configuration_path", "") or ""
+        ).strip()
+        if configuration_path:
+            tracker_configuration = _load_json_snapshot(
+                configuration_path,
+                label="오프라인 tracker configuration",
+            )
+        return cls(
+            schema=schema,
+            schema_path=schema_path,
+            tracker_configuration=tracker_configuration,
+            project_id=_normalize_offline_id(
+                getattr(settings, "default_project_id", ""),
+                DEFAULT_OFFLINE_PROJECT_ID,
+            ),
+            tracker_id=_normalize_offline_id(
+                getattr(settings, "default_tracker_id", ""),
+                DEFAULT_OFFLINE_TRACKER_ID,
+            ),
+        )
+
+    def get_projects(self) -> list[dict[str, Any]]:
+        return [{"id": self.project_id, "name": self.project_name}]
+
+    def get_trackers(self, project_id: int) -> list[dict[str, Any]]:
+        del project_id
+        return [{"id": self.tracker_id, "name": self.tracker_name}]
+
+    def get_tracker_schema(self, tracker_id: int) -> dict[str, Any]:
+        del tracker_id
+        return self.schema
+
+    def get_tracker_configuration(self, tracker_id: int) -> Any:
+        del tracker_id
+        if self.tracker_configuration is None:
+            raise RuntimeError("offline tracker configuration snapshot is not configured")
+        return self.tracker_configuration
+
+    def create_item(self, tracker_id: int, payload: dict[str, Any], parent_item_id: int | None = None) -> dict[str, Any]:
+        del tracker_id, payload, parent_item_id
+        raise RuntimeError("오프라인 모드에서는 실제 업로드를 실행할 수 없습니다. Dry Run만 사용해야 합니다.")
+
+    def get_user(self, user_id: int):
+        raise RuntimeError(f"offline snapshot does not provide user lookup by id: {user_id}")
+
+    def get_user_by_name(self, name: str):
+        raise RuntimeError(f"offline snapshot does not provide user lookup by name: {name}")
+
+    def get_user_groups(self):
+        raise RuntimeError("offline snapshot does not provide user groups")
+
+    def get_tracker_field_permissions(self, tracker_id: int, field_id: int):
+        raise RuntimeError(
+            f"offline snapshot does not provide field permissions: {tracker_id}/{field_id}"
+        )
+
+    def search_tracker_items_by_name(self, *, tracker_id: int, name: str, **kwargs):
+        del tracker_id, name, kwargs
+        raise RuntimeError("offline snapshot does not provide tracker item lookup")
+
+
+def _build_gui_client(settings, client_factory, logger=None):
+    if bool(getattr(settings, "offline_mode", False)):
+        return OfflineGuiClient.from_settings(settings)
+    return client_factory(
+        settings.base_url,
+        settings.username,
+        settings.password,
+        logger,
+        rate_limit_retry_delay_seconds=settings.rate_limit_retry_delay_seconds,
+        rate_limit_max_retries=settings.rate_limit_max_retries,
+    )
+
+
 class GuiCodebeamerService:
     """GUI 에서 사용하는 최소 Codebeamer 조회 기능을 제공한다."""
 
@@ -46,15 +180,8 @@ class GuiCodebeamerService:
         self.client_factory = client_factory
         self.logger = logger
 
-    def _build_client(self, settings) -> CodebeamerClient:
-        return self.client_factory(
-            settings.base_url,
-            settings.username,
-            settings.password,
-            self.logger,
-            rate_limit_retry_delay_seconds=settings.rate_limit_retry_delay_seconds,
-            rate_limit_max_retries=settings.rate_limit_max_retries,
-        )
+    def _build_client(self, settings):
+        return _build_gui_client(settings, self.client_factory, self.logger)
 
     @staticmethod
     def _normalize_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -312,6 +439,7 @@ class RootSourceOption:
 
 @dataclass
 class RootItemPreviewContext:
+    enabled: bool
     regex_pattern: str
     regex_target: str
     field_assignments: dict[str, dict[str, Any]]
@@ -343,14 +471,7 @@ class GuiUploadPipelineService:
         self.excel_service = excel_service or GuiExcelService(logger=logger, reader_cls=reader_cls)
 
     def create_wizard(self, settings) -> CodebeamerUploadWizard:
-        client = self.client_factory(
-            settings.base_url,
-            settings.username,
-            settings.password,
-            self.logger,
-            rate_limit_retry_delay_seconds=settings.rate_limit_retry_delay_seconds,
-            rate_limit_max_retries=settings.rate_limit_max_retries,
-        )
+        client = _build_gui_client(settings, self.client_factory, self.logger)
         reader = self.reader_cls(
             header_row=settings.excel_header_row,
             summary_col=settings.summary_column,
@@ -447,6 +568,9 @@ class GuiUploadPipelineService:
                     ]
                     if not options:
                         continue
+                elif option_info.get("kind") == OptionMapKind.USER_LOOKUP.value:
+                    value_kind = GUI_VALUE_KIND_SCALAR
+                    allows_custom_value = True
                 else:
                     continue
             else:
@@ -473,9 +597,38 @@ class GuiUploadPipelineService:
         text = str(value or "").strip()
         return "" if text.lower() == "nan" else text
 
+    @staticmethod
+    def _normalize_configuration_reference_id(value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except Exception:
+            return None
+
     @classmethod
     def _extract_configuration_field_records(cls, payload: Any) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
+        seen_nodes: set[int] = set()
+
+        def _looks_like_field_record(node: Any) -> bool:
+            if not isinstance(node, dict):
+                return False
+            if "referenceId" in node:
+                return True
+            if not any(
+                key in node
+                for key in ("choiceConfigOptionsSetting", "choiceConfigOptionsSetApi", "referenceFilters")
+            ):
+                return False
+            return any(key in node for key in ("label", "name", "title"))
+
+        def _append_record(node: dict[str, Any]) -> None:
+            node_id = id(node)
+            if node_id in seen_nodes:
+                return
+            seen_nodes.add(node_id)
+            records.append(node)
 
         def _walk(node: Any) -> None:
             if isinstance(node, list):
@@ -485,14 +638,22 @@ class GuiUploadPipelineService:
             if not isinstance(node, dict):
                 return
 
-            if (
-                any(key in node for key in ("choiceConfigOptionsSetApi", "referenceFilters"))
-                and any(key in node for key in ("label", "name", "title"))
-            ):
-                records.append(node)
+            if _looks_like_field_record(node):
+                _append_record(node)
 
             for value in node.values():
                 _walk(value)
+
+        if isinstance(payload, dict):
+            fields_container = payload.get("fields")
+            if isinstance(fields_container, list):
+                _walk(fields_container)
+                if records:
+                    return records
+            elif isinstance(fields_container, dict) and isinstance(fields_container.get("value"), list):
+                _walk(fields_container["value"])
+                if records:
+                    return records
 
         _walk(payload)
         return records
@@ -503,6 +664,8 @@ class GuiUploadPipelineService:
             return [], TRACKER_ITEM_QUERY_STATUS_UNAVAILABLE
 
         source_configs: list[dict[str, Any]] = []
+        if isinstance(field_config.get("choiceConfigOptionsSetting"), dict):
+            source_configs.append(field_config["choiceConfigOptionsSetting"])
         if isinstance(field_config.get("choiceConfigOptionsSetApi"), dict):
             source_configs.append(field_config["choiceConfigOptionsSetApi"])
         source_configs.append(field_config)
@@ -564,7 +727,11 @@ class GuiUploadPipelineService:
             return {value for value in values if value}
 
         config_by_name: dict[str, dict[str, Any]] = {}
+        config_by_reference_id: dict[int, dict[str, Any]] = {}
         for field_config in config_fields:
+            reference_id = cls._normalize_configuration_reference_id(field_config.get("referenceId"))
+            if reference_id is not None:
+                config_by_reference_id.setdefault(reference_id, field_config)
             for candidate in _normalized_candidates(field_config):
                 config_by_name.setdefault(candidate, field_config)
 
@@ -573,16 +740,23 @@ class GuiUploadPipelineService:
         query_status_column: list[str] = []
 
         for _, row in work.iterrows():
+            row_field_id = cls._normalize_configuration_reference_id(row.get("field_id"))
+            matched_config = (
+                config_by_reference_id.get(row_field_id)
+                if row_field_id is not None
+                else None
+            )
+
             normalized_names = {
                 cls._normalize_lookup_text(row.get("field_name")).casefold(),
                 cls._normalize_lookup_text(row.get("field_label")).casefold(),
             }
             normalized_names.discard("")
-            matched_config = None
-            for candidate in normalized_names:
-                matched_config = config_by_name.get(candidate)
-                if matched_config is not None:
-                    break
+            if matched_config is None:
+                for candidate in normalized_names:
+                    matched_config = config_by_name.get(candidate)
+                    if matched_config is not None:
+                        break
             tracker_ids, query_status = cls._tracker_item_query_support_from_config(matched_config or {})
             source_tracker_ids_column.append(tracker_ids)
             query_status_column.append(query_status)
@@ -762,6 +936,7 @@ class GuiUploadPipelineService:
                 value=ROOT_SOURCE_FILE_STEM,
             )
         return {
+            "enabled": True,
             "regex_pattern": "",
             "regex_target": ROOT_REGEX_TARGET_FILE_STEM,
             "field_assignments": field_assignments,
@@ -781,6 +956,7 @@ class GuiUploadPipelineService:
             config.update(root_item_config)
         explicit_root_config = dict(root_item_config or {})
         has_explicit_field_assignments = "field_assignments" in explicit_root_config
+        enabled = bool(config.get("enabled", True))
 
         regex_pattern = str(config.get("regex_pattern") or "").strip()
         regex_target = str(config.get("regex_target") or ROOT_REGEX_TARGET_FILE_STEM).strip()
@@ -824,6 +1000,7 @@ class GuiUploadPipelineService:
                 )
 
         return {
+            "enabled": enabled,
             "regex_pattern": regex_pattern,
             "regex_target": regex_target,
             "field_assignments": field_assignments,
@@ -958,6 +1135,7 @@ class GuiUploadPipelineService:
             root_item_config or mapping_context.root_item_config,
             default_config=default_config,
         )
+        enabled = bool(normalized.get("enabled", True))
         regex_pattern = normalized["regex_pattern"]
         regex_target = normalized["regex_target"]
         field_assignments = {
@@ -970,6 +1148,30 @@ class GuiUploadPipelineService:
             candidate.schema_field: candidate
             for candidate in field_candidates
         }
+
+        if not enabled:
+            preview_columns = ["file_name"]
+            preview_rows = [
+                {"file_name": Path(file_path).name}
+                for file_path in mapping_context.file_paths
+            ]
+            return RootItemPreviewContext(
+                enabled=False,
+                regex_pattern=regex_pattern,
+                regex_target=regex_target,
+                field_assignments=field_assignments,
+                field_sources=self._root_file_source_assignments(field_assignments),
+                field_candidates=field_candidates,
+                source_options=[
+                    RootSourceOption(ROOT_SOURCE_FILE_STEM, self._root_source_label(ROOT_SOURCE_FILE_STEM)),
+                    RootSourceOption(ROOT_SOURCE_FILE_NAME, self._root_source_label(ROOT_SOURCE_FILE_NAME)),
+                ],
+                preview_columns=preview_columns,
+                preview_rows=preview_rows,
+                regex_error=None,
+                status_message="상단 데이터 생성을 사용하지 않습니다. 이 단계 설정은 업로드에서 무시됩니다.",
+                has_blocking_issues=False,
+            )
 
         compiled_pattern, regex_error = self._compiled_root_regex(regex_pattern)
         source_options = [
@@ -1073,6 +1275,7 @@ class GuiUploadPipelineService:
             status_message = "일부 파일에서 선택한 루트 필드 소스를 만들 수 없습니다."
 
         return RootItemPreviewContext(
+            enabled=True,
             regex_pattern=regex_pattern,
             regex_target=regex_target,
             field_assignments=normalized_assignments,
@@ -1573,6 +1776,8 @@ class GuiUploadPipelineService:
         file_path: str,
     ) -> tuple[str | None, dict[str, Any]]:
         preview_context = self.build_root_item_preview_context(mapping_context, mapping_context.root_item_config)
+        if not bool(preview_context.enabled):
+            return None, {}
         sources, _, regex_error = self._root_sources_for_file(
             file_path,
             regex_pattern=preview_context.regex_pattern,

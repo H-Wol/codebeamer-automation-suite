@@ -147,6 +147,7 @@ def create_settings_page(
     QLineEdit = qt["QLineEdit"]
     QFrame = qt["QFrame"]
     QCheckBox = qt["QCheckBox"]
+    QFileDialog = qt["QFileDialog"]
     QSpinBox = qt["QSpinBox"]
     QDoubleSpinBox = qt["QDoubleSpinBox"]
     QPushButton = qt["QPushButton"]
@@ -168,6 +169,14 @@ def create_settings_page(
     password.setEchoMode(QLineEdit.EchoMode.Password)
     save_password = QCheckBox("비밀번호 저장")
     save_password.setChecked(initial_settings.save_password)
+    offline_mode = QCheckBox("오프라인 테스트 모드")
+    offline_mode.setChecked(bool(getattr(initial_settings, "offline_mode", False)))
+    offline_schema_path = QLineEdit(str(getattr(initial_settings, "offline_schema_path", "") or ""))
+    offline_schema_button = QPushButton("스키마 선택")
+    offline_config_path = QLineEdit(
+        str(getattr(initial_settings, "offline_tracker_configuration_path", "") or "")
+    )
+    offline_config_button = QPushButton("설정 선택")
     header_row = QSpinBox()
     header_row.setMinimum(1)
     header_row.setValue(initial_settings.excel_header_row)
@@ -188,13 +197,32 @@ def create_settings_page(
         base_url,
         username,
         password,
+        offline_schema_path,
+        offline_config_path,
     ):
         _configure_form_field(field_widget)
+
+    offline_schema_row_widget = QWidget()
+    offline_schema_row = QHBoxLayout(offline_schema_row_widget)
+    offline_schema_row.setContentsMargins(0, 0, 0, 0)
+    offline_schema_row.setSpacing(8)
+    offline_schema_row.addWidget(offline_schema_path, 1)
+    offline_schema_row.addWidget(offline_schema_button)
+
+    offline_config_row_widget = QWidget()
+    offline_config_row = QHBoxLayout(offline_config_row_widget)
+    offline_config_row.setContentsMargins(0, 0, 0, 0)
+    offline_config_row.setSpacing(8)
+    offline_config_row.addWidget(offline_config_path, 1)
+    offline_config_row.addWidget(offline_config_button)
 
     form.addRow("Base URL", base_url)
     form.addRow("Username", username)
     form.addRow("Password", password)
     form.addRow("", save_password)
+    form.addRow("", offline_mode)
+    form.addRow("Schema Snapshot", offline_schema_row_widget)
+    form.addRow("Config Snapshot", offline_config_row_widget)
     layout.addLayout(form)
 
     advanced_toggle = QToolButton()
@@ -253,7 +281,10 @@ def create_settings_page(
     next_button = QPushButton("다음")
     next_button.setObjectName("primary_button")
     next_button.setEnabled(
-        bool(initial_settings.base_url and initial_settings.username and initial_settings.password)
+        bool(
+            getattr(initial_settings, "offline_mode", False)
+            and str(getattr(initial_settings, "offline_schema_path", "") or "").strip()
+        ) or bool(initial_settings.base_url and initial_settings.username and initial_settings.password)
     )
     buttons.addWidget(load_button)
     buttons.addWidget(save_button)
@@ -263,9 +294,22 @@ def create_settings_page(
     layout.addStretch(1)
 
     def _update_next_button_state() -> None:
-        next_button.setEnabled(
-            bool(base_url.text().strip() and username.text().strip() and password.text())
-        )
+        if offline_mode.isChecked():
+            next_button.setEnabled(bool(Path(offline_schema_path.text().strip()).is_file()))
+            return
+        next_button.setEnabled(bool(base_url.text().strip() and username.text().strip() and password.text()))
+
+    def _sync_offline_mode_state() -> None:
+        is_offline = bool(offline_mode.isChecked())
+        base_url.setEnabled(not is_offline)
+        username.setEnabled(not is_offline)
+        password.setEnabled(not is_offline)
+        save_password.setEnabled(not is_offline)
+        offline_schema_path.setEnabled(is_offline)
+        offline_schema_button.setEnabled(is_offline)
+        offline_config_path.setEnabled(is_offline)
+        offline_config_button.setEnabled(is_offline)
+        _update_next_button_state()
 
     def _collect_settings():
         current_settings = getattr(page, "_current_settings", initial_settings)
@@ -274,6 +318,9 @@ def create_settings_page(
             username=username.text().strip(),
             password=password.text(),
             save_password=save_password.isChecked(),
+            offline_mode=offline_mode.isChecked(),
+            offline_schema_path=offline_schema_path.text().strip(),
+            offline_tracker_configuration_path=offline_config_path.text().strip(),
             default_project_id=str(getattr(current_settings, "default_project_id", "") or ""),
             default_tracker_id=str(getattr(current_settings, "default_tracker_id", "") or ""),
             excel_header_row=header_row.value(),
@@ -298,13 +345,27 @@ def create_settings_page(
         username.setText(loaded.username)
         password.setText(loaded.password)
         save_password.setChecked(loaded.save_password)
+        offline_mode.setChecked(bool(getattr(loaded, "offline_mode", False)))
+        offline_schema_path.setText(str(getattr(loaded, "offline_schema_path", "") or ""))
+        offline_config_path.setText(str(getattr(loaded, "offline_tracker_configuration_path", "") or ""))
         header_row.setValue(loaded.excel_header_row)
         summary_column.setText(loaded.summary_column)
         sheet_name.setText(loaded.excel_sheet_name)
         retry_delay.setValue(loaded.rate_limit_retry_delay_seconds)
         retry_count.setValue(loaded.rate_limit_max_retries)
         output_dir.setText(loaded.output_dir)
-        _update_next_button_state()
+        _sync_offline_mode_state()
+
+    def _choose_snapshot_path(target_widget, *, title: str) -> None:
+        start_path = target_widget.text().strip() or str(getattr(page, "_current_settings", initial_settings).last_file_path or "")
+        selected, _ = QFileDialog.getOpenFileName(
+            page,
+            title,
+            start_path,
+            "JSON Files (*.json)",
+        )
+        if selected:
+            target_widget.setText(str(selected))
 
     def _load():
         loaded = settings_store.load()
@@ -321,7 +382,17 @@ def create_settings_page(
 
     def _go_next():
         current = _collect_settings()
-        if not current.base_url or not current.username or not current.password:
+        if current.offline_mode:
+            if not current.offline_schema_path:
+                _set_status("오프라인 모드에서는 schema snapshot JSON 경로가 필요합니다.")
+                return
+            if not Path(current.offline_schema_path).is_file():
+                _set_status("선택한 schema snapshot JSON 파일을 찾을 수 없습니다.")
+                return
+            if current.offline_tracker_configuration_path and not Path(current.offline_tracker_configuration_path).is_file():
+                _set_status("선택한 tracker configuration snapshot JSON 파일을 찾을 수 없습니다.")
+                return
+        elif not current.base_url or not current.username or not current.password:
             _set_status("Base URL, Username, Password 는 필수입니다.")
             return
         on_settings_changed(current)
@@ -333,6 +404,14 @@ def create_settings_page(
     base_url.textChanged.connect(lambda _: _update_next_button_state())
     username.textChanged.connect(lambda _: _update_next_button_state())
     password.textChanged.connect(lambda _: _update_next_button_state())
+    offline_mode.toggled.connect(lambda _: _sync_offline_mode_state())
+    offline_schema_button.clicked.connect(
+        lambda: _choose_snapshot_path(offline_schema_path, title="오프라인 schema snapshot 선택")
+    )
+    offline_config_button.clicked.connect(
+        lambda: _choose_snapshot_path(offline_config_path, title="오프라인 tracker configuration 선택")
+    )
+    offline_schema_path.textChanged.connect(lambda _: _update_next_button_state())
     advanced_toggle.toggled.connect(
         lambda checked: (
             advanced_card.setVisible(checked),
@@ -343,6 +422,7 @@ def create_settings_page(
         )
     )
 
+    _sync_offline_mode_state()
     page.get_settings = _collect_settings
     page.set_settings = _apply_settings
     return page
@@ -386,7 +466,11 @@ def create_project_selection_page(
     form.addRow("트래커", tracker_combo)
     layout.addLayout(form)
 
-    status_label = QLabel("연결 테스트를 실행하면 프로젝트 목록을 불러옵니다.")
+    status_label = QLabel(
+        "오프라인 모드에서는 schema snapshot 기준 가상 프로젝트/트래커를 불러옵니다."
+        if bool(getattr(initial_settings, "offline_mode", False))
+        else "연결 테스트를 실행하면 프로젝트 목록을 불러옵니다."
+    )
     status_label.setObjectName("status_label")
     layout.addWidget(status_label)
 
@@ -441,7 +525,11 @@ def create_project_selection_page(
             _update_next_button_state()
             return
         _set_items(project_combo, projects, page.selected_project_id)
-        status_label.setText("프로젝트 목록을 불러왔습니다.")
+        status_label.setText(
+            "오프라인 프로젝트 목록을 불러왔습니다."
+            if bool(getattr(settings, "offline_mode", False))
+            else "프로젝트 목록을 불러왔습니다."
+        )
         if project_combo.count() > 0:
             selected_index = project_combo.currentIndex()
             if selected_index < 0:
@@ -478,7 +566,10 @@ def create_project_selection_page(
         if tracker_combo.currentData() not in (None, ""):
             page.selected_tracker_id = str(tracker_combo.currentData())
         _update_next_button_state()
-        status_label.setText(f"프로젝트 {project_combo.currentText()}의 트래커를 불러왔습니다.")
+        if bool(getattr(settings, "offline_mode", False)):
+            status_label.setText("오프라인 tracker snapshot 정보를 불러왔습니다.")
+        else:
+            status_label.setText(f"프로젝트 {project_combo.currentText()}의 트래커를 불러왔습니다.")
 
     def _handle_tracker_changed(index: int) -> None:
         tracker_id = tracker_combo.itemData(index)
@@ -867,6 +958,10 @@ def create_root_item_page(on_preview_requested):
     description_label.setObjectName("section_label")
     layout.addWidget(description_label)
 
+    enable_root_item = QCheckBox("파일별 상단 데이터 생성")
+    enable_root_item.setChecked(True)
+    layout.addWidget(enable_root_item)
+
     form = QFormLayout()
     _configure_form_layout(form)
     regex_target = QComboBox()
@@ -917,6 +1012,14 @@ def create_root_item_page(on_preview_requested):
     page._field_candidates = []
     page._current_preview_context = None
 
+    def _sync_root_enabled_state(enabled: bool) -> None:
+        regex_target.setEnabled(enabled)
+        regex_pattern.setEnabled(enabled)
+        preview_table.setEnabled(enabled)
+        field_table.setEnabled(enabled)
+        preview_label.setEnabled(enabled)
+        field_label.setEnabled(enabled)
+
     def _current_field_assignments() -> dict[str, dict[str, object]]:
         field_assignments: dict[str, dict[str, object]] = {}
         for row_index in range(field_table.rowCount()):
@@ -953,6 +1056,7 @@ def create_root_item_page(on_preview_requested):
     def get_config() -> dict[str, object]:
         field_assignments = _current_field_assignments()
         return {
+            "enabled": bool(enable_root_item.isChecked()),
             "regex_pattern": regex_pattern.text().strip(),
             "regex_target": str(regex_target.currentData() or "file_stem"),
             "field_assignments": field_assignments,
@@ -989,6 +1093,8 @@ def create_root_item_page(on_preview_requested):
         if mode_key == ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
             for option in preview_context.source_options:
                 value_combo.addItem(str(option.label), str(option.key))
+            selected_index = value_combo.findData(selected_value)
+            value_combo.setCurrentIndex(selected_index if selected_index >= 0 else 0)
         elif mode_key == ROOT_ASSIGNMENT_MODE_FIXED_VALUE:
             if bool(getattr(candidate, "allows_custom_value", False)):
                 value_combo.setEditable(True)
@@ -1027,11 +1133,15 @@ def create_root_item_page(on_preview_requested):
 
         regex_pattern.blockSignals(True)
         regex_target.blockSignals(True)
+        enable_root_item.blockSignals(True)
+        enable_root_item.setChecked(bool(getattr(preview_context, "enabled", True)))
         regex_pattern.setText(str(preview_context.regex_pattern or ""))
         target_index = regex_target.findData(str(preview_context.regex_target or "file_stem"))
         regex_target.setCurrentIndex(target_index if target_index >= 0 else 0)
         regex_pattern.blockSignals(False)
         regex_target.blockSignals(False)
+        enable_root_item.blockSignals(False)
+        _sync_root_enabled_state(bool(getattr(preview_context, "enabled", True)))
 
         preview_headers = [
             _column_label(column_name, preview_context.source_options)
@@ -1127,6 +1237,7 @@ def create_root_item_page(on_preview_requested):
     next_button.clicked.connect(lambda: page.request_next())
     regex_pattern.textChanged.connect(lambda _text: _refresh_preview())
     regex_target.currentIndexChanged.connect(lambda _index: _refresh_preview())
+    enable_root_item.toggled.connect(lambda checked: (_sync_root_enabled_state(bool(checked)), _refresh_preview()))
 
     page.get_config = get_config
     page.load_context = load_context

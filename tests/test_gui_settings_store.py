@@ -28,6 +28,8 @@ class GuiSettingsStoreTest(unittest.TestCase):
                 username="user",
                 password="secret",
                 save_password=False,
+                offline_mode=True,
+                offline_schema_path="/tmp/schema.json",
             )
 
             store.save(settings)
@@ -37,6 +39,8 @@ class GuiSettingsStoreTest(unittest.TestCase):
             loaded = store.load()
             self.assertEqual(loaded.password, "")
             self.assertFalse(loaded.save_password)
+            self.assertTrue(loaded.offline_mode)
+            self.assertEqual(loaded.offline_schema_path, "/tmp/schema.json")
 
     def test_save_with_password_encrypts_and_restores_password(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -81,6 +85,7 @@ class GuiSettingsStoreTest(unittest.TestCase):
                     "summary_column": "요약",
                 },
                 root_item_config={
+                    "enabled": False,
                     "regex_pattern": r"^(?P<name>.+)$",
                     "field_assignments": {
                         "Summary": {
@@ -113,6 +118,7 @@ class GuiSettingsStoreTest(unittest.TestCase):
             self.assertEqual(loaded.settings.password, "secret")
             self.assertEqual(loaded.settings.default_project_id, "10")
             self.assertEqual(loaded.file_options["sheet_name"], "Main")
+            self.assertFalse(loaded.root_item_config["enabled"])
             self.assertEqual(loaded.root_item_config["regex_pattern"], r"^(?P<name>.+)$")
             self.assertEqual(loaded.selected_mapping["담당자"], "담당자")
             self.assertEqual(loaded.selected_default_values["담당자"], "홍길동")
