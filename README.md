@@ -104,9 +104,18 @@ py -3 gui_main.py
 - `src/mapping_service.py`: schema flattening, 컬럼 비교, option/reference 처리
 - `src/wizard.py`: 업로드 오케스트레이션, preview, 업로드, 상태 저장
 - `src/models/`: reference, field value, tracker item, user info, wizard state 모델
-- `src/gui/`: PySide6 기반 단계형 GUI, 서비스 계층, upload worker
+- `src/gui/`: PySide6 기반 단계형 GUI, 공통 Qt 로더, 화면 팩토리, 서비스 계층, upload worker
 - `docs/`: 사용 가이드와 아키텍처 문서
 - `output/`: 실행 결과 산출물 저장 디렉터리
+
+GUI 구조 메모:
+
+- `src/gui/__init__.py` 는 `run_gui()` import 를 지연시켜 비GUI 테스트가 `PySide6` 에 직접 묶이지 않도록 한다.
+- `src/gui/qt.py` 는 `PySide6` 바인딩을 한 번만 로드하는 공통 진입점이다.
+- `src/gui/main_window.py` 는 위저드 shell 과 단계 전환, background task 연결을 담당한다.
+- `src/gui/pages.py` 는 설정/프로젝트/파일/상단 데이터/매핑/검증/업로드/결과 화면 팩토리를 제공한다.
+- `src/gui/services.py` 는 GUI 오케스트레이션과 미리보기, 검증, 배치 업로드 준비를 담당한다.
+- `src/gui/worker.py` 는 `UploadWorker`, `BackgroundTask` 를 일반 `QThread` 서브클래스로 유지해 읽기 쉬운 구조로 정리했다.
 
 ## 빠른 시작
 

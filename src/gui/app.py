@@ -6,6 +6,7 @@ from .styles import GUI_STYLESHEET
 
 
 def run_gui() -> int:
+    """GUI 애플리케이션을 초기화하고 메인 윈도우를 실행한다."""
     try:
         from PySide6.QtWidgets import QApplication
     except ImportError as exc:

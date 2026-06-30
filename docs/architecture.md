@@ -127,14 +127,25 @@
 - 연결 테스트와 프로젝트/트래커 조회
 - Excel 시트/헤더/미리보기 표시
 - 매핑/검증/업로드/결과 화면 구성
+- 공통 Qt 로더를 통한 import 경계 단순화
 - upload worker를 통한 백그라운드 실행과 진행률 갱신
 
 주요 모듈:
+- `src/gui/__init__.py`
+- `src/gui/qt.py`
 - `src/gui/main_window.py`
 - `src/gui/pages.py`
 - `src/gui/services.py`
 - `src/gui/settings_store.py`
 - `src/gui/worker.py`
+
+구조 메모:
+- `src/gui/__init__.py` 는 GUI 진입점을 지연 import 해 CLI/테스트 경로가 `PySide6` 설치 여부에 덜 민감하도록 유지한다.
+- `src/gui/qt.py` 는 `PySide6` 바인딩을 캐시해 window, page, worker 모듈이 같은 로딩 경로를 공유하도록 만든다.
+- `src/gui/main_window.py` 는 위저드 shell, 상태 전환, background task 연결을 담당한다.
+- `src/gui/pages.py` 는 단계별 화면 생성과 공통 위젯 규칙을 함수 단위로 묶는다.
+- `src/gui/services.py` 는 미리보기, 매핑 준비, 검증, 배치 업로드 준비를 오케스트레이션한다.
+- `src/gui/worker.py` 는 `UploadWorker`, `BackgroundTask` 를 일반 `QThread` 서브클래스로 유지해 동적 `__new__` 팩토리보다 읽기 쉬운 구조를 사용한다.
 
 ### API 접근
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .qt import require_qt
 from .services import DEFAULT_TRACKER_ITEM_ID_REGEX
 from .services import ROOT_ASSIGNMENT_MODE_FILE_SOURCE
 from .services import ROOT_ASSIGNMENT_MODE_FIXED_VALUE
@@ -37,56 +38,7 @@ def _is_hidden_user_table_column(column_name: object) -> bool:
     return False
 
 def _require_qt():
-    try:
-        from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QCheckBox
-        from PySide6.QtWidgets import QComboBox
-        from PySide6.QtWidgets import QDoubleSpinBox
-        from PySide6.QtWidgets import QFileDialog
-        from PySide6.QtWidgets import QFrame
-        from PySide6.QtWidgets import QFormLayout
-        from PySide6.QtWidgets import QHBoxLayout
-        from PySide6.QtWidgets import QHeaderView
-        from PySide6.QtWidgets import QLabel
-        from PySide6.QtWidgets import QLineEdit
-        from PySide6.QtWidgets import QPlainTextEdit
-        from PySide6.QtWidgets import QProgressBar
-        from PySide6.QtWidgets import QPushButton
-        from PySide6.QtWidgets import QSizePolicy
-        from PySide6.QtWidgets import QSpinBox
-        from PySide6.QtWidgets import QTabWidget
-        from PySide6.QtWidgets import QTableWidget
-        from PySide6.QtWidgets import QTableWidgetItem
-        from PySide6.QtWidgets import QToolButton
-        from PySide6.QtWidgets import QVBoxLayout
-        from PySide6.QtWidgets import QWidget
-    except ImportError as exc:
-        raise RuntimeError("GUI 실행에는 PySide6 패키지가 필요합니다.") from exc
-
-    return {
-        "Qt": Qt,
-        "QCheckBox": QCheckBox,
-        "QComboBox": QComboBox,
-        "QDoubleSpinBox": QDoubleSpinBox,
-        "QFileDialog": QFileDialog,
-        "QFrame": QFrame,
-        "QFormLayout": QFormLayout,
-        "QHBoxLayout": QHBoxLayout,
-        "QHeaderView": QHeaderView,
-        "QLabel": QLabel,
-        "QLineEdit": QLineEdit,
-        "QPlainTextEdit": QPlainTextEdit,
-        "QProgressBar": QProgressBar,
-        "QPushButton": QPushButton,
-        "QSizePolicy": QSizePolicy,
-        "QSpinBox": QSpinBox,
-        "QTabWidget": QTabWidget,
-        "QTableWidget": QTableWidget,
-        "QTableWidgetItem": QTableWidgetItem,
-        "QToolButton": QToolButton,
-        "QVBoxLayout": QVBoxLayout,
-        "QWidget": QWidget,
-    }
+    return require_qt()
 
 
 def _configure_table_columns(table, minimum_widths: list[int]) -> None:

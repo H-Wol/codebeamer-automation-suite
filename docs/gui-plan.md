@@ -62,6 +62,10 @@
 - 페이지 카드 내부 중복 제목을 제거해 헤더 영역만 단계 제목을 표시하고, 입력칸/버튼/배지/여백을 함께 줄여 밀도를 낮췄다.
 - `QComboBox` 는 기본 시스템 화살표 대신 커스텀 chevron 아이콘을 사용한다.
 - GUI 검증은 CLI 와 같은 enum 값을 기준으로 `payload_status`, `mapping status` 를 해석하며, 사용자가 GUI 에서 제외한 컬럼은 차단 이슈로 보지 않는다.
+- `src/gui/qt.py` 로 `PySide6` import 경로를 하나로 모았고, GUI 패키지 루트는 lazy import 로 비GUI 테스트 의존성을 줄였다.
+- `UploadWorker`, `BackgroundTask` 는 일반 `QThread` 서브클래스로 정리해 동적 worker 팩토리보다 읽기 쉬운 구조로 바꿨다.
+- `main_window.py` 와 `pages.py` 는 여전히 현재의 함수형 페이지 생성 구조를 유지하되, Qt 로딩 경로를 공통화해 import 중복을 줄였다.
+- 설정 저장소와 Excel reader 에는 함수 단위 주석과 정규화 helper 를 추가해 유지보수 시 진입 비용을 낮췄다.
 
 ## 권장 기술 선택
 

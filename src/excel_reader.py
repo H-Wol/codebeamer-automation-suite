@@ -11,12 +11,14 @@ class ExcelReader:
     """Excel 파일에서 raw DataFrame만 읽어오는 입력 전용 reader다."""
 
     def __init__(self, header_row: int = 1, summary_col: str = "Summary", logger=None):
+        """헤더 행과 summary 컬럼 기준을 저장한다."""
         self.header_row = header_row
         self.summary_col = summary_col
         self.logger = logger
 
     @staticmethod
     def is_blank(value: Any) -> bool:
+        """비어 있는 셀로 취급할 값을 판별한다."""
         if value is None:
             return True
         if isinstance(value, float) and pd.isna(value):
@@ -27,6 +29,7 @@ class ExcelReader:
 
     @staticmethod
     def _normalize_headers(headers: list[Any]) -> list[str]:
+        """헤더 값을 문자열 기준으로 정규화하고 빈 헤더는 대체 이름을 만든다."""
         return [
             str(header).strip() if header is not None else f"Unnamed_{index}"
             for index, header in enumerate(headers)
@@ -34,10 +37,12 @@ class ExcelReader:
 
     @staticmethod
     def _supports_openpyxl(file_path: str) -> bool:
+        """현재 파일이 openpyxl 경로로 처리 가능한 형식인지 확인한다."""
         return Path(file_path).suffix.lower() in {".xlsx", ".xlsm", ".xltx", ".xltm"}
 
     @staticmethod
     def _resolve_openpyxl_sheet(workbook, sheet_name: str | int):
+        """openpyxl workbook 에서 이름 또는 인덱스로 시트를 찾는다."""
         if isinstance(sheet_name, str):
             normalized = sheet_name.strip()
             if normalized in workbook.sheetnames:
@@ -53,6 +58,7 @@ class ExcelReader:
 
     @staticmethod
     def _normalize_row(values: list[Any], width: int) -> list[Any]:
+        """행 길이를 헤더 폭에 맞춰 자르거나 빈 칸을 채운다."""
         normalized = list(values)
         if len(normalized) < width:
             normalized += [None] * (width - len(normalized))
@@ -61,6 +67,7 @@ class ExcelReader:
         return normalized
 
     def _openpyxl_sheet_names(self, file_path: str) -> list[str]:
+        """openpyxl 로 workbook 을 열어 시트 이름 목록을 읽는다."""
         workbook = load_workbook(file_path, read_only=True, data_only=True)
         try:
             return list(workbook.sheetnames)
@@ -68,6 +75,7 @@ class ExcelReader:
             workbook.close()
 
     def _openpyxl_headers(self, file_path: str, sheet_name: str | int) -> list[str]:
+        """openpyxl 경로에서 지정한 시트의 헤더 행만 읽는다."""
         workbook = load_workbook(file_path, read_only=True, data_only=True)
         try:
             worksheet = self._resolve_openpyxl_sheet(workbook, sheet_name)
@@ -84,6 +92,7 @@ class ExcelReader:
 
     @staticmethod
     def _create_xlwings_app(visible: bool = False):
+        """구형 Excel 포맷 처리를 위한 xlwings 앱 인스턴스를 만든다."""
         try:
             import xlwings as xw
         except ImportError as exc:  # pragma: no cover
@@ -96,6 +105,7 @@ class ExcelReader:
 
     @staticmethod
     def _resolve_xlwings_sheet(workbook, sheet_name: str | int):
+        """xlwings workbook 에서 이름 또는 인덱스로 시트를 찾는다."""
         if isinstance(sheet_name, str):
             normalized = sheet_name.strip()
             if normalized.isdigit():
@@ -105,6 +115,7 @@ class ExcelReader:
         return workbook.sheets[sheet_name]
 
     def _xlwings_sheet_names(self, file_path: str) -> list[str]:
+        """xlwings 로 workbook 을 열어 시트 이름 목록을 읽는다."""
         app = self._create_xlwings_app()
         workbook = None
 
@@ -120,6 +131,7 @@ class ExcelReader:
             app.quit()
 
     def _xlwings_headers(self, file_path: str, sheet_name: str | int) -> list[str]:
+        """xlwings 경로에서 지정한 시트의 헤더 행만 읽는다."""
         app = self._create_xlwings_app()
         workbook = None
 
@@ -140,16 +152,19 @@ class ExcelReader:
             app.quit()
 
     def list_sheet_names(self, file_path: str) -> list[str]:
+        """파일 형식에 맞는 reader 경로를 골라 시트 이름을 반환한다."""
         if self._supports_openpyxl(file_path):
             return self._openpyxl_sheet_names(file_path)
         return self._xlwings_sheet_names(file_path)
 
     def read_headers(self, file_path: str, sheet_name: str | int) -> list[str]:
+        """파일 형식에 맞는 reader 경로를 골라 헤더 행을 반환한다."""
         if self._supports_openpyxl(file_path):
             return self._openpyxl_headers(file_path, sheet_name)
         return self._xlwings_headers(file_path, sheet_name)
 
     def count_upload_rows(self, file_path: str, sheet_name: str | int) -> int:
+        """summary 값이 있는 실질 업로드 행 수만 계산한다."""
         if self._supports_openpyxl(file_path):
             workbook = load_workbook(file_path, read_only=True, data_only=True)
             try:
@@ -186,6 +201,7 @@ class ExcelReader:
         return int((~raw_df[self.summary_col].apply(self.is_blank)).sum())
 
     def _resolve_indent_level(self, cell: Any, summary_value: Any) -> int:
+        """셀 서식 또는 텍스트 앞 공백을 바탕으로 들여쓰기 수준을 계산한다."""
         try:
             alignment = getattr(cell, "alignment", None)
             indent = getattr(alignment, "indent", None) if alignment is not None else None

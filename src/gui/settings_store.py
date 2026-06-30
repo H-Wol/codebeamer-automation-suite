@@ -49,12 +49,14 @@ class GuiSettingsStore:
     """GUI 설정 파일과 암호화된 비밀번호를 저장/조회한다."""
 
     def __init__(self, root_dir: Path | None = None) -> None:
+        """설정 파일, 키 파일, 프리셋 파일 경로를 준비한다."""
         self.root_dir = root_dir or (Path.home() / APP_DIR_NAME)
         self.settings_path = self.root_dir / SETTINGS_FILE_NAME
         self.key_path = self.root_dir / KEY_FILE_NAME
         self.workflow_preset_path = self.root_dir / WORKFLOW_PRESET_FILE_NAME
 
     def load(self) -> GuiSettings:
+        """개별 GUI 설정을 파일에서 읽어 기본 설정과 합친다."""
         if not self.settings_path.exists():
             return GuiSettings()
 
@@ -62,6 +64,7 @@ class GuiSettingsStore:
         return self._settings_from_payload(payload)
 
     def save(self, settings: GuiSettings) -> None:
+        """현재 GUI 설정을 직렬화해 저장한다."""
         self.root_dir.mkdir(parents=True, exist_ok=True)
         payload = self._settings_payload(settings)
         self.settings_path.write_text(
@@ -70,56 +73,36 @@ class GuiSettingsStore:
         )
 
     def load_workflow_preset(self) -> GuiWorkflowPreset | None:
+        """파일, 매핑, 기본값을 포함한 전체 워크플로 프리셋을 읽는다."""
         if not self.workflow_preset_path.exists():
             return None
 
         payload = json.loads(self.workflow_preset_path.read_text(encoding="utf-8"))
-        raw_settings = payload.get("settings")
-        settings_payload = raw_settings if isinstance(raw_settings, dict) else {}
         return GuiWorkflowPreset(
             version=int(payload.get("version") or 1),
-            settings=self._settings_from_payload(settings_payload),
+            settings=self._settings_from_payload(self._dict_payload(payload.get("settings"))),
             file_options=self._dict_payload(payload.get("file_options")),
             root_item_config=self._dict_payload(payload.get("root_item_config")),
-            selected_mapping={
-                str(key): str(value)
-                for key, value in self._dict_payload(payload.get("selected_mapping")).items()
-                if str(key).strip() and str(value).strip()
-            },
-            selected_default_values={
-                str(key): str(value)
-                for key, value in self._dict_payload(payload.get("selected_default_values")).items()
-                if str(key).strip() and str(value).strip()
-            },
-            selected_tracker_item_settings={
-                str(key): dict(value)
-                for key, value in self._dict_payload(payload.get("selected_tracker_item_settings")).items()
-                if str(key).strip() and isinstance(value, dict)
-            },
+            selected_mapping=self._string_mapping(payload.get("selected_mapping")),
+            selected_default_values=self._string_mapping(payload.get("selected_default_values")),
+            selected_tracker_item_settings=self._nested_dict_mapping(
+                payload.get("selected_tracker_item_settings")
+            ),
         )
 
     def save_workflow_preset(self, preset: GuiWorkflowPreset) -> None:
+        """전체 워크플로 프리셋을 정규화한 뒤 저장한다."""
         self.root_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "version": int(preset.version or 1),
             "settings": self._settings_payload(preset.settings),
             "file_options": self._dict_payload(preset.file_options),
             "root_item_config": self._dict_payload(preset.root_item_config),
-            "selected_mapping": {
-                str(key): str(value)
-                for key, value in dict(preset.selected_mapping or {}).items()
-                if str(key).strip() and str(value).strip()
-            },
-            "selected_default_values": {
-                str(key): str(value)
-                for key, value in dict(preset.selected_default_values or {}).items()
-                if str(key).strip() and str(value).strip()
-            },
-            "selected_tracker_item_settings": {
-                str(key): dict(value)
-                for key, value in dict(preset.selected_tracker_item_settings or {}).items()
-                if str(key).strip() and isinstance(value, dict)
-            },
+            "selected_mapping": self._string_mapping(preset.selected_mapping),
+            "selected_default_values": self._string_mapping(preset.selected_default_values),
+            "selected_tracker_item_settings": self._nested_dict_mapping(
+                preset.selected_tracker_item_settings
+            ),
         }
         self.workflow_preset_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
@@ -128,9 +111,29 @@ class GuiSettingsStore:
 
     @staticmethod
     def _dict_payload(value: Any) -> dict[str, Any]:
+        """사전이 아닌 입력을 빈 사전으로 정규화한다."""
         return dict(value) if isinstance(value, dict) else {}
 
+    @classmethod
+    def _string_mapping(cls, value: Any) -> dict[str, str]:
+        """문자열 key/value 쌍만 유지해 매핑 payload 를 정리한다."""
+        return {
+            str(key): str(item)
+            for key, item in cls._dict_payload(value).items()
+            if str(key).strip() and str(item).strip()
+        }
+
+    @classmethod
+    def _nested_dict_mapping(cls, value: Any) -> dict[str, dict[str, Any]]:
+        """중첩 사전 형태의 설정 값만 남겨 tracker item 설정을 정리한다."""
+        return {
+            str(key): dict(item)
+            for key, item in cls._dict_payload(value).items()
+            if str(key).strip() and isinstance(item, dict)
+        }
+
     def _settings_payload(self, settings: GuiSettings) -> dict[str, Any]:
+        """비밀번호 저장 정책을 반영해 설정 객체를 직렬화한다."""
         payload = asdict(settings)
         password = payload.pop("password", "")
         if settings.save_password and password:
@@ -140,6 +143,7 @@ class GuiSettingsStore:
         return payload
 
     def _settings_from_payload(self, payload: dict[str, Any]) -> GuiSettings:
+        """파일 payload 를 `GuiSettings` 객체로 복원한다."""
         payload = dict(payload or {})
         password = ""
         encrypted_password = payload.pop("password_encrypted", "")
@@ -152,6 +156,7 @@ class GuiSettingsStore:
         )
 
     def _get_fernet(self):
+        """비밀번호 암복호화에 사용할 Fernet 인스턴스를 준비한다."""
         try:
             from cryptography.fernet import Fernet
         except ImportError as exc:
@@ -165,7 +170,9 @@ class GuiSettingsStore:
         return Fernet(self.key_path.read_bytes())
 
     def _encrypt_password(self, password: str) -> str:
+        """평문 비밀번호를 암호화 문자열로 변환한다."""
         return self._get_fernet().encrypt(password.encode("utf-8")).decode("utf-8")
 
     def _decrypt_password(self, encrypted_password: str) -> str:
+        """암호화된 비밀번호를 평문 문자열로 복원한다."""
         return self._get_fernet().decrypt(encrypted_password.encode("utf-8")).decode("utf-8")

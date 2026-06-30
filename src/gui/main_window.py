@@ -20,47 +20,13 @@ from .services import GuiUploadPipelineService
 from .settings_store import GuiSettings
 from .settings_store import GuiSettingsStore
 from .settings_store import GuiWorkflowPreset
+from .qt import require_qt
 from .worker import BackgroundTask
 from .worker import UploadWorker
 
 
 def _require_qt():
-    try:
-        from PySide6.QtCore import QEventLoop
-        from PySide6.QtCore import QSize
-        from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QApplication
-        from PySide6.QtWidgets import QFrame
-        from PySide6.QtWidgets import QHBoxLayout
-        from PySide6.QtWidgets import QLabel
-        from PySide6.QtWidgets import QMainWindow
-        from PySide6.QtWidgets import QMessageBox
-        from PySide6.QtWidgets import QProgressBar
-        from PySide6.QtWidgets import QPushButton
-        from PySide6.QtWidgets import QStackedWidget
-        from PySide6.QtWidgets import QStatusBar
-        from PySide6.QtWidgets import QVBoxLayout
-        from PySide6.QtWidgets import QWidget
-    except ImportError as exc:
-        raise RuntimeError("GUI 실행에는 PySide6 패키지가 필요합니다.") from exc
-
-    return {
-        "QApplication": QApplication,
-        "QEventLoop": QEventLoop,
-        "QFrame": QFrame,
-        "QHBoxLayout": QHBoxLayout,
-        "QLabel": QLabel,
-        "QMainWindow": QMainWindow,
-        "QMessageBox": QMessageBox,
-        "QProgressBar": QProgressBar,
-        "QPushButton": QPushButton,
-        "QSize": QSize,
-        "QStackedWidget": QStackedWidget,
-        "QStatusBar": QStatusBar,
-        "Qt": Qt,
-        "QVBoxLayout": QVBoxLayout,
-        "QWidget": QWidget,
-    }
+    return require_qt()
 
 
 @dataclass
