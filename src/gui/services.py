@@ -447,6 +447,9 @@ class GuiUploadPipelineService:
                     ]
                     if not options:
                         continue
+                elif option_info.get("kind") == OptionMapKind.USER_LOOKUP.value:
+                    value_kind = GUI_VALUE_KIND_SCALAR
+                    allows_custom_value = True
                 else:
                     continue
             else:
@@ -473,6 +476,15 @@ class GuiUploadPipelineService:
         text = str(value or "").strip()
         return "" if text.lower() == "nan" else text
 
+    @staticmethod
+    def _normalize_configuration_reference_id(value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except Exception:
+            return None
+
     @classmethod
     def _extract_configuration_field_records(cls, payload: Any) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -487,7 +499,7 @@ class GuiUploadPipelineService:
 
             if (
                 any(key in node for key in ("choiceConfigOptionsSetApi", "referenceFilters"))
-                and any(key in node for key in ("label", "name", "title"))
+                and any(key in node for key in ("label", "name", "title", "referenceId"))
             ):
                 records.append(node)
 
@@ -564,7 +576,11 @@ class GuiUploadPipelineService:
             return {value for value in values if value}
 
         config_by_name: dict[str, dict[str, Any]] = {}
+        config_by_reference_id: dict[int, dict[str, Any]] = {}
         for field_config in config_fields:
+            reference_id = cls._normalize_configuration_reference_id(field_config.get("referenceId"))
+            if reference_id is not None:
+                config_by_reference_id.setdefault(reference_id, field_config)
             for candidate in _normalized_candidates(field_config):
                 config_by_name.setdefault(candidate, field_config)
 
@@ -573,16 +589,23 @@ class GuiUploadPipelineService:
         query_status_column: list[str] = []
 
         for _, row in work.iterrows():
+            row_field_id = cls._normalize_configuration_reference_id(row.get("field_id"))
+            matched_config = (
+                config_by_reference_id.get(row_field_id)
+                if row_field_id is not None
+                else None
+            )
+
             normalized_names = {
                 cls._normalize_lookup_text(row.get("field_name")).casefold(),
                 cls._normalize_lookup_text(row.get("field_label")).casefold(),
             }
             normalized_names.discard("")
-            matched_config = None
-            for candidate in normalized_names:
-                matched_config = config_by_name.get(candidate)
-                if matched_config is not None:
-                    break
+            if matched_config is None:
+                for candidate in normalized_names:
+                    matched_config = config_by_name.get(candidate)
+                    if matched_config is not None:
+                        break
             tracker_ids, query_status = cls._tracker_item_query_support_from_config(matched_config or {})
             source_tracker_ids_column.append(tracker_ids)
             query_status_column.append(query_status)

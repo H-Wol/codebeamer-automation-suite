@@ -216,6 +216,46 @@ class TrackerItemNonTrackerConfigFakeClient(TrackerItemQueryFakeClient):
         ]
 
 
+class TrackerItemReferenceIdConfigFakeClient(TrackerItemQueryFakeClient):
+    def get_tracker_schema(self, tracker_id: int):
+        schema = super().get_tracker_schema(tracker_id)
+        for field in schema["fields"]:
+            if field.get("id") == 7:
+                field["name"] = "SUDS 링크"
+        return schema
+
+    def get_tracker_configuration(self, tracker_id: int):
+        del tracker_id
+        return [
+            {
+                "referenceId": 7,
+                "label": "Software Unit Design Specification",
+                "choiceConfigOptionsSetApi": {
+                    "referenceFilters": [
+                        {
+                            "domainType": "TRACKER",
+                            "domainId": 13526611,
+                        }
+                    ]
+                },
+            }
+        ]
+
+
+class UserReferenceDefaultFakeClient(FakeClient):
+    def get_tracker_schema(self, tracker_id: int):
+        schema = super().get_tracker_schema(tracker_id)
+        schema["fields"].append({
+            "id": 8,
+            "name": "담당 사용자",
+            "type": "ReferenceField",
+            "referenceType": "UserReference",
+            "valueModel": "ChoiceFieldValue<UserReference>",
+            "multipleValues": False,
+        })
+        return schema
+
+
 class CountingGuiExcelService(GuiExcelService):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -575,6 +615,52 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
                 [13526611],
             )
 
+    def test_prepare_mapping_context_uses_tracker_configuration_reference_id_when_name_differs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary", "SUDS 링크"])
+            sheet.append(["REQ-001", "REQ-100"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=TrackerItemReferenceIdConfigFakeClient,
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "preview_file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                },
+            )
+
+            self.assertEqual(
+                mapping_context.selected_tracker_item_settings["SUDS 링크"]["mode"],
+                "query",
+            )
+            self.assertEqual(
+                mapping_context.selected_tracker_item_settings["SUDS 링크"]["source_tracker_ids"],
+                [13526611],
+            )
+
     def test_prepare_mapping_context_disables_query_for_non_tracker_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "sample.xlsx"
@@ -626,6 +712,50 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
                 if candidate.schema_field == "연관 요구사항"
             )
             self.assertEqual(tracker_item_candidate.query_status, "unsupported")
+
+    def test_prepare_mapping_context_includes_user_reference_field_in_default_value_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary"])
+            sheet.append(["REQ-001"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=UserReferenceDefaultFakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                },
+            )
+
+            default_candidates = {
+                candidate.schema_field: candidate
+                for candidate in mapping_context.default_value_candidates
+            }
+            self.assertIn("담당 사용자", default_candidates)
+            self.assertTrue(default_candidates["담당 사용자"].allows_custom_value)
 
     def test_prime_tracker_item_lookup_cache_deduplicates_values_across_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
