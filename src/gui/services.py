@@ -312,6 +312,7 @@ class RootSourceOption:
 
 @dataclass
 class RootItemPreviewContext:
+    enabled: bool
     regex_pattern: str
     regex_target: str
     field_assignments: dict[str, dict[str, Any]]
@@ -815,6 +816,7 @@ class GuiUploadPipelineService:
                 value=ROOT_SOURCE_FILE_STEM,
             )
         return {
+            "enabled": True,
             "regex_pattern": "",
             "regex_target": ROOT_REGEX_TARGET_FILE_STEM,
             "field_assignments": field_assignments,
@@ -834,6 +836,7 @@ class GuiUploadPipelineService:
             config.update(root_item_config)
         explicit_root_config = dict(root_item_config or {})
         has_explicit_field_assignments = "field_assignments" in explicit_root_config
+        enabled = bool(config.get("enabled", True))
 
         regex_pattern = str(config.get("regex_pattern") or "").strip()
         regex_target = str(config.get("regex_target") or ROOT_REGEX_TARGET_FILE_STEM).strip()
@@ -877,6 +880,7 @@ class GuiUploadPipelineService:
                 )
 
         return {
+            "enabled": enabled,
             "regex_pattern": regex_pattern,
             "regex_target": regex_target,
             "field_assignments": field_assignments,
@@ -1011,6 +1015,7 @@ class GuiUploadPipelineService:
             root_item_config or mapping_context.root_item_config,
             default_config=default_config,
         )
+        enabled = bool(normalized.get("enabled", True))
         regex_pattern = normalized["regex_pattern"]
         regex_target = normalized["regex_target"]
         field_assignments = {
@@ -1023,6 +1028,30 @@ class GuiUploadPipelineService:
             candidate.schema_field: candidate
             for candidate in field_candidates
         }
+
+        if not enabled:
+            preview_columns = ["file_name"]
+            preview_rows = [
+                {"file_name": Path(file_path).name}
+                for file_path in mapping_context.file_paths
+            ]
+            return RootItemPreviewContext(
+                enabled=False,
+                regex_pattern=regex_pattern,
+                regex_target=regex_target,
+                field_assignments=field_assignments,
+                field_sources=self._root_file_source_assignments(field_assignments),
+                field_candidates=field_candidates,
+                source_options=[
+                    RootSourceOption(ROOT_SOURCE_FILE_STEM, self._root_source_label(ROOT_SOURCE_FILE_STEM)),
+                    RootSourceOption(ROOT_SOURCE_FILE_NAME, self._root_source_label(ROOT_SOURCE_FILE_NAME)),
+                ],
+                preview_columns=preview_columns,
+                preview_rows=preview_rows,
+                regex_error=None,
+                status_message="상단 데이터 생성을 사용하지 않습니다. 이 단계 설정은 업로드에서 무시됩니다.",
+                has_blocking_issues=False,
+            )
 
         compiled_pattern, regex_error = self._compiled_root_regex(regex_pattern)
         source_options = [
@@ -1126,6 +1155,7 @@ class GuiUploadPipelineService:
             status_message = "일부 파일에서 선택한 루트 필드 소스를 만들 수 없습니다."
 
         return RootItemPreviewContext(
+            enabled=True,
             regex_pattern=regex_pattern,
             regex_target=regex_target,
             field_assignments=normalized_assignments,
@@ -1626,6 +1656,8 @@ class GuiUploadPipelineService:
         file_path: str,
     ) -> tuple[str | None, dict[str, Any]]:
         preview_context = self.build_root_item_preview_context(mapping_context, mapping_context.root_item_config)
+        if not bool(preview_context.enabled):
+            return None, {}
         sources, _, regex_error = self._root_sources_for_file(
             file_path,
             regex_pattern=preview_context.regex_pattern,

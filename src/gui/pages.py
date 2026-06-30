@@ -867,6 +867,10 @@ def create_root_item_page(on_preview_requested):
     description_label.setObjectName("section_label")
     layout.addWidget(description_label)
 
+    enable_root_item = QCheckBox("파일별 상단 데이터 생성")
+    enable_root_item.setChecked(True)
+    layout.addWidget(enable_root_item)
+
     form = QFormLayout()
     _configure_form_layout(form)
     regex_target = QComboBox()
@@ -917,6 +921,14 @@ def create_root_item_page(on_preview_requested):
     page._field_candidates = []
     page._current_preview_context = None
 
+    def _sync_root_enabled_state(enabled: bool) -> None:
+        regex_target.setEnabled(enabled)
+        regex_pattern.setEnabled(enabled)
+        preview_table.setEnabled(enabled)
+        field_table.setEnabled(enabled)
+        preview_label.setEnabled(enabled)
+        field_label.setEnabled(enabled)
+
     def _current_field_assignments() -> dict[str, dict[str, object]]:
         field_assignments: dict[str, dict[str, object]] = {}
         for row_index in range(field_table.rowCount()):
@@ -953,6 +965,7 @@ def create_root_item_page(on_preview_requested):
     def get_config() -> dict[str, object]:
         field_assignments = _current_field_assignments()
         return {
+            "enabled": bool(enable_root_item.isChecked()),
             "regex_pattern": regex_pattern.text().strip(),
             "regex_target": str(regex_target.currentData() or "file_stem"),
             "field_assignments": field_assignments,
@@ -989,6 +1002,8 @@ def create_root_item_page(on_preview_requested):
         if mode_key == ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
             for option in preview_context.source_options:
                 value_combo.addItem(str(option.label), str(option.key))
+            selected_index = value_combo.findData(selected_value)
+            value_combo.setCurrentIndex(selected_index if selected_index >= 0 else 0)
         elif mode_key == ROOT_ASSIGNMENT_MODE_FIXED_VALUE:
             if bool(getattr(candidate, "allows_custom_value", False)):
                 value_combo.setEditable(True)
@@ -1027,11 +1042,15 @@ def create_root_item_page(on_preview_requested):
 
         regex_pattern.blockSignals(True)
         regex_target.blockSignals(True)
+        enable_root_item.blockSignals(True)
+        enable_root_item.setChecked(bool(getattr(preview_context, "enabled", True)))
         regex_pattern.setText(str(preview_context.regex_pattern or ""))
         target_index = regex_target.findData(str(preview_context.regex_target or "file_stem"))
         regex_target.setCurrentIndex(target_index if target_index >= 0 else 0)
         regex_pattern.blockSignals(False)
         regex_target.blockSignals(False)
+        enable_root_item.blockSignals(False)
+        _sync_root_enabled_state(bool(getattr(preview_context, "enabled", True)))
 
         preview_headers = [
             _column_label(column_name, preview_context.source_options)
@@ -1127,6 +1146,7 @@ def create_root_item_page(on_preview_requested):
     next_button.clicked.connect(lambda: page.request_next())
     regex_pattern.textChanged.connect(lambda _text: _refresh_preview())
     regex_target.currentIndexChanged.connect(lambda _index: _refresh_preview())
+    enable_root_item.toggled.connect(lambda checked: (_sync_root_enabled_state(bool(checked)), _refresh_preview()))
 
     page.get_config = get_config
     page.load_context = load_context

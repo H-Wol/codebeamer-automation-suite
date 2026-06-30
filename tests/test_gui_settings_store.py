@@ -81,6 +81,7 @@ class GuiSettingsStoreTest(unittest.TestCase):
                     "summary_column": "요약",
                 },
                 root_item_config={
+                    "enabled": False,
                     "regex_pattern": r"^(?P<name>.+)$",
                     "field_assignments": {
                         "Summary": {
@@ -113,6 +114,7 @@ class GuiSettingsStoreTest(unittest.TestCase):
             self.assertEqual(loaded.settings.password, "secret")
             self.assertEqual(loaded.settings.default_project_id, "10")
             self.assertEqual(loaded.file_options["sheet_name"], "Main")
+            self.assertFalse(loaded.root_item_config["enabled"])
             self.assertEqual(loaded.root_item_config["regex_pattern"], r"^(?P<name>.+)$")
             self.assertEqual(loaded.selected_mapping["담당자"], "담당자")
             self.assertEqual(loaded.selected_default_values["담당자"], "홍길동")

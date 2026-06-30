@@ -490,6 +490,11 @@ class MainWindow:
                 text = str(message or "").strip() or "알 수 없는 오류가 발생했습니다."
                 QMessageBox.critical(self, str(title or "오류"), text)
 
+            def _show_info_dialog(self, title: str, message: str) -> None:
+                QMessageBox = self.qt["QMessageBox"]
+                text = str(message or "").strip() or "작업이 완료되었습니다."
+                QMessageBox.information(self, str(title or "안내"), text)
+
             def _on_settings_changed(self, settings: GuiSettings | None) -> GuiSettings:
                 if settings is None:
                     return self.session_state.settings
@@ -684,18 +689,33 @@ class MainWindow:
                 self.statusBar().showMessage(message)
 
             def _save_workflow_preset(self) -> None:
-                preset = self._collect_workflow_preset()
-                self.settings_store.save_workflow_preset(preset)
-                self.session_state.workflow_preset = preset
-                self.settings_store.save(preset.settings)
+                try:
+                    preset = self._collect_workflow_preset()
+                    self.settings_store.save_workflow_preset(preset)
+                    self.session_state.workflow_preset = preset
+                    self.settings_store.save(preset.settings)
+                except Exception as exc:
+                    self.statusBar().showMessage(str(exc))
+                    self._show_error_dialog("전체 설정 저장 실패", str(exc))
+                    return
                 self.statusBar().showMessage("전체 설정을 저장했습니다.")
+                self._show_info_dialog("전체 설정 저장", "전체 설정을 저장했습니다.")
 
             def _load_workflow_preset(self) -> None:
-                preset = self.settings_store.load_workflow_preset()
-                if preset is None:
-                    self._show_error_dialog("전체 설정 없음", "저장된 전체 설정이 없습니다.")
+                try:
+                    preset = self.settings_store.load_workflow_preset()
+                    if preset is None:
+                        self._show_error_dialog("전체 설정 없음", "저장된 전체 설정이 없습니다.")
+                        return
+                    self._apply_workflow_preset(preset)
+                except Exception as exc:
+                    self.statusBar().showMessage(str(exc))
+                    self._show_error_dialog("전체 설정 불러오기 실패", str(exc))
                     return
-                self._apply_workflow_preset(preset)
+                self._show_info_dialog(
+                    "전체 설정 불러오기",
+                    "전체 설정을 불러왔습니다. 파일과 매핑을 확인한 뒤 다시 검증하세요.",
+                )
 
             def _show_mapping_page(self) -> None:
                 self._show_page(self.mapping_page)

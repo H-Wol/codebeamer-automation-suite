@@ -1035,6 +1035,118 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             self.assertEqual(root_item_name, "ABC_REQ-001")
             self.assertEqual(root_field_values["담당자"], "홍길동")
 
+    def test_build_root_item_preview_context_does_not_block_when_root_item_is_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "ABC_REQ-001.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary"])
+            sheet.append(["REQ-001"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "file_paths": [str(path)],
+                    "preview_file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                },
+            )
+
+            preview_context = service.build_root_item_preview_context(
+                mapping_context,
+                {
+                    "enabled": False,
+                    "regex_pattern": "(",
+                    "field_assignments": {
+                        "Summary": {
+                            "enabled": True,
+                            "mode": "file_source",
+                            "value": "missing",
+                        }
+                    },
+                },
+            )
+
+            self.assertFalse(preview_context.enabled)
+            self.assertFalse(preview_context.has_blocking_issues)
+            self.assertEqual(preview_context.preview_columns, ["file_name"])
+            self.assertIn("무시", preview_context.status_message)
+
+    def test_build_root_item_payload_spec_returns_none_when_root_item_is_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "ABC_REQ-001.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary"])
+            sheet.append(["REQ-001"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "file_paths": [str(path)],
+                    "preview_file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                },
+            )
+            mapping_context.root_item_config = {
+                "enabled": False,
+                "regex_pattern": r"^(?P<title>.+)$",
+                "field_assignments": {
+                    "Summary": {
+                        "enabled": True,
+                        "mode": "file_source",
+                        "value": "title",
+                    },
+                },
+            }
+
+            root_item_name, root_field_values = service.build_root_item_payload_spec(mapping_context, str(path))
+
+            self.assertIsNone(root_item_name)
+            self.assertEqual(root_field_values, {})
+
     def test_prepare_mapping_context_rejects_mismatched_batch_headers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             first_path = Path(tmp_dir) / "ABC_REQ-001.xlsx"
