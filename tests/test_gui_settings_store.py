@@ -28,6 +28,8 @@ class GuiSettingsStoreTest(unittest.TestCase):
                 username="user",
                 password="secret",
                 save_password=False,
+                offline_mode=True,
+                offline_schema_path="/tmp/schema.json",
             )
 
             store.save(settings)
@@ -37,6 +39,8 @@ class GuiSettingsStoreTest(unittest.TestCase):
             loaded = store.load()
             self.assertEqual(loaded.password, "")
             self.assertFalse(loaded.save_password)
+            self.assertTrue(loaded.offline_mode)
+            self.assertEqual(loaded.offline_schema_path, "/tmp/schema.json")
 
     def test_save_with_password_encrypts_and_restores_password(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import field
+import json
 from pathlib import Path
 import re
 import time
@@ -39,6 +40,139 @@ class PreviewData:
     raw_df_by_file: dict[str, pd.DataFrame] = field(default_factory=dict)
 
 
+DEFAULT_OFFLINE_PROJECT_ID = 1
+DEFAULT_OFFLINE_TRACKER_ID = 1
+DEFAULT_OFFLINE_PROJECT_NAME = "Offline Project"
+DEFAULT_OFFLINE_TRACKER_NAME = "Offline Tracker"
+
+
+def _normalize_offline_id(value: Any, default_value: int) -> int:
+    try:
+        normalized = int(value)
+    except Exception:
+        return default_value
+    return normalized if normalized > 0 else default_value
+
+
+def _load_json_snapshot(path_value: Any, *, label: str) -> Any:
+    path_text = str(path_value or "").strip()
+    if not path_text:
+        raise ValueError(f"{label} 경로가 비어 있습니다.")
+
+    snapshot_path = Path(path_text).expanduser()
+    if not snapshot_path.is_file():
+        raise ValueError(f"{label} 파일을 찾을 수 없습니다: {snapshot_path}")
+
+    try:
+        return json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"{label} JSON을 읽을 수 없습니다: {exc}") from exc
+
+
+class OfflineGuiClient:
+    """로컬 schema/config snapshot만으로 GUI 오프라인 테스트를 지원한다."""
+
+    def __init__(
+        self,
+        *,
+        schema: dict[str, Any],
+        schema_path: str,
+        tracker_configuration: Any = None,
+        project_id: int = DEFAULT_OFFLINE_PROJECT_ID,
+        tracker_id: int = DEFAULT_OFFLINE_TRACKER_ID,
+    ) -> None:
+        self.schema = dict(schema or {})
+        self.schema_path = str(schema_path)
+        self.tracker_configuration = tracker_configuration
+        self.project_id = int(project_id)
+        self.tracker_id = int(tracker_id)
+        self.project_name = DEFAULT_OFFLINE_PROJECT_NAME
+        self.tracker_name = (
+            str(self.schema.get("name") or "").strip()
+            or Path(self.schema_path).stem
+            or DEFAULT_OFFLINE_TRACKER_NAME
+        )
+
+    @classmethod
+    def from_settings(cls, settings) -> "OfflineGuiClient":
+        schema_path = str(getattr(settings, "offline_schema_path", "") or "").strip()
+        schema = _load_json_snapshot(schema_path, label="오프라인 schema")
+        tracker_configuration = None
+        configuration_path = str(
+            getattr(settings, "offline_tracker_configuration_path", "") or ""
+        ).strip()
+        if configuration_path:
+            tracker_configuration = _load_json_snapshot(
+                configuration_path,
+                label="오프라인 tracker configuration",
+            )
+        return cls(
+            schema=schema,
+            schema_path=schema_path,
+            tracker_configuration=tracker_configuration,
+            project_id=_normalize_offline_id(
+                getattr(settings, "default_project_id", ""),
+                DEFAULT_OFFLINE_PROJECT_ID,
+            ),
+            tracker_id=_normalize_offline_id(
+                getattr(settings, "default_tracker_id", ""),
+                DEFAULT_OFFLINE_TRACKER_ID,
+            ),
+        )
+
+    def get_projects(self) -> list[dict[str, Any]]:
+        return [{"id": self.project_id, "name": self.project_name}]
+
+    def get_trackers(self, project_id: int) -> list[dict[str, Any]]:
+        del project_id
+        return [{"id": self.tracker_id, "name": self.tracker_name}]
+
+    def get_tracker_schema(self, tracker_id: int) -> dict[str, Any]:
+        del tracker_id
+        return self.schema
+
+    def get_tracker_configuration(self, tracker_id: int) -> Any:
+        del tracker_id
+        if self.tracker_configuration is None:
+            raise RuntimeError("offline tracker configuration snapshot is not configured")
+        return self.tracker_configuration
+
+    def create_item(self, tracker_id: int, payload: dict[str, Any], parent_item_id: int | None = None) -> dict[str, Any]:
+        del tracker_id, payload, parent_item_id
+        raise RuntimeError("오프라인 모드에서는 실제 업로드를 실행할 수 없습니다. Dry Run만 사용해야 합니다.")
+
+    def get_user(self, user_id: int):
+        raise RuntimeError(f"offline snapshot does not provide user lookup by id: {user_id}")
+
+    def get_user_by_name(self, name: str):
+        raise RuntimeError(f"offline snapshot does not provide user lookup by name: {name}")
+
+    def get_user_groups(self):
+        raise RuntimeError("offline snapshot does not provide user groups")
+
+    def get_tracker_field_permissions(self, tracker_id: int, field_id: int):
+        raise RuntimeError(
+            f"offline snapshot does not provide field permissions: {tracker_id}/{field_id}"
+        )
+
+    def search_tracker_items_by_name(self, *, tracker_id: int, name: str, **kwargs):
+        del tracker_id, name, kwargs
+        raise RuntimeError("offline snapshot does not provide tracker item lookup")
+
+
+def _build_gui_client(settings, client_factory, logger=None):
+    if bool(getattr(settings, "offline_mode", False)):
+        return OfflineGuiClient.from_settings(settings)
+    return client_factory(
+        settings.base_url,
+        settings.username,
+        settings.password,
+        logger,
+        rate_limit_retry_delay_seconds=settings.rate_limit_retry_delay_seconds,
+        rate_limit_max_retries=settings.rate_limit_max_retries,
+    )
+
+
 class GuiCodebeamerService:
     """GUI 에서 사용하는 최소 Codebeamer 조회 기능을 제공한다."""
 
@@ -46,15 +180,8 @@ class GuiCodebeamerService:
         self.client_factory = client_factory
         self.logger = logger
 
-    def _build_client(self, settings) -> CodebeamerClient:
-        return self.client_factory(
-            settings.base_url,
-            settings.username,
-            settings.password,
-            self.logger,
-            rate_limit_retry_delay_seconds=settings.rate_limit_retry_delay_seconds,
-            rate_limit_max_retries=settings.rate_limit_max_retries,
-        )
+    def _build_client(self, settings):
+        return _build_gui_client(settings, self.client_factory, self.logger)
 
     @staticmethod
     def _normalize_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -344,14 +471,7 @@ class GuiUploadPipelineService:
         self.excel_service = excel_service or GuiExcelService(logger=logger, reader_cls=reader_cls)
 
     def create_wizard(self, settings) -> CodebeamerUploadWizard:
-        client = self.client_factory(
-            settings.base_url,
-            settings.username,
-            settings.password,
-            self.logger,
-            rate_limit_retry_delay_seconds=settings.rate_limit_retry_delay_seconds,
-            rate_limit_max_retries=settings.rate_limit_max_retries,
-        )
+        client = _build_gui_client(settings, self.client_factory, self.logger)
         reader = self.reader_cls(
             header_row=settings.excel_header_row,
             summary_col=settings.summary_column,

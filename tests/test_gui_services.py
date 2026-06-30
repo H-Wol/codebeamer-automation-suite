@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -328,6 +329,27 @@ class GuiCodebeamerServiceTest(unittest.TestCase):
         self.assertEqual(trackers[0]["id"], 1000)
         self.assertEqual(trackers[1]["name"], "Tracker 10-2")
 
+    def test_offline_connection_and_tracker_loading_use_local_schema_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            schema_path = Path(tmp_dir) / "offline-schema.json"
+            schema_payload = FakeClient("", "", "").get_tracker_schema(0)
+            schema_payload["name"] = "Offline Tracker Snapshot"
+            schema_path.write_text(json.dumps(schema_payload, ensure_ascii=False), encoding="utf-8")
+
+            service = GuiCodebeamerService(client_factory=FakeClient)
+            settings = GuiSettings(
+                offline_mode=True,
+                offline_schema_path=str(schema_path),
+                default_project_id="501",
+                default_tracker_id="601",
+            )
+
+            projects = service.test_connection_and_load_projects(settings)
+            trackers = service.load_trackers(settings, 501)
+
+            self.assertEqual(projects, [{"id": 501, "name": "Offline Project"}])
+            self.assertEqual(trackers, [{"id": 601, "name": "Offline Tracker Snapshot"}])
+
 
 class GuiExcelServiceTest(unittest.TestCase):
     def test_load_preview_reads_sheet_names_headers_rows_and_summary(self) -> None:
@@ -586,6 +608,112 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             self.assertEqual(excel_service.load_preview_calls, 1)
             self.assertIsNotNone(mapping_context.preview_data)
             self.assertEqual(mapping_context.preview_data.file_path, str(path))
+
+    def test_prepare_mapping_context_supports_offline_schema_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            schema_path = Path(tmp_dir) / "offline-schema.json"
+            schema_payload = FakeClient("", "", "").get_tracker_schema(0)
+            schema_payload["name"] = "Offline Tracker Snapshot"
+            schema_path.write_text(json.dumps(schema_payload, ensure_ascii=False), encoding="utf-8")
+
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary", "담당자"])
+            sheet.append(["REQ-001", "홍길동"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                offline_mode=True,
+                offline_schema_path=str(schema_path),
+                default_project_id="501",
+                default_tracker_id="601",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "preview_file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                },
+            )
+
+            self.assertEqual(mapping_context.selected_mapping["Summary"], "Summary")
+            self.assertEqual(mapping_context.selected_mapping["담당자"], "담당자")
+            self.assertEqual(mapping_context.wizard.state.tracker_id, 601)
+
+    def test_run_batch_upload_supports_offline_mode_with_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            schema_path = Path(tmp_dir) / "offline-schema.json"
+            schema_payload = FakeClient("", "", "").get_tracker_schema(0)
+            schema_payload["name"] = "Offline Tracker Snapshot"
+            schema_path.write_text(json.dumps(schema_payload, ensure_ascii=False), encoding="utf-8")
+
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary"])
+            sheet.append(["REQ-001"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                offline_mode=True,
+                offline_schema_path=str(schema_path),
+                default_project_id="501",
+                default_tracker_id="601",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+            file_state = {
+                "file_path": str(path),
+                "file_paths": [str(path)],
+                "preview_file_path": str(path),
+                "sheet_name": "Main",
+                "header_row": 1,
+                "summary_column": "Summary",
+            }
+
+            mapping_context = service.prepare_mapping_context(settings, file_state)
+            mapping_context.root_item_config = {"enabled": False}
+            validation_context = service.validate_mapping(
+                mapping_context,
+                {"Summary": "Summary"},
+            )
+
+            self.assertFalse(validation_context.has_blocking_issues)
+
+            result = service.run_batch_upload(
+                settings,
+                file_state,
+                mapping_context,
+                dry_run=True,
+                continue_on_error=True,
+                output_dir=str(Path(tmp_dir) / "output"),
+            )
+
+            self.assertEqual(len(result["success_df"]), 1)
+            self.assertEqual(result["success_df"].iloc[0]["created_item_id"], "DRYRUN-0")
 
     def test_prepare_mapping_context_uses_tracker_configuration_for_query_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

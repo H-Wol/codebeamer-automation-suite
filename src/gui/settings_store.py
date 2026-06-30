@@ -20,6 +20,9 @@ class GuiSettings:
     username: str = ""
     password: str = ""
     save_password: bool = False
+    offline_mode: bool = False
+    offline_schema_path: str = ""
+    offline_tracker_configuration_path: str = ""
     default_project_id: str = ""
     default_tracker_id: str = ""
     excel_header_row: int = 1
