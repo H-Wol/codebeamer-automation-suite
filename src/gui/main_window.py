@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 import time
@@ -18,6 +19,7 @@ from .services import GuiExcelService
 from .services import GuiUploadPipelineService
 from .settings_store import GuiSettings
 from .settings_store import GuiSettingsStore
+from .settings_store import GuiWorkflowPreset
 from .worker import BackgroundTask
 from .worker import UploadWorker
 
@@ -34,6 +36,7 @@ def _require_qt():
         from PySide6.QtWidgets import QMainWindow
         from PySide6.QtWidgets import QMessageBox
         from PySide6.QtWidgets import QProgressBar
+        from PySide6.QtWidgets import QPushButton
         from PySide6.QtWidgets import QStackedWidget
         from PySide6.QtWidgets import QStatusBar
         from PySide6.QtWidgets import QVBoxLayout
@@ -50,6 +53,7 @@ def _require_qt():
         "QMainWindow": QMainWindow,
         "QMessageBox": QMessageBox,
         "QProgressBar": QProgressBar,
+        "QPushButton": QPushButton,
         "QSize": QSize,
         "QStackedWidget": QStackedWidget,
         "QStatusBar": QStatusBar,
@@ -65,6 +69,7 @@ class GuiSessionState:
     file_state: dict[str, object]
     projects: list[dict[str, object]]
     trackers: list[dict[str, object]]
+    workflow_preset: GuiWorkflowPreset | None
     mapping_context: object | None
     validation_context: object | None
     upload_result: dict[str, object] | None
@@ -87,6 +92,7 @@ class MainWindow:
                     file_state={},
                     projects=[],
                     trackers=[],
+                    workflow_preset=store.load_workflow_preset(),
                     mapping_context=None,
                     validation_context=None,
                     upload_result=None,
@@ -99,6 +105,7 @@ class MainWindow:
                 self.upload_success_count = 0
                 self.upload_failed_count = 0
                 self.upload_retry_count = 0
+                self.upload_total_count = 0
                 self._upload_event_started_at = {}
                 self._upload_batch_started_at = None
                 self.setWindowTitle("Codebeamer Upload GUI")
@@ -116,6 +123,7 @@ class MainWindow:
                 QProgressBar = self.qt["QProgressBar"]
                 Qt = self.qt["Qt"]
                 QFrame = self.qt["QFrame"]
+                QPushButton = self.qt["QPushButton"]
 
                 root = QWidget()
                 root.setObjectName("app_root")
@@ -134,7 +142,18 @@ class MainWindow:
                 title.setObjectName("app_title")
                 subtitle = QLabel("현대케피코용 업로드 작업을 단계별로 확인하고 실행하는 도구")
                 subtitle.setObjectName("app_subtitle")
-                header_layout.addWidget(title)
+
+                title_row = QHBoxLayout()
+                title_row.setSpacing(8)
+                title_row.addWidget(title)
+                title_row.addStretch(1)
+
+                self.load_workflow_button = QPushButton("전체 설정 불러오기")
+                self.save_workflow_button = QPushButton("전체 설정 저장")
+                title_row.addWidget(self.load_workflow_button)
+                title_row.addWidget(self.save_workflow_button)
+
+                header_layout.addLayout(title_row)
                 header_layout.addWidget(subtitle)
 
                 steps_row = QHBoxLayout()
@@ -315,14 +334,19 @@ class MainWindow:
                     self._on_settings_changed,
                     self._test_connection,
                     self._load_trackers,
+                    self._show_error_dialog,
                 )
                 self.file_page = create_file_selection_page(
                     self.session_state.settings,
                     self._on_file_state_changed,
                     self._load_file_preview,
+                    self._show_error_dialog,
                 )
                 self.root_item_page = create_root_item_page(self._preview_root_item_config)
-                self.mapping_page = create_mapping_page(self._validate_mapping)
+                self.mapping_page = create_mapping_page(
+                    self._validate_mapping,
+                    self._show_error_dialog,
+                )
                 self.validation_page = create_validation_page()
                 self.upload_page = create_upload_page(
                     self._start_upload,
@@ -331,6 +355,9 @@ class MainWindow:
                     self._cancel_upload,
                 )
                 self.result_page = create_result_page()
+
+                self.load_workflow_button.clicked.connect(self._load_workflow_preset)
+                self.save_workflow_button.clicked.connect(self._save_workflow_preset)
 
                 self._attach_navigation(self.settings_page, next_page=self.project_page)
                 self._attach_navigation(
@@ -406,7 +433,10 @@ class MainWindow:
                 ):
                     page.request_content_reflow = self._fit_window_to_current_page
                 self._show_page(self.settings_page)
-                self.statusBar().showMessage("GUI 스켈레톤이 준비되었습니다.")
+                if self.session_state.workflow_preset is not None:
+                    self._apply_workflow_preset(self.session_state.workflow_preset, startup=True)
+                else:
+                    self.statusBar().showMessage("GUI 스켈레톤이 준비되었습니다.")
 
             def _show_page(self, page) -> None:
                 self.stack.setCurrentWidget(page)
@@ -433,19 +463,37 @@ class MainWindow:
                         self._show_page(previous_page)
 
                 def _go_next():
-                    if next_handler is not None:
-                        next_handler()
-                        return
-                    if next_page is not None:
-                        self._show_page(next_page)
+                    try:
+                        if next_handler is not None:
+                            next_handler()
+                            return
+                        if next_page is not None:
+                            self._show_page(next_page)
+                    except Exception as exc:
+                        self.statusBar().showMessage(str(exc))
+                        self._show_error_dialog("작업 실패", str(exc))
 
                 def _restart():
-                    if restart_handler is not None:
-                        restart_handler()
+                    try:
+                        if restart_handler is not None:
+                            restart_handler()
+                    except Exception as exc:
+                        self.statusBar().showMessage(str(exc))
+                        self._show_error_dialog("작업 실패", str(exc))
 
                 page.request_previous = _go_previous
                 page.request_next = _go_next
                 page.request_restart = _restart
+
+            def _show_error_dialog(self, title: str, message: str) -> None:
+                QMessageBox = self.qt["QMessageBox"]
+                text = str(message or "").strip() or "알 수 없는 오류가 발생했습니다."
+                QMessageBox.critical(self, str(title or "오류"), text)
+
+            def _show_info_dialog(self, title: str, message: str) -> None:
+                QMessageBox = self.qt["QMessageBox"]
+                text = str(message or "").strip() or "작업이 완료되었습니다."
+                QMessageBox.information(self, str(title or "안내"), text)
 
             def _on_settings_changed(self, settings: GuiSettings | None) -> GuiSettings:
                 if settings is None:
@@ -481,16 +529,193 @@ class MainWindow:
                 self.statusBar().showMessage("트래커 목록을 불러왔습니다.")
                 return trackers
 
-            def _load_file_preview(self, file_path: str, *, sheet_name: str, header_row: int):
+            def _load_file_preview(
+                self,
+                file_path: str,
+                *,
+                file_paths: list[str] | None = None,
+                sheet_name: str,
+                header_row: int,
+                summary_column: str,
+            ):
                 preview = self._run_with_busy(
                     "Excel 시트와 미리보기를 불러오는 중입니다.",
                     self.excel_service.load_preview,
                     file_path,
+                    file_paths=file_paths,
                     sheet_name=sheet_name,
                     header_row=header_row,
+                    summary_column=summary_column,
                 )
                 self.statusBar().showMessage("Excel 미리보기를 불러왔습니다.")
                 return preview
+
+            def _current_settings_snapshot(self) -> GuiSettings:
+                settings = replace(self.session_state.settings)
+                get_settings = getattr(self.settings_page, "get_settings", None)
+                if callable(get_settings):
+                    settings = replace(get_settings())
+
+                get_selection = getattr(self.project_page, "get_selection", None)
+                if callable(get_selection):
+                    selection = dict(get_selection() or {})
+                    settings.default_project_id = str(selection.get("project_id") or settings.default_project_id or "")
+                    settings.default_tracker_id = str(selection.get("tracker_id") or settings.default_tracker_id or "")
+
+                file_state = self._current_file_state_snapshot()
+                file_paths = [
+                    str(path).strip()
+                    for path in file_state.get("file_paths") or []
+                    if str(path).strip()
+                ]
+                if file_paths:
+                    settings.last_file_path = file_paths[0]
+                return settings
+
+            def _current_file_state_snapshot(self) -> dict[str, object]:
+                current_state = dict(self.session_state.file_state or {})
+                get_state = getattr(self.file_page, "get_state", None)
+                if callable(get_state):
+                    current_state.update(dict(get_state() or {}))
+                return current_state
+
+            def _apply_workflow_preset_to_mapping_context(self, mapping_context, preset: GuiWorkflowPreset) -> None:
+                if preset.root_item_config:
+                    mapping_context.root_item_config = dict(preset.root_item_config)
+                if preset.selected_mapping:
+                    mapping_context.selected_mapping = {
+                        str(df_column): str(schema_field)
+                        for df_column, schema_field in preset.selected_mapping.items()
+                        if str(df_column).strip() and str(schema_field).strip()
+                    }
+                if preset.selected_default_values:
+                    mapping_context.selected_default_values = {
+                        str(field_name): str(value)
+                        for field_name, value in preset.selected_default_values.items()
+                        if str(field_name).strip() and str(value).strip()
+                    }
+                if preset.selected_tracker_item_settings:
+                    mapping_context.selected_tracker_item_settings = {
+                        str(field_name): dict(setting)
+                        for field_name, setting in preset.selected_tracker_item_settings.items()
+                        if str(field_name).strip() and isinstance(setting, dict)
+                    }
+
+            def _collect_workflow_preset(self) -> GuiWorkflowPreset:
+                settings = self._current_settings_snapshot()
+                file_state = self._current_file_state_snapshot()
+                file_options = {
+                    "sheet_name": str(file_state.get("sheet_name") or settings.excel_sheet_name or "0"),
+                    "header_row": int(file_state.get("header_row") or settings.excel_header_row or 1),
+                    "summary_column": str(file_state.get("summary_column") or settings.summary_column or "Summary"),
+                }
+
+                root_item_config: dict[str, object] = {}
+                mapping_context = self.session_state.mapping_context
+                if mapping_context is not None:
+                    root_item_config = dict(getattr(mapping_context, "root_item_config", {}) or {})
+                if self.stack.currentWidget() is self.root_item_page and mapping_context is not None:
+                    root_item_config = dict(self.root_item_page.get_config() or root_item_config)
+
+                selected_mapping: dict[str, str] = {}
+                selected_default_values: dict[str, str] = {}
+                selected_tracker_item_settings: dict[str, dict[str, object]] = {}
+                if callable(getattr(self.mapping_page, "get_selected_mapping", None)):
+                    selected_mapping = dict(self.mapping_page.get_selected_mapping() or {})
+                if callable(getattr(self.mapping_page, "get_selected_default_values", None)):
+                    selected_default_values = dict(self.mapping_page.get_selected_default_values() or {})
+                if callable(getattr(self.mapping_page, "get_selected_tracker_item_settings", None)):
+                    selected_tracker_item_settings = dict(self.mapping_page.get_selected_tracker_item_settings() or {})
+
+                if not selected_mapping and mapping_context is not None:
+                    selected_mapping = dict(getattr(mapping_context, "selected_mapping", {}) or {})
+                if not selected_default_values and mapping_context is not None:
+                    selected_default_values = dict(getattr(mapping_context, "selected_default_values", {}) or {})
+                if not selected_tracker_item_settings and mapping_context is not None:
+                    selected_tracker_item_settings = dict(getattr(mapping_context, "selected_tracker_item_settings", {}) or {})
+
+                return GuiWorkflowPreset(
+                    settings=settings,
+                    file_options=file_options,
+                    root_item_config=root_item_config,
+                    selected_mapping=selected_mapping,
+                    selected_default_values=selected_default_values,
+                    selected_tracker_item_settings=selected_tracker_item_settings,
+                )
+
+            def _apply_workflow_preset(self, preset: GuiWorkflowPreset, *, startup: bool = False) -> None:
+                self.session_state.workflow_preset = preset
+                self.session_state.settings = replace(preset.settings)
+
+                set_settings = getattr(self.settings_page, "set_settings", None)
+                if callable(set_settings):
+                    set_settings(replace(preset.settings))
+
+                load_selection = getattr(self.project_page, "load_selection", None)
+                if callable(load_selection):
+                    load_selection(preset.settings.default_project_id, preset.settings.default_tracker_id)
+
+                load_file_state = getattr(self.file_page, "load_state", None)
+                if callable(load_file_state):
+                    load_file_state(dict(preset.file_options or {}))
+                else:
+                    self.session_state.file_state.update(dict(preset.file_options or {}))
+
+                if self.session_state.mapping_context is not None:
+                    self._apply_workflow_preset_to_mapping_context(self.session_state.mapping_context, preset)
+                    preview_context = self.pipeline_service.build_root_item_preview_context(
+                        self.session_state.mapping_context,
+                        self.session_state.mapping_context.root_item_config,
+                    )
+                    self.root_item_page.load_context(preview_context)
+                    self.mapping_page.load_context(
+                        self.session_state.mapping_context.upload_columns,
+                        self.session_state.mapping_context.schema_df,
+                        self.session_state.mapping_context.selected_mapping,
+                        self.session_state.mapping_context.default_value_candidates,
+                        self.session_state.mapping_context.selected_default_values,
+                        self.session_state.mapping_context.selected_tracker_item_settings,
+                    )
+                    self.session_state.validation_context = None
+                    self.session_state.upload_result = None
+                    if self.stack.currentWidget() in {self.validation_page, self.upload_page, self.result_page}:
+                        self._show_page(self.mapping_page)
+
+                message = (
+                    "저장된 전체 설정을 자동으로 불러왔습니다."
+                    if startup
+                    else "전체 설정을 불러왔습니다. 파일을 선택한 뒤 검증을 다시 실행하세요."
+                )
+                self.statusBar().showMessage(message)
+
+            def _save_workflow_preset(self) -> None:
+                try:
+                    preset = self._collect_workflow_preset()
+                    self.settings_store.save_workflow_preset(preset)
+                    self.session_state.workflow_preset = preset
+                    self.settings_store.save(preset.settings)
+                except Exception as exc:
+                    self.statusBar().showMessage(str(exc))
+                    self._show_error_dialog("전체 설정 저장 실패", str(exc))
+                    return
+                self.statusBar().showMessage("전체 설정을 저장했습니다.")
+                self._show_info_dialog("전체 설정 저장", "전체 설정을 저장했습니다.")
+
+            def _load_workflow_preset(self) -> None:
+                try:
+                    preset = self.settings_store.load_workflow_preset()
+                    if preset is None:
+                        self._show_error_dialog("전체 설정 없음", "저장된 전체 설정이 없습니다.")
+                        return
+                    self._apply_workflow_preset(preset)
+                except Exception as exc:
+                    self.statusBar().showMessage(str(exc))
+                    self._show_error_dialog("전체 설정 불러오기 실패", str(exc))
+                    return
+                self._show_info_dialog(
+                    "전체 설정 불러오기",
+                    "전체 설정을 불러왔습니다. 파일과 매핑을 확인한 뒤 다시 검증하세요.",
+                )
 
             def _show_mapping_page(self) -> None:
                 self._show_page(self.mapping_page)
@@ -508,6 +733,12 @@ class MainWindow:
 
             def _enter_upload_page(self) -> None:
                 self.upload_page.reset(0)
+                if self.session_state.settings.offline_mode:
+                    self.upload_page.dry_run_checkbox.setChecked(True)
+                    self.upload_page.dry_run_checkbox.setEnabled(False)
+                    self.upload_page.status_label.setText("오프라인 모드에서는 Dry Run만 실행할 수 있습니다.")
+                else:
+                    self.upload_page.dry_run_checkbox.setEnabled(True)
                 self._show_page(self.upload_page)
 
             def _enter_result_page(self) -> None:
@@ -532,6 +763,11 @@ class MainWindow:
                     settings,
                     self.session_state.file_state,
                 )
+                if self.session_state.workflow_preset is not None:
+                    self._apply_workflow_preset_to_mapping_context(
+                        mapping_context,
+                        self.session_state.workflow_preset,
+                    )
                 self.session_state.mapping_context = mapping_context
                 root_preview_context = self.pipeline_service.build_root_item_preview_context(
                     mapping_context,
@@ -550,6 +786,7 @@ class MainWindow:
                     self.session_state.mapping_context.selected_mapping,
                     self.session_state.mapping_context.default_value_candidates,
                     self.session_state.mapping_context.selected_default_values,
+                    self.session_state.mapping_context.selected_tracker_item_settings,
                 )
                 self._show_page(self.mapping_page)
 
@@ -557,6 +794,7 @@ class MainWindow:
                 self,
                 selected_mapping: dict[str, str],
                 selected_default_values: dict[str, str],
+                selected_tracker_item_settings: dict[str, dict[str, object]],
             ) -> None:
                 if self.session_state.mapping_context is None:
                     raise ValueError("매핑 컨텍스트가 준비되지 않았습니다.")
@@ -566,6 +804,7 @@ class MainWindow:
                     self.session_state.mapping_context,
                     selected_mapping,
                     selected_default_values,
+                    selected_tracker_item_settings,
                 )
                 self.session_state.validation_context = validation_context
                 self.validation_page.set_results(
@@ -578,10 +817,16 @@ class MainWindow:
                 if self.session_state.mapping_context is None:
                     self.upload_page.status_label.setText("업로드 컨텍스트가 없습니다.")
                     return
+                if self.session_state.settings.offline_mode and not self.upload_page.dry_run_checkbox.isChecked():
+                    message = "오프라인 모드에서는 Dry Run만 실행할 수 있습니다."
+                    self.upload_page.status_label.setText(message)
+                    self._show_error_dialog("오프라인 업로드 제한", message)
+                    return
                 output_dir = str(Path(self.session_state.settings.output_dir))
                 self.upload_success_count = 0
                 self.upload_failed_count = 0
                 self.upload_retry_count = 0
+                self.upload_total_count = 0
                 self._upload_event_started_at = {}
                 self._upload_batch_started_at = time.perf_counter()
                 self.upload_worker = UploadWorker(
@@ -665,6 +910,10 @@ class MainWindow:
                 self.upload_page.counter_label.setText(
                     f"성공 {self.upload_success_count} / 실패 {self.upload_failed_count} / 재시도 {self.upload_retry_count}"
                 )
+                completed_count = self.upload_success_count + self.upload_failed_count
+                self.upload_page.total_label.setText(
+                    f"총 대상 {self.upload_total_count}건 / 완료 {completed_count}건"
+                )
 
             def _update_upload_time_label(self) -> None:
                 if self._upload_batch_started_at is None:
@@ -690,7 +939,9 @@ class MainWindow:
                     return
 
                 if event_type == "batch_total":
-                    self._append_timestamped_log(f"총 업로드 예정 건수: {int(event.get('total') or 0)}")
+                    self.upload_total_count = int(event.get("total") or 0)
+                    self._update_upload_counter()
+                    self._append_timestamped_log(f"총 업로드 예정 건수: {self.upload_total_count}")
                     return
 
                 if event_type == "row_started":
@@ -747,6 +998,7 @@ class MainWindow:
                 self.session_state.upload_result = result
                 success_df = result.get("success_df")
                 failed_df = result.get("failed_df")
+                unresolved_df = result.get("unresolved_df")
                 self.upload_success_count = 0 if success_df is None else len(success_df)
                 self.upload_failed_count = 0 if failed_df is None else len(failed_df)
                 self._update_upload_counter()
@@ -759,6 +1011,12 @@ class MainWindow:
                 self.upload_page.resume_button.setEnabled(False)
                 self.upload_page.cancel_button.setEnabled(False)
                 self.upload_page.result_button.setEnabled(True)
+                unresolved_count = 0 if unresolved_df is None else len(unresolved_df)
+                if self.upload_failed_count or unresolved_count:
+                    self._show_error_dialog(
+                        "업로드 결과 확인 필요",
+                        f"배치 업로드는 종료되었지만 실패 {self.upload_failed_count}건, 미해결 {unresolved_count}건이 남아 있습니다.",
+                    )
 
             def _on_upload_failed(self, message: str) -> None:
                 self.upload_page.status_label.setText(message)
@@ -768,5 +1026,7 @@ class MainWindow:
                 self.upload_page.resume_button.setEnabled(False)
                 self.upload_page.cancel_button.setEnabled(False)
                 self.upload_page.result_button.setEnabled(True)
+                if "사용자 요청으로 중단" not in str(message):
+                    self._show_error_dialog("업로드 오류", message)
 
         return _MainWindow(settings_store)

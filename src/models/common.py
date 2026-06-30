@@ -206,6 +206,14 @@ class OptionCheckStatus(str, Enum):
     OPTION_NOT_FOUND = "OPTION_NOT_FOUND"
     OPTION_SOURCE_UNAVAILABLE = "OPTION_SOURCE_UNAVAILABLE"
     PRECONSTRUCTION_REQUIRED = "PRECONSTRUCTION_REQUIRED"
+    TRACKER_ITEM_LOOKUP_NOT_FOUND = "TRACKER_ITEM_LOOKUP_NOT_FOUND"
+    TRACKER_ITEM_LOOKUP_AMBIGUOUS = "TRACKER_ITEM_LOOKUP_AMBIGUOUS"
+    TRACKER_ITEM_REGEX_MISSING = "TRACKER_ITEM_REGEX_MISSING"
+
+
+class TrackerItemResolutionMode(str, Enum):
+    REGEX = "regex"
+    QUERY = "query"
 
 
 class UserLookupStatus(str, Enum):
@@ -240,6 +248,7 @@ class TrackerSchemaName(str, Enum):
 
 OPTION_CONTAINER_KEYS: tuple[str, ...] = ("items", "options", "references", "values")
 USER_SEARCH_RESULT_KEYS: tuple[str, ...] = ("users", "userRefs", "items", "references", "content")
+ITEM_SEARCH_RESULT_KEYS: tuple[str, ...] = ("items", "itemRefs", "references", "content")
 
 
 class DomainModel:

@@ -422,6 +422,90 @@ class WizardPayloadResolutionTest(unittest.TestCase):
         self.assertEqual(payload["name"], "REQ-1")
         self.assertEqual(payload["status"]["name"], "Open")
 
+    def test_preview_payload_applies_default_text_field_when_row_value_is_missing(self) -> None:
+        """행 값이 없으면 선택한 공통 기본값으로 텍스트 custom field를 채워야 한다."""
+        self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
+            {
+                "id": 1,
+                "name": "Summary",
+                "type": "TextField",
+                "trackerItemField": "name",
+                "valueModel": "TextFieldValue",
+            },
+            {
+                "id": 2,
+                "name": "담당자",
+                "type": "TextField",
+                "valueModel": "TextFieldValue",
+            },
+        ])
+        self.wizard.state.selected_mapping = {"summary": "Summary"}
+        self.wizard.state.upload_df = pd.DataFrame([
+            {"_row_id": 1, "upload_name": "REQ-1", "summary": "REQ-1"}
+        ])
+        self.wizard.process_option_mapping(
+            self.wizard.state.selected_mapping,
+            selected_default_values={"담당자": "홍길동"},
+        )
+
+        payload = self.wizard.preview_payload(1)
+
+        self.assertEqual(payload["name"], "REQ-1")
+        self.assertEqual(payload["customFields"][0]["name"], "담당자")
+        self.assertEqual(payload["customFields"][0]["value"], "홍길동")
+
+    def test_preview_payload_applies_default_user_reference_field_when_row_value_is_missing(self) -> None:
+        """행 값이 없으면 선택한 공통 기본값으로 UserReference custom field를 채워야 한다."""
+
+        class FakeUserClient:
+            def get_user_by_name(self, name: str) -> UserInfo:
+                if name == "Jane Doe":
+                    return UserInfo(id=101, name=name)
+                raise ValueError("user not found")
+
+            def get_user(self, user_id: int) -> UserInfo:
+                return UserInfo(id=user_id, name="Jane Doe")
+
+        wizard = CodebeamerUploadWizard(
+            client=FakeUserClient(),
+            processor=None,
+            mapper=self.mapper,
+        )
+        wizard.select_project(1)
+        wizard.select_tracker(1)
+        wizard.state.schema_df = self.mapper.flatten_schema_fields([
+            {
+                "id": 1,
+                "name": "Summary",
+                "type": "TextField",
+                "trackerItemField": "name",
+                "valueModel": "TextFieldValue",
+            },
+            {
+                "id": 2,
+                "name": "담당 사용자",
+                "type": "ReferenceField",
+                "referenceType": "UserReference",
+                "valueModel": "ChoiceFieldValue<UserReference>",
+            },
+        ])
+        wizard.state.selected_mapping = {"summary": "Summary"}
+        wizard.state.upload_df = pd.DataFrame([
+            {"_row_id": 1, "upload_name": "REQ-1", "summary": "REQ-1"}
+        ])
+        wizard.process_option_mapping(
+            wizard.state.selected_mapping,
+            selected_default_values={"담당 사용자": "Jane Doe"},
+        )
+
+        payload = wizard.preview_payload(1)
+
+        self.assertEqual(payload["name"], "REQ-1")
+        self.assertEqual(payload["customFields"][0]["name"], "담당 사용자")
+        self.assertEqual(payload["customFields"][0]["type"], "ChoiceFieldValue")
+        self.assertEqual(payload["customFields"][0]["values"][0]["id"], 101)
+        self.assertEqual(payload["customFields"][0]["values"][0]["type"], "UserReference")
+
     def test_process_option_mapping_reports_invalid_default_status_value(self) -> None:
         """잘못된 기본값은 option 검증 단계에서 바로 드러나야 한다."""
         self.wizard.state.schema_df = self.mapper.flatten_schema_fields([

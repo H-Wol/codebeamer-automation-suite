@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .services import DEFAULT_TRACKER_ITEM_ID_REGEX
 from .services import ROOT_ASSIGNMENT_MODE_FILE_SOURCE
 from .services import ROOT_ASSIGNMENT_MODE_FIXED_VALUE
+from src.models import TrackerItemResolutionMode
 
 
 USER_HIDDEN_TABLE_COLUMNS = {
@@ -145,6 +147,7 @@ def create_settings_page(
     QLineEdit = qt["QLineEdit"]
     QFrame = qt["QFrame"]
     QCheckBox = qt["QCheckBox"]
+    QFileDialog = qt["QFileDialog"]
     QSpinBox = qt["QSpinBox"]
     QDoubleSpinBox = qt["QDoubleSpinBox"]
     QPushButton = qt["QPushButton"]
@@ -166,6 +169,14 @@ def create_settings_page(
     password.setEchoMode(QLineEdit.EchoMode.Password)
     save_password = QCheckBox("비밀번호 저장")
     save_password.setChecked(initial_settings.save_password)
+    offline_mode = QCheckBox("오프라인 테스트 모드")
+    offline_mode.setChecked(bool(getattr(initial_settings, "offline_mode", False)))
+    offline_schema_path = QLineEdit(str(getattr(initial_settings, "offline_schema_path", "") or ""))
+    offline_schema_button = QPushButton("스키마 선택")
+    offline_config_path = QLineEdit(
+        str(getattr(initial_settings, "offline_tracker_configuration_path", "") or "")
+    )
+    offline_config_button = QPushButton("설정 선택")
     header_row = QSpinBox()
     header_row.setMinimum(1)
     header_row.setValue(initial_settings.excel_header_row)
@@ -186,13 +197,32 @@ def create_settings_page(
         base_url,
         username,
         password,
+        offline_schema_path,
+        offline_config_path,
     ):
         _configure_form_field(field_widget)
+
+    offline_schema_row_widget = QWidget()
+    offline_schema_row = QHBoxLayout(offline_schema_row_widget)
+    offline_schema_row.setContentsMargins(0, 0, 0, 0)
+    offline_schema_row.setSpacing(8)
+    offline_schema_row.addWidget(offline_schema_path, 1)
+    offline_schema_row.addWidget(offline_schema_button)
+
+    offline_config_row_widget = QWidget()
+    offline_config_row = QHBoxLayout(offline_config_row_widget)
+    offline_config_row.setContentsMargins(0, 0, 0, 0)
+    offline_config_row.setSpacing(8)
+    offline_config_row.addWidget(offline_config_path, 1)
+    offline_config_row.addWidget(offline_config_button)
 
     form.addRow("Base URL", base_url)
     form.addRow("Username", username)
     form.addRow("Password", password)
     form.addRow("", save_password)
+    form.addRow("", offline_mode)
+    form.addRow("Schema Snapshot", offline_schema_row_widget)
+    form.addRow("Config Snapshot", offline_config_row_widget)
     layout.addLayout(form)
 
     advanced_toggle = QToolButton()
@@ -243,6 +273,7 @@ def create_settings_page(
     status_label.setObjectName("status_label")
     status_label.hide()
     layout.addWidget(status_label)
+    page._current_settings = initial_settings
 
     buttons = QHBoxLayout()
     load_button = QPushButton("불러오기")
@@ -250,7 +281,10 @@ def create_settings_page(
     next_button = QPushButton("다음")
     next_button.setObjectName("primary_button")
     next_button.setEnabled(
-        bool(initial_settings.base_url and initial_settings.username and initial_settings.password)
+        bool(
+            getattr(initial_settings, "offline_mode", False)
+            and str(getattr(initial_settings, "offline_schema_path", "") or "").strip()
+        ) or bool(initial_settings.base_url and initial_settings.username and initial_settings.password)
     )
     buttons.addWidget(load_button)
     buttons.addWidget(save_button)
@@ -260,25 +294,42 @@ def create_settings_page(
     layout.addStretch(1)
 
     def _update_next_button_state() -> None:
-        next_button.setEnabled(
-            bool(base_url.text().strip() and username.text().strip() and password.text())
-        )
+        if offline_mode.isChecked():
+            next_button.setEnabled(bool(Path(offline_schema_path.text().strip()).is_file()))
+            return
+        next_button.setEnabled(bool(base_url.text().strip() and username.text().strip() and password.text()))
+
+    def _sync_offline_mode_state() -> None:
+        is_offline = bool(offline_mode.isChecked())
+        base_url.setEnabled(not is_offline)
+        username.setEnabled(not is_offline)
+        password.setEnabled(not is_offline)
+        save_password.setEnabled(not is_offline)
+        offline_schema_path.setEnabled(is_offline)
+        offline_schema_button.setEnabled(is_offline)
+        offline_config_path.setEnabled(is_offline)
+        offline_config_button.setEnabled(is_offline)
+        _update_next_button_state()
 
     def _collect_settings():
+        current_settings = getattr(page, "_current_settings", initial_settings)
         return type(initial_settings)(
             base_url=base_url.text().strip(),
             username=username.text().strip(),
             password=password.text(),
             save_password=save_password.isChecked(),
-            default_project_id=initial_settings.default_project_id,
-            default_tracker_id=initial_settings.default_tracker_id,
+            offline_mode=offline_mode.isChecked(),
+            offline_schema_path=offline_schema_path.text().strip(),
+            offline_tracker_configuration_path=offline_config_path.text().strip(),
+            default_project_id=str(getattr(current_settings, "default_project_id", "") or ""),
+            default_tracker_id=str(getattr(current_settings, "default_tracker_id", "") or ""),
             excel_header_row=header_row.value(),
             summary_column=summary_column.text().strip() or "Summary",
             excel_sheet_name=sheet_name.text().strip() or "0",
             rate_limit_retry_delay_seconds=retry_delay.value(),
             rate_limit_max_retries=retry_count.value(),
             output_dir=output_dir.text().strip() or "output",
-            last_file_path=initial_settings.last_file_path,
+            last_file_path=str(getattr(current_settings, "last_file_path", "") or ""),
         )
 
     def _set_status(message: str) -> None:
@@ -288,31 +339,60 @@ def create_settings_page(
         if callable(request_content_reflow):
             request_content_reflow(allow_grow=bool(message))
 
-    def _load():
-        loaded = settings_store.load()
+    def _apply_settings(loaded) -> None:
+        page._current_settings = loaded
         base_url.setText(loaded.base_url)
         username.setText(loaded.username)
         password.setText(loaded.password)
         save_password.setChecked(loaded.save_password)
+        offline_mode.setChecked(bool(getattr(loaded, "offline_mode", False)))
+        offline_schema_path.setText(str(getattr(loaded, "offline_schema_path", "") or ""))
+        offline_config_path.setText(str(getattr(loaded, "offline_tracker_configuration_path", "") or ""))
         header_row.setValue(loaded.excel_header_row)
         summary_column.setText(loaded.summary_column)
         sheet_name.setText(loaded.excel_sheet_name)
         retry_delay.setValue(loaded.rate_limit_retry_delay_seconds)
         retry_count.setValue(loaded.rate_limit_max_retries)
         output_dir.setText(loaded.output_dir)
-        _update_next_button_state()
+        _sync_offline_mode_state()
+
+    def _choose_snapshot_path(target_widget, *, title: str) -> None:
+        start_path = target_widget.text().strip() or str(getattr(page, "_current_settings", initial_settings).last_file_path or "")
+        selected, _ = QFileDialog.getOpenFileName(
+            page,
+            title,
+            start_path,
+            "JSON Files (*.json)",
+        )
+        if selected:
+            target_widget.setText(str(selected))
+
+    def _load():
+        loaded = settings_store.load()
+        _apply_settings(loaded)
         on_settings_changed(loaded)
         _set_status("설정을 불러왔습니다.")
 
     def _save():
         current = _collect_settings()
+        page._current_settings = current
         settings_store.save(current)
         on_settings_changed(current)
         _set_status("설정을 저장했습니다.")
 
     def _go_next():
         current = _collect_settings()
-        if not current.base_url or not current.username or not current.password:
+        if current.offline_mode:
+            if not current.offline_schema_path:
+                _set_status("오프라인 모드에서는 schema snapshot JSON 경로가 필요합니다.")
+                return
+            if not Path(current.offline_schema_path).is_file():
+                _set_status("선택한 schema snapshot JSON 파일을 찾을 수 없습니다.")
+                return
+            if current.offline_tracker_configuration_path and not Path(current.offline_tracker_configuration_path).is_file():
+                _set_status("선택한 tracker configuration snapshot JSON 파일을 찾을 수 없습니다.")
+                return
+        elif not current.base_url or not current.username or not current.password:
             _set_status("Base URL, Username, Password 는 필수입니다.")
             return
         on_settings_changed(current)
@@ -324,6 +404,14 @@ def create_settings_page(
     base_url.textChanged.connect(lambda _: _update_next_button_state())
     username.textChanged.connect(lambda _: _update_next_button_state())
     password.textChanged.connect(lambda _: _update_next_button_state())
+    offline_mode.toggled.connect(lambda _: _sync_offline_mode_state())
+    offline_schema_button.clicked.connect(
+        lambda: _choose_snapshot_path(offline_schema_path, title="오프라인 schema snapshot 선택")
+    )
+    offline_config_button.clicked.connect(
+        lambda: _choose_snapshot_path(offline_config_path, title="오프라인 tracker configuration 선택")
+    )
+    offline_schema_path.textChanged.connect(lambda _: _update_next_button_state())
     advanced_toggle.toggled.connect(
         lambda checked: (
             advanced_card.setVisible(checked),
@@ -334,6 +422,9 @@ def create_settings_page(
         )
     )
 
+    _sync_offline_mode_state()
+    page.get_settings = _collect_settings
+    page.set_settings = _apply_settings
     return page
 
 
@@ -342,6 +433,7 @@ def create_project_selection_page(
     on_settings_changed,
     on_connection_test,
     on_project_selected,
+    on_error=None,
 ):
     qt = _require_qt()
     QWidget = qt["QWidget"]
@@ -374,7 +466,11 @@ def create_project_selection_page(
     form.addRow("트래커", tracker_combo)
     layout.addLayout(form)
 
-    status_label = QLabel("연결 테스트를 실행하면 프로젝트 목록을 불러옵니다.")
+    status_label = QLabel(
+        "오프라인 모드에서는 schema snapshot 기준 가상 프로젝트/트래커를 불러옵니다."
+        if bool(getattr(initial_settings, "offline_mode", False))
+        else "연결 테스트를 실행하면 프로젝트 목록을 불러옵니다."
+    )
     status_label.setObjectName("status_label")
     layout.addWidget(status_label)
 
@@ -416,7 +512,10 @@ def create_project_selection_page(
         try:
             projects = on_connection_test(settings)
         except Exception as exc:
-            status_label.setText(f"프로젝트 조회 실패: {exc}")
+            message = f"프로젝트 조회 실패: {exc}"
+            status_label.setText(message)
+            if callable(on_error):
+                on_error("프로젝트 조회 실패", message)
             project_combo.clear()
             tracker_combo.clear()
             project_combo.setEnabled(False)
@@ -426,7 +525,11 @@ def create_project_selection_page(
             _update_next_button_state()
             return
         _set_items(project_combo, projects, page.selected_project_id)
-        status_label.setText("프로젝트 목록을 불러왔습니다.")
+        status_label.setText(
+            "오프라인 프로젝트 목록을 불러왔습니다."
+            if bool(getattr(settings, "offline_mode", False))
+            else "프로젝트 목록을 불러왔습니다."
+        )
         if project_combo.count() > 0:
             selected_index = project_combo.currentIndex()
             if selected_index < 0:
@@ -451,7 +554,10 @@ def create_project_selection_page(
         try:
             trackers = on_project_selected(settings, int(project_id))
         except Exception as exc:
-            status_label.setText(f"트래커 조회 실패: {exc}")
+            message = f"트래커 조회 실패: {exc}"
+            status_label.setText(message)
+            if callable(on_error):
+                on_error("트래커 조회 실패", message)
             tracker_combo.clear()
             tracker_combo.setEnabled(False)
             _update_next_button_state()
@@ -460,7 +566,10 @@ def create_project_selection_page(
         if tracker_combo.currentData() not in (None, ""):
             page.selected_tracker_id = str(tracker_combo.currentData())
         _update_next_button_state()
-        status_label.setText(f"프로젝트 {project_combo.currentText()}의 트래커를 불러왔습니다.")
+        if bool(getattr(settings, "offline_mode", False)):
+            status_label.setText("오프라인 tracker snapshot 정보를 불러왔습니다.")
+        else:
+            status_label.setText(f"프로젝트 {project_combo.currentText()}의 트래커를 불러왔습니다.")
 
     def _handle_tracker_changed(index: int) -> None:
         tracker_id = tracker_combo.itemData(index)
@@ -486,10 +595,31 @@ def create_project_selection_page(
     project_combo.currentIndexChanged.connect(_handle_project_changed)
     tracker_combo.currentIndexChanged.connect(_handle_tracker_changed)
 
+    def _load_selection(project_id: str, tracker_id: str) -> None:
+        page.selected_project_id = str(project_id or "")
+        page.selected_tracker_id = str(tracker_id or "")
+        if page.selected_project_id.isdigit() and project_combo.count() > 0:
+            project_index = project_combo.findData(int(page.selected_project_id))
+            if project_index >= 0:
+                project_combo.setCurrentIndex(project_index)
+        if page.selected_tracker_id.isdigit() and tracker_combo.count() > 0:
+            tracker_index = tracker_combo.findData(int(page.selected_tracker_id))
+            if tracker_index >= 0:
+                tracker_combo.setCurrentIndex(tracker_index)
+        _update_next_button_state()
+
+    def _get_selection() -> dict[str, str]:
+        return {
+            "project_id": str(page.selected_project_id or ""),
+            "tracker_id": str(page.selected_tracker_id or ""),
+        }
+
+    page.load_selection = _load_selection
+    page.get_selection = _get_selection
     return page
 
 
-def create_file_selection_page(initial_settings, on_file_state_changed, on_file_preview_requested):
+def create_file_selection_page(initial_settings, on_file_state_changed, on_file_preview_requested, on_error=None):
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -578,6 +708,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
 
     page._preview_ready = False
     page._selected_file_paths = [initial_settings.last_file_path] if initial_settings.last_file_path else []
+    page._preview_data = None
 
     def _update_next_button_state() -> None:
         next_button.setEnabled(bool(page._selected_file_paths) and page._preview_ready)
@@ -614,7 +745,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         preview_file.blockSignals(False)
 
     def _collect_state():
-        return {
+        state = {
             "file_path": _selected_preview_file_path(),
             "file_paths": list(page._selected_file_paths),
             "preview_file_path": _selected_preview_file_path(),
@@ -622,8 +753,11 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
             "header_row": header_row.value(),
             "summary_column": summary_column.currentText().strip() or "Summary",
         }
+        if page._preview_ready and page._preview_data is not None:
+            state["preview_data"] = page._preview_data
+        return state
 
-    def _set_preview(headers: list[str], rows: list[list[str]], suggested_summary: str) -> None:
+    def _set_preview(headers: list[str], rows: list[list[str]], resolved_summary: str) -> None:
         preview_table.clear()
         preview_table.setColumnCount(len(headers))
         preview_table.setRowCount(len(rows))
@@ -632,11 +766,11 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
             for col_index, value in enumerate(row):
                 preview_table.setItem(row_index, col_index, QTableWidgetItem(value))
         _configure_table_columns(preview_table, [180] * max(len(headers), 1))
-        if suggested_summary:
+        if resolved_summary:
             summary_column.blockSignals(True)
-            if summary_column.findText(suggested_summary) < 0:
-                summary_column.addItem(suggested_summary)
-            summary_column.setCurrentText(suggested_summary)
+            if summary_column.findText(resolved_summary) < 0:
+                summary_column.addItem(resolved_summary)
+            summary_column.setCurrentText(resolved_summary)
             summary_column.blockSignals(False)
 
     def _clear_preview() -> None:
@@ -646,6 +780,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
 
     def _mark_preview_dirty(*, clear_sheet_names: bool = False, message: str | None = None) -> None:
         page._preview_ready = False
+        page._preview_data = None
         _clear_preview()
         if clear_sheet_names:
             sheet_name.blockSignals(True)
@@ -680,14 +815,20 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         try:
             preview = on_file_preview_requested(
                 state["preview_file_path"],
+                file_paths=state["file_paths"],
                 sheet_name=state["sheet_name"],
                 header_row=state["header_row"],
+                summary_column=state["summary_column"],
             )
         except Exception as exc:
-            status_label.setText(f"파일 미리보기 실패: {exc}")
+            message = f"파일 미리보기 실패: {exc}"
+            status_label.setText(message)
+            if callable(on_error):
+                on_error("파일 미리보기 실패", message)
             return
         _set_sheet_names(preview.sheet_names, state["sheet_name"])
-        _set_preview(preview.headers, preview.rows, preview.suggested_summary)
+        _set_preview(preview.headers, preview.rows, getattr(preview, "summary_column", preview.suggested_summary))
+        page._preview_data = preview
         page._preview_ready = True
         _update_next_button_state()
         status_label.setText(f"{len(page._selected_file_paths)}개 파일 기준으로 시트 목록과 미리보기를 갱신했습니다.")
@@ -738,6 +879,53 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
 
     _set_preview_file_items(page._selected_file_paths, initial_settings.last_file_path)
     _update_file_display()
+
+    def _load_state(state: dict[str, object]) -> None:
+        loaded_state = dict(state or {})
+        loaded_file_paths = [
+            str(path).strip()
+            for path in loaded_state.get("file_paths") or []
+            if str(path).strip()
+        ]
+        if loaded_file_paths:
+            page._selected_file_paths = loaded_file_paths
+            _set_preview_file_items(
+                page._selected_file_paths,
+                str(loaded_state.get("preview_file_path") or ""),
+            )
+            _update_file_display()
+
+        sheet_name.blockSignals(True)
+        header_row.blockSignals(True)
+        summary_column.blockSignals(True)
+        try:
+            loaded_sheet_name = str(loaded_state.get("sheet_name") or "").strip()
+            loaded_header_row = int(loaded_state.get("header_row") or initial_settings.excel_header_row or 1)
+            loaded_summary = str(
+                loaded_state.get("summary_column") or initial_settings.summary_column or "Summary"
+            ).strip() or "Summary"
+
+            if loaded_sheet_name and sheet_name.findText(loaded_sheet_name) < 0:
+                sheet_name.addItem(loaded_sheet_name)
+            if loaded_summary and summary_column.findText(loaded_summary) < 0:
+                summary_column.addItem(loaded_summary)
+
+            if loaded_sheet_name:
+                sheet_name.setCurrentText(loaded_sheet_name)
+            header_row.setValue(max(1, loaded_header_row))
+            summary_column.setCurrentText(loaded_summary)
+        finally:
+            sheet_name.blockSignals(False)
+            header_row.blockSignals(False)
+            summary_column.blockSignals(False)
+
+        _mark_preview_dirty(
+            message="저장된 파일 설정을 불러왔습니다. '데이터 불러오기'를 눌러 다시 확인하세요.",
+        )
+        on_file_state_changed(_collect_state())
+
+    page.get_state = _collect_state
+    page.load_state = _load_state
     page.refresh_preview = _refresh_preview
 
     return page
@@ -769,6 +957,10 @@ def create_root_item_page(on_preview_requested):
     description_label.setWordWrap(True)
     description_label.setObjectName("section_label")
     layout.addWidget(description_label)
+
+    enable_root_item = QCheckBox("파일별 상단 데이터 생성")
+    enable_root_item.setChecked(True)
+    layout.addWidget(enable_root_item)
 
     form = QFormLayout()
     _configure_form_layout(form)
@@ -820,6 +1012,14 @@ def create_root_item_page(on_preview_requested):
     page._field_candidates = []
     page._current_preview_context = None
 
+    def _sync_root_enabled_state(enabled: bool) -> None:
+        regex_target.setEnabled(enabled)
+        regex_pattern.setEnabled(enabled)
+        preview_table.setEnabled(enabled)
+        field_table.setEnabled(enabled)
+        preview_label.setEnabled(enabled)
+        field_label.setEnabled(enabled)
+
     def _current_field_assignments() -> dict[str, dict[str, object]]:
         field_assignments: dict[str, dict[str, object]] = {}
         for row_index in range(field_table.rowCount()):
@@ -829,10 +1029,15 @@ def create_root_item_page(on_preview_requested):
             field_item = field_table.item(row_index, 1)
             if enabled_widget is None or mode_combo is None or value_combo is None or field_item is None:
                 continue
+            mode_key = str(mode_combo.currentData() or ROOT_ASSIGNMENT_MODE_FILE_SOURCE)
             field_assignments[field_item.text()] = {
                 "enabled": bool(enabled_widget.isChecked()),
-                "mode": str(mode_combo.currentData() or ROOT_ASSIGNMENT_MODE_FILE_SOURCE),
-                "value": str(value_combo.currentData() or "").strip(),
+                "mode": mode_key,
+                "value": (
+                    str(value_combo.currentData() or "").strip()
+                    if mode_key == ROOT_ASSIGNMENT_MODE_FILE_SOURCE
+                    else value_combo.currentText().strip()
+                ),
             }
         return field_assignments
 
@@ -851,6 +1056,7 @@ def create_root_item_page(on_preview_requested):
     def get_config() -> dict[str, object]:
         field_assignments = _current_field_assignments()
         return {
+            "enabled": bool(enable_root_item.isChecked()),
             "regex_pattern": regex_pattern.text().strip(),
             "regex_target": str(regex_target.currentData() or "file_stem"),
             "field_assignments": field_assignments,
@@ -872,23 +1078,37 @@ def create_root_item_page(on_preview_requested):
         if bool(candidate.allows_file_source):
             options.append(("파일명/정규식", ROOT_ASSIGNMENT_MODE_FILE_SOURCE))
         if bool(candidate.allows_fixed_value):
-            options.append(("스키마 선택값", ROOT_ASSIGNMENT_MODE_FIXED_VALUE))
+            options.append((
+                "직접 입력" if bool(getattr(candidate, "allows_custom_value", False)) else "고정값",
+                ROOT_ASSIGNMENT_MODE_FIXED_VALUE,
+            ))
         return options
 
     def _populate_value_combo(value_combo, candidate, preview_context, mode_key: str, selected_value: str) -> None:
         value_combo.blockSignals(True)
         value_combo.clear()
+        value_combo.setEditable(False)
         value_combo.addItem("", "")
 
         if mode_key == ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
             for option in preview_context.source_options:
                 value_combo.addItem(str(option.label), str(option.key))
+            selected_index = value_combo.findData(selected_value)
+            value_combo.setCurrentIndex(selected_index if selected_index >= 0 else 0)
         elif mode_key == ROOT_ASSIGNMENT_MODE_FIXED_VALUE:
-            for option_name in getattr(candidate, "fixed_options", []):
-                value_combo.addItem(str(option_name), str(option_name))
-
-        selected_index = value_combo.findData(selected_value)
-        value_combo.setCurrentIndex(selected_index if selected_index >= 0 else 0)
+            if bool(getattr(candidate, "allows_custom_value", False)):
+                value_combo.setEditable(True)
+                if value_combo.lineEdit() is not None:
+                    value_combo.lineEdit().setPlaceholderText("직접 입력")
+                value_combo.setCurrentText(selected_value)
+            else:
+                for option_name in getattr(candidate, "fixed_options", []):
+                    value_combo.addItem(str(option_name), str(option_name))
+                selected_index = value_combo.findData(selected_value)
+                value_combo.setCurrentIndex(selected_index if selected_index >= 0 else 0)
+        else:
+            selected_index = value_combo.findData(selected_value)
+            value_combo.setCurrentIndex(selected_index if selected_index >= 0 else 0)
         value_combo.blockSignals(False)
 
     def _sync_row_enabled_state(enabled_widget, mode_combo, value_combo, *, candidate) -> None:
@@ -913,11 +1133,15 @@ def create_root_item_page(on_preview_requested):
 
         regex_pattern.blockSignals(True)
         regex_target.blockSignals(True)
+        enable_root_item.blockSignals(True)
+        enable_root_item.setChecked(bool(getattr(preview_context, "enabled", True)))
         regex_pattern.setText(str(preview_context.regex_pattern or ""))
         target_index = regex_target.findData(str(preview_context.regex_target or "file_stem"))
         regex_target.setCurrentIndex(target_index if target_index >= 0 else 0)
         regex_pattern.blockSignals(False)
         regex_target.blockSignals(False)
+        enable_root_item.blockSignals(False)
+        _sync_root_enabled_state(bool(getattr(preview_context, "enabled", True)))
 
         preview_headers = [
             _column_label(column_name, preview_context.source_options)
@@ -1002,7 +1226,7 @@ def create_root_item_page(on_preview_requested):
 
             enabled_widget.toggled.connect(_on_enabled_toggled)
             mode_combo.currentIndexChanged.connect(_on_mode_changed)
-            value_combo.currentIndexChanged.connect(lambda _index: _refresh_preview())
+            value_combo.currentTextChanged.connect(lambda _text: _refresh_preview())
 
         _configure_table_columns(field_table, [80, 240, 180, 90, 160, 240])
         status_label.setText(str(preview_context.status_message or ""))
@@ -1013,6 +1237,7 @@ def create_root_item_page(on_preview_requested):
     next_button.clicked.connect(lambda: page.request_next())
     regex_pattern.textChanged.connect(lambda _text: _refresh_preview())
     regex_target.currentIndexChanged.connect(lambda _index: _refresh_preview())
+    enable_root_item.toggled.connect(lambda checked: (_sync_root_enabled_state(bool(checked)), _refresh_preview()))
 
     page.get_config = get_config
     page.load_context = load_context
@@ -1051,8 +1276,9 @@ def create_placeholder_page(title_text: str, description: str):
     return page
 
 
-def create_mapping_page(on_validate_requested):
+def create_mapping_page(on_validate_requested, on_error=None):
     qt = _require_qt()
+    Qt = qt["Qt"]
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
     QHBoxLayout = qt["QHBoxLayout"]
@@ -1062,6 +1288,7 @@ def create_mapping_page(on_validate_requested):
     QTableWidgetItem = qt["QTableWidgetItem"]
     QCheckBox = qt["QCheckBox"]
     QComboBox = qt["QComboBox"]
+    QLineEdit = qt["QLineEdit"]
 
     page = QWidget()
     layout = QVBoxLayout(page)
@@ -1091,6 +1318,22 @@ def create_mapping_page(on_validate_requested):
     _configure_table_columns(default_table, [240, 180, 240, 90])
     layout.addWidget(default_table)
 
+    tracker_item_label = QLabel("Tracker Item 처리")
+    tracker_item_label.setObjectName("section_label")
+    layout.addWidget(tracker_item_label)
+
+    tracker_item_help_label = QLabel(
+        "TrackerItemChoiceField 는 정규식으로 ID를 추출하거나, configuration 기반 source tracker에서 이름으로 미리 조회할 수 있습니다."
+    )
+    tracker_item_help_label.setWordWrap(True)
+    layout.addWidget(tracker_item_help_label)
+
+    tracker_item_table = QTableWidget(0, 5)
+    tracker_item_table.setHorizontalHeaderLabels(["Excel 컬럼", "Codebeamer 필드", "방식", "정규식", "조회 소스"])
+    tracker_item_table.setAlternatingRowColors(True)
+    _configure_table_columns(tracker_item_table, [220, 220, 140, 280, 200])
+    layout.addWidget(tracker_item_table)
+
     status_label = QLabel("")
     status_label.setObjectName("status_label")
     layout.addWidget(status_label)
@@ -1110,10 +1353,130 @@ def create_mapping_page(on_validate_requested):
 
     page._mapping_validated = False
     page._schema_rows_by_name = {}
+    page._tracker_item_settings = {}
 
     def _mark_dirty() -> None:
         page._mapping_validated = False
         next_button.setEnabled(False)
+
+    def _tracker_item_candidates(mapping: dict[str, str]) -> list[dict[str, object]]:
+        candidates: list[dict[str, object]] = []
+        for df_column, schema_field in mapping.items():
+            schema_row = page._schema_rows_by_name.get(schema_field, {})
+            if str(schema_row.get("field_type") or "").strip() != "TrackerItemChoiceField":
+                continue
+            source_tracker_ids = [
+                int(value)
+                for value in (schema_row.get("tracker_item_source_tracker_ids") or [])
+                if str(value).strip()
+            ]
+            candidates.append({
+                "df_column": df_column,
+                "schema_field": schema_field,
+                "source_tracker_ids": source_tracker_ids,
+                "supports_query": bool(source_tracker_ids),
+                "query_status": str(schema_row.get("tracker_item_query_status") or "unavailable").strip(),
+            })
+        return candidates
+
+    def _sync_tracker_item_regex_state(mode_combo, regex_edit) -> None:
+        is_regex = mode_combo.currentData() == TrackerItemResolutionMode.REGEX.value
+        regex_edit.setEnabled(is_regex)
+        regex_edit.setPlaceholderText(
+            "ID를 추출할 정규식"
+            if is_regex
+            else "query 모드에서는 선택 파일 전체 값을 중복 제거 후 사전 조회합니다."
+        )
+
+    def _populate_tracker_item_table(mapping: dict[str, str], tracker_item_settings: dict[str, dict[str, object]]) -> None:
+        page._tracker_item_settings = {
+            str(schema_field): dict(setting)
+            for schema_field, setting in (tracker_item_settings or {}).items()
+            if str(schema_field).strip() and isinstance(setting, dict)
+        }
+        candidates = _tracker_item_candidates(mapping)
+        tracker_item_table.setRowCount(len(candidates))
+
+        for row_index, candidate in enumerate(candidates):
+            df_column = str(candidate.get("df_column") or "")
+            schema_field = str(candidate.get("schema_field") or "")
+            supports_query = bool(candidate.get("supports_query"))
+            source_tracker_ids = list(candidate.get("source_tracker_ids") or [])
+            query_status = str(candidate.get("query_status") or "unavailable").strip()
+            selected_setting = page._tracker_item_settings.get(schema_field, {})
+            default_mode = (
+                TrackerItemResolutionMode.QUERY.value
+                if supports_query
+                else TrackerItemResolutionMode.REGEX.value
+            )
+            selected_mode = str(selected_setting.get("mode") or default_mode).strip()
+            if selected_mode == TrackerItemResolutionMode.QUERY.value and not supports_query:
+                selected_mode = TrackerItemResolutionMode.REGEX.value
+            selected_regex = str(selected_setting.get("regex_pattern") or DEFAULT_TRACKER_ITEM_ID_REGEX).strip()
+
+            column_item = QTableWidgetItem(df_column)
+            column_item.setData(Qt.ItemDataRole.UserRole, {
+                "schema_field": schema_field,
+                "source_tracker_ids": source_tracker_ids,
+            })
+            tracker_item_table.setItem(row_index, 0, column_item)
+            tracker_item_table.setItem(row_index, 1, QTableWidgetItem(schema_field))
+
+            mode_combo = QComboBox()
+            mode_combo.addItem("정규식 ID 추출", TrackerItemResolutionMode.REGEX.value)
+            if supports_query:
+                mode_combo.addItem("이름/summary 조회", TrackerItemResolutionMode.QUERY.value)
+            mode_index = mode_combo.findData(selected_mode)
+            mode_combo.setCurrentIndex(mode_index if mode_index >= 0 else 0)
+            tracker_item_table.setCellWidget(row_index, 2, mode_combo)
+
+            regex_edit = QLineEdit(selected_regex)
+            tracker_item_table.setCellWidget(row_index, 3, regex_edit)
+            _sync_tracker_item_regex_state(mode_combo, regex_edit)
+
+            source_text = (
+                ", ".join(f"tracker {tracker_id}" for tracker_id in source_tracker_ids)
+                if source_tracker_ids
+                else (
+                    "미지원 구조(정규식만 지원)"
+                    if query_status == "unsupported"
+                    else "configuration source 없음"
+                )
+            )
+            tracker_item_table.setItem(row_index, 4, QTableWidgetItem(source_text))
+
+            mode_combo.currentIndexChanged.connect(
+                lambda _index, combo=mode_combo, edit=regex_edit: (_sync_tracker_item_regex_state(combo, edit), _mark_dirty())
+            )
+            regex_edit.textChanged.connect(lambda _text: _mark_dirty())
+
+        _configure_table_columns(tracker_item_table, [220, 220, 140, 280, 200])
+        if candidates:
+            tracker_item_help_label.setText(
+                "TrackerItemChoiceField 는 정규식 ID 추출 또는 source tracker 사전 조회 중 하나를 선택하세요."
+            )
+        else:
+            tracker_item_help_label.setText("현재 매핑에는 별도 Tracker Item 처리 설정이 필요한 필드가 없습니다.")
+
+    def _configure_default_value_widget(combo, candidate, selected_default: str) -> None:
+        combo.blockSignals(True)
+        combo.clear()
+        combo.setEditable(False)
+        combo.addItem("")
+
+        options = list(getattr(candidate, "options", []) or [])
+        for option_name in options:
+            combo.addItem(str(option_name))
+
+        if bool(getattr(candidate, "allows_custom_value", False)):
+            combo.setEditable(True)
+            if combo.lineEdit() is not None:
+                combo.lineEdit().setPlaceholderText("직접 입력")
+            combo.setCurrentText(selected_default)
+        else:
+            target_index = combo.findText(selected_default)
+            combo.setCurrentIndex(target_index if target_index >= 0 else 0)
+        combo.blockSignals(False)
 
     def load_context(
         upload_columns: list[str],
@@ -1121,6 +1484,7 @@ def create_mapping_page(on_validate_requested):
         selected_mapping: dict[str, str],
         default_value_candidates: list,
         selected_default_values: dict[str, str],
+        selected_tracker_item_settings: dict[str, dict[str, object]],
     ) -> None:
         page._mapping_validated = False
         next_button.setEnabled(False)
@@ -1156,10 +1520,13 @@ def create_mapping_page(on_validate_requested):
                 table.setItem(row, 3, QTableWidgetItem(str(schema.get("field_type") or "")))
                 table.setItem(row, 4, QTableWidgetItem(str(bool(schema.get("multiple_values", False)))))
                 table.setItem(row, 5, QTableWidgetItem("yes" if schema.get("is_supported", True) else "no"))
+                _populate_tracker_item_table(get_selected_mapping(), get_selected_tracker_item_settings())
                 _mark_dirty()
 
             combo.currentTextChanged.connect(_on_combo_changed)
-            enabled_widget.toggled.connect(lambda _checked: _mark_dirty())
+            enabled_widget.toggled.connect(
+                lambda _checked: (_populate_tracker_item_table(get_selected_mapping(), get_selected_tracker_item_settings()), _mark_dirty())
+            )
 
         default_table.setRowCount(len(default_value_candidates))
         for row_index, candidate in enumerate(default_value_candidates):
@@ -1168,11 +1535,8 @@ def create_mapping_page(on_validate_requested):
             default_table.setItem(row_index, 1, QTableWidgetItem(str(getattr(candidate, "field_type", ""))))
 
             combo = QComboBox()
-            combo.addItem("")
-            combo.addItems(list(getattr(candidate, "options", [])))
             selected_default = str(selected_default_values.get(schema_field, "") or "")
-            if selected_default and combo.findText(selected_default) >= 0:
-                combo.setCurrentText(selected_default)
+            _configure_default_value_widget(combo, candidate, selected_default)
             combo.currentTextChanged.connect(lambda _text: _mark_dirty())
             default_table.setCellWidget(row_index, 2, combo)
 
@@ -1184,6 +1548,7 @@ def create_mapping_page(on_validate_requested):
 
         _configure_table_columns(table, [90, 240, 240, 180, 100, 100])
         _configure_table_columns(default_table, [240, 180, 240, 90])
+        _populate_tracker_item_table(selected_mapping, selected_tracker_item_settings)
         info_label.setText(f"매핑 대상 컬럼 {len(upload_columns)}개. id, parent 는 제외됩니다.")
         if default_value_candidates:
             default_help_label.setText("행 값이 있으면 행 값이 우선하고, 비어 있으면 아래 기본값을 사용합니다.")
@@ -1222,15 +1587,41 @@ def create_mapping_page(on_validate_requested):
             default_values[field_item.text()] = selected_value
         return default_values
 
+    def get_selected_tracker_item_settings() -> dict[str, dict[str, object]]:
+        settings: dict[str, dict[str, object]] = {}
+        for row_index in range(tracker_item_table.rowCount()):
+            source_item = tracker_item_table.item(row_index, 0)
+            mode_combo = tracker_item_table.cellWidget(row_index, 2)
+            regex_edit = tracker_item_table.cellWidget(row_index, 3)
+            if source_item is None or mode_combo is None or regex_edit is None:
+                continue
+            metadata = source_item.data(Qt.ItemDataRole.UserRole) or {}
+            schema_field = str(metadata.get("schema_field") or "").strip()
+            if not schema_field:
+                continue
+            settings[schema_field] = {
+                "mode": str(mode_combo.currentData() or TrackerItemResolutionMode.REGEX.value),
+                "regex_pattern": regex_edit.text().strip(),
+                "source_tracker_ids": list(metadata.get("source_tracker_ids") or []),
+            }
+        return settings
+
     def _validate() -> None:
         mapping = get_selected_mapping()
         if not mapping:
             status_label.setText("최소 1개 이상의 컬럼을 매핑해야 합니다.")
             return
         try:
-            on_validate_requested(mapping, get_selected_default_values())
+            on_validate_requested(
+                mapping,
+                get_selected_default_values(),
+                get_selected_tracker_item_settings(),
+            )
         except Exception as exc:
-            status_label.setText(f"검증 실패: {exc}")
+            message = f"검증 실패: {exc}"
+            status_label.setText(message)
+            if callable(on_error):
+                on_error("검증 실패", message)
             page._mapping_validated = False
             next_button.setEnabled(False)
             return
@@ -1245,6 +1636,7 @@ def create_mapping_page(on_validate_requested):
     page.load_context = load_context
     page.get_selected_mapping = get_selected_mapping
     page.get_selected_default_values = get_selected_default_values
+    page.get_selected_tracker_item_settings = get_selected_tracker_item_settings
     return page
 
 
@@ -1314,13 +1706,22 @@ def create_validation_page():
         warning_rows = int(summary_stats.get("warning_rows", 0))
         config_errors = int(summary_stats.get("config_errors", 0))
         config_warnings = int(summary_stats.get("config_warnings", 0))
+        file_count = int(summary_stats.get("file_count", 1))
+        batch_total_rows = int(summary_stats.get("batch_total_rows", total_rows))
 
-        summary_parts = [
-            f"전체 {total_rows}행",
+        summary_parts = []
+        if file_count > 1:
+            summary_parts.append(f"선택 파일 {file_count}개")
+            summary_parts.append(f"전체 예상 항목 {batch_total_rows}행")
+            summary_parts.append(f"대표 파일 검증 {total_rows}행")
+        else:
+            summary_parts.append(f"전체 {total_rows}행")
+
+        summary_parts.extend([
             f"바로 업로드 가능 {ready_rows}행",
             f"수정 필요 {error_rows}행",
             f"안내 {warning_rows}행",
-        ]
+        ])
         if config_errors:
             summary_parts.append(f"설정 오류 {config_errors}건")
         if config_warnings:
@@ -1369,10 +1770,12 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     layout.addWidget(page.progress_bar)
 
     page.current_label = QLabel("현재 항목: -")
+    page.total_label = QLabel("총 대상 0건 / 완료 0건")
     page.counter_label = QLabel("성공 0 / 실패 0 / 재시도 0")
     page.status_label = QLabel("준비")
     page.status_label.setObjectName("status_label")
     layout.addWidget(page.current_label)
+    layout.addWidget(page.total_label)
     layout.addWidget(page.counter_label)
     layout.addWidget(page.status_label)
 
@@ -1389,6 +1792,12 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     opts.addStretch(1)
     layout.addLayout(opts)
 
+    page.log_view = QPlainTextEdit()
+    page.log_view.setReadOnly(True)
+    page.log_view.setPlaceholderText("업로드 진행 로그와 시각이 여기에 표시됩니다.")
+    page.log_view.setMinimumHeight(120)
+    layout.addWidget(page.log_view)
+
     activity_label = QLabel("항목별 진행 기록")
     activity_label.setObjectName("section_label")
     layout.addWidget(activity_label)
@@ -1396,19 +1805,16 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     page.activity_table = QTableWidget(0, 7)
     page.activity_table.setHorizontalHeaderLabels(["파일", "항목", "상태", "시작", "완료", "소요", "로그"])
     page.activity_table.setAlternatingRowColors(True)
+    page.activity_table.setMinimumHeight(220)
     _configure_table_columns(page.activity_table, [160, 180, 100, 110, 110, 90, 320])
     layout.addWidget(page.activity_table)
 
     page._activity_row_map = {}
 
-    page.log_view = QPlainTextEdit()
-    page.log_view.setReadOnly(True)
-    page.log_view.setPlaceholderText("업로드 진행 로그와 시각이 여기에 표시됩니다.")
-    layout.addWidget(page.log_view)
-
     page.response_view = QPlainTextEdit()
     page.response_view.setReadOnly(True)
     page.response_view.setPlaceholderText("실패한 요청의 서버 응답 JSON이 여기에 표시됩니다.")
+    page.response_view.setMinimumHeight(100)
     layout.addWidget(page.response_view)
 
     buttons = QHBoxLayout()
@@ -1466,6 +1872,7 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
         _set_activity_cell(row_index, 5, "")
         _set_activity_cell(row_index, 6, "업로드 시작")
         _configure_table_columns(page.activity_table, [160, 180, 100, 110, 110, 90, 320])
+        page.activity_table.scrollToBottom()
 
     def record_activity_finished(
         row_key: str,
@@ -1485,11 +1892,13 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
         _set_activity_cell(row_index, 5, duration_text)
         _set_activity_cell(row_index, 6, message)
         _configure_table_columns(page.activity_table, [160, 180, 100, 110, 110, 90, 320])
+        page.activity_table.scrollToBottom()
 
     def reset(total_count: int) -> None:
         page.progress_bar.setMaximum(max(total_count, 1))
         page.progress_bar.setValue(0)
         page.current_label.setText("현재 항목: -")
+        page.total_label.setText("총 대상 0건 / 완료 0건")
         page.counter_label.setText("성공 0 / 실패 0 / 재시도 0")
         page.status_label.setText("준비")
         page.time_label.setText("배치 시간: -")
