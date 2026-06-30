@@ -173,19 +173,25 @@ class TrackerItemQueryFakeClient(FakeClient):
 
     def get_tracker_configuration(self, tracker_id: int):
         del tracker_id
-        return [
-            {
-                "label": "연관 요구사항",
-                "choiceConfigOptionsSetApi": {
-                    "referenceFilters": [
-                        {
-                            "domainType": "TRACKER",
-                            "domainId": 13526611,
-                        }
-                    ]
-                },
-            }
-        ]
+        return {
+            "basicInformation": {
+                "trackerId": 1000,
+                "name": "Test Tracker",
+            },
+            "fields": [
+                {
+                    "label": "연관 요구사항",
+                    "choiceConfigOptionsSetApi": {
+                        "referenceFilters": [
+                            {
+                                "domainType": "TRACKER",
+                                "domainId": 13526611,
+                            }
+                        ]
+                    },
+                }
+            ],
+        }
 
     def search_tracker_items_by_name(self, *, tracker_id: int, name: str, **kwargs):
         del kwargs
@@ -201,19 +207,25 @@ class TrackerItemQueryFakeClient(FakeClient):
 class TrackerItemNonTrackerConfigFakeClient(TrackerItemQueryFakeClient):
     def get_tracker_configuration(self, tracker_id: int):
         del tracker_id
-        return [
-            {
-                "label": "연관 요구사항",
-                "choiceConfigOptionsSetApi": {
-                    "referenceFilters": [
-                        {
-                            "domainType": "PROJECT",
-                            "domainId": 13526611,
-                        }
-                    ]
-                },
-            }
-        ]
+        return {
+            "basicInformation": {
+                "trackerId": 1000,
+                "name": "Test Tracker",
+            },
+            "fields": [
+                {
+                    "label": "연관 요구사항",
+                    "choiceConfigOptionsSetApi": {
+                        "referenceFilters": [
+                            {
+                                "domainType": "PROJECT",
+                                "domainId": 13526611,
+                            }
+                        ]
+                    },
+                }
+            ],
+        }
 
 
 class TrackerItemReferenceIdConfigFakeClient(TrackerItemQueryFakeClient):
@@ -226,20 +238,26 @@ class TrackerItemReferenceIdConfigFakeClient(TrackerItemQueryFakeClient):
 
     def get_tracker_configuration(self, tracker_id: int):
         del tracker_id
-        return [
-            {
-                "referenceId": 7,
-                "label": "Software Unit Design Specification",
-                "choiceConfigOptionsSetApi": {
-                    "referenceFilters": [
-                        {
-                            "domainType": "TRACKER",
-                            "domainId": 13526611,
-                        }
-                    ]
-                },
-            }
-        ]
+        return {
+            "basicInformation": {
+                "trackerId": 1000,
+                "name": "Test Tracker",
+            },
+            "fields": [
+                {
+                    "referenceId": 7,
+                    "label": "Software Unit Design Specification",
+                    "choiceConfigOptionsSetApi": {
+                        "referenceFilters": [
+                            {
+                                "domainType": "TRACKER",
+                                "domainId": 13526611,
+                            }
+                        ]
+                    },
+                }
+            ],
+        }
 
 
 class UserReferenceDefaultFakeClient(FakeClient):

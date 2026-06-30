@@ -488,6 +488,23 @@ class GuiUploadPipelineService:
     @classmethod
     def _extract_configuration_field_records(cls, payload: Any) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
+        seen_nodes: set[int] = set()
+
+        def _looks_like_field_record(node: Any) -> bool:
+            if not isinstance(node, dict):
+                return False
+            if "referenceId" in node:
+                return True
+            if not any(key in node for key in ("choiceConfigOptionsSetApi", "referenceFilters")):
+                return False
+            return any(key in node for key in ("label", "name", "title"))
+
+        def _append_record(node: dict[str, Any]) -> None:
+            node_id = id(node)
+            if node_id in seen_nodes:
+                return
+            seen_nodes.add(node_id)
+            records.append(node)
 
         def _walk(node: Any) -> None:
             if isinstance(node, list):
@@ -497,14 +514,22 @@ class GuiUploadPipelineService:
             if not isinstance(node, dict):
                 return
 
-            if (
-                any(key in node for key in ("choiceConfigOptionsSetApi", "referenceFilters"))
-                and any(key in node for key in ("label", "name", "title", "referenceId"))
-            ):
-                records.append(node)
+            if _looks_like_field_record(node):
+                _append_record(node)
 
             for value in node.values():
                 _walk(value)
+
+        if isinstance(payload, dict):
+            fields_container = payload.get("fields")
+            if isinstance(fields_container, list):
+                _walk(fields_container)
+                if records:
+                    return records
+            elif isinstance(fields_container, dict) and isinstance(fields_container.get("value"), list):
+                _walk(fields_container["value"])
+                if records:
+                    return records
 
         _walk(payload)
         return records
