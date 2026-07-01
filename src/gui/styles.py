@@ -62,6 +62,16 @@ QLabel#mode_title {
     font-weight: 700;
 }
 
+QLabel#mode_badge {
+    color: #0E4A84;
+    background: #EAF4FB;
+    border: 1px solid #CBE4F3;
+    border-radius: 10px;
+    padding: 4px 10px;
+    font-size: 10px;
+    font-weight: 700;
+}
+
 QLabel#status_label {
     color: #0E4A84;
     background: #EAF4FB;
@@ -216,6 +226,20 @@ QComboBox::down-arrow {
     image: url("{combo_arrow}");
     width: 12px;
     height: 12px;
+}
+
+QComboBox QAbstractItemView {
+    color: #13263A;
+    background: #FFFFFF;
+    border: 1px solid #C9D5E2;
+    selection-background-color: #DCEFFD;
+    selection-color: #13263A;
+    outline: 0;
+}
+
+QComboBox QAbstractItemView::item {
+    min-height: 24px;
+    padding: 4px 8px;
 }
 
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
@@ -388,6 +412,12 @@ QLabel#mode_title {
     color: #153A3F;
 }
 
+QLabel#mode_badge {
+    color: #0B6E70;
+    background: #E5F7F6;
+    border: 1px solid #BFE6E2;
+}
+
 QLabel#status_label {
     color: #0B6E70;
     background: #E5F7F6;
@@ -445,6 +475,14 @@ QLabel#step_badge[complete="true"] {
 
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
     border: 1px solid #16B3AC;
+}
+
+QComboBox QAbstractItemView {
+    color: #153A3F;
+    background: #FFFFFF;
+    border: 1px solid #C7DFE2;
+    selection-background-color: #D9F0EF;
+    selection-color: #153A3F;
 }
 
 QPushButton:hover {

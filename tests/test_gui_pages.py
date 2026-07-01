@@ -11,9 +11,9 @@ from src.gui.pages import _tracker_item_sample_values
 
 
 class GuiPagesSettingsModeTest(unittest.TestCase):
-    def test_settings_mode_toggle_text_matches_enabled_state(self) -> None:
-        self.assertEqual(_settings_mode_toggle_text(True), "켜짐")
-        self.assertEqual(_settings_mode_toggle_text(False), "꺼짐")
+    def test_settings_mode_toggle_text_stays_compact_in_both_states(self) -> None:
+        self.assertEqual(_settings_mode_toggle_text(True), "테스트")
+        self.assertEqual(_settings_mode_toggle_text(False), "테스트")
 
     def test_settings_mode_description_changes_by_mode(self) -> None:
         self.assertIn("snapshot", _settings_mode_description(True))

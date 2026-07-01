@@ -43,7 +43,7 @@ def _is_hidden_user_table_column(column_name: object) -> bool:
 
 
 def _settings_mode_toggle_text(is_offline: bool) -> str:
-    return "켜짐" if bool(is_offline) else "꺼짐"
+    return "테스트"
 
 
 def _settings_mode_description(is_offline: bool) -> str:
@@ -279,27 +279,21 @@ def create_settings_page(
     password.setEchoMode(QLineEdit.EchoMode.Password)
     save_password = QCheckBox("비밀번호 저장")
     save_password.setChecked(initial_settings.save_password)
-    mode_card = QFrame()
-    mode_card.setObjectName("advanced_card")
-    mode_layout = QHBoxLayout(mode_card)
-    mode_layout.setContentsMargins(14, 12, 14, 12)
-    mode_layout.setSpacing(12)
-    mode_copy_layout = QVBoxLayout()
-    mode_copy_layout.setContentsMargins(0, 0, 0, 0)
-    mode_copy_layout.setSpacing(4)
-    mode_title = QLabel("테스트 모드")
-    mode_title.setObjectName("mode_title")
-    mode_description = QLabel("")
-    mode_description.setObjectName("section_label")
-    mode_description.setWordWrap(True)
-    mode_copy_layout.addWidget(mode_title)
-    mode_copy_layout.addWidget(mode_description)
-    mode_layout.addLayout(mode_copy_layout, 1)
     mode_toggle = QPushButton()
     mode_toggle.setObjectName("mode_toggle")
     mode_toggle.setCheckable(True)
     mode_toggle.setChecked(bool(getattr(initial_settings, "offline_mode", False)))
-    mode_layout.addWidget(mode_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
+    mode_toggle.setToolTip("저장된 schema/config snapshot으로 검증하는 테스트 모드입니다.")
+    mode_badge = QLabel("테스트 모드")
+    mode_badge.setObjectName("mode_badge")
+    mode_badge.hide()
+    mode_row_widget = QWidget()
+    mode_row = QHBoxLayout(mode_row_widget)
+    mode_row.setContentsMargins(0, 0, 0, 0)
+    mode_row.setSpacing(8)
+    mode_row.addStretch(1)
+    mode_row.addWidget(mode_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+    mode_row.addWidget(mode_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
     offline_schema_path = QLineEdit(str(getattr(initial_settings, "offline_schema_path", "") or ""))
     offline_schema_button = QPushButton("스키마 선택")
     offline_config_path = QLineEdit(
@@ -333,8 +327,6 @@ def create_settings_page(
     ):
         _configure_form_field(field_widget)
 
-    layout.addWidget(mode_card)
-
     offline_schema_row_widget = QWidget()
     offline_schema_row = QHBoxLayout(offline_schema_row_widget)
     offline_schema_row.setContentsMargins(0, 0, 0, 0)
@@ -354,6 +346,7 @@ def create_settings_page(
     form.addRow("Password", password)
     form.addRow("", save_password)
     form.addRow("테마", theme_combo)
+    form.addRow("", mode_row_widget)
     layout.addLayout(form)
 
     offline_card = QFrame()
@@ -460,7 +453,9 @@ def create_settings_page(
     def _sync_offline_mode_state() -> None:
         is_offline = bool(mode_toggle.isChecked())
         mode_toggle.setText(_settings_mode_toggle_text(is_offline))
-        mode_description.setText(_settings_mode_description(is_offline))
+        mode_badge.setVisible(is_offline)
+        mode_badge.setToolTip(_settings_mode_description(is_offline))
+        mode_toggle.setToolTip(_settings_mode_description(is_offline))
         base_url.setEnabled(not is_offline)
         username.setEnabled(not is_offline)
         password.setEnabled(not is_offline)
