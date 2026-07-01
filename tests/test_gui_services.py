@@ -865,6 +865,61 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             )
             self.assertEqual(tracker_item_candidate.query_status, "unsupported")
 
+    def test_validate_mapping_uses_query_mode_for_tracker_item_choice_field(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            TrackerItemQueryFakeClient.all_search_calls = []
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary", "연관 요구사항"])
+            sheet.append(["REQ-001", "REQ-100"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=TrackerItemQueryFakeClient,
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "preview_file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                },
+            )
+
+            validation_context = service.validate_mapping(
+                mapping_context,
+                {"Summary": "Summary", "연관 요구사항": "연관 요구사항"},
+                selected_tracker_item_settings=mapping_context.selected_tracker_item_settings,
+            )
+
+            self.assertFalse(validation_context.has_blocking_issues)
+            self.assertTrue(validation_context.issue_df.empty)
+            self.assertEqual(
+                list(mapping_context.wizard.state.payload_df["payload_status"]),
+                [PayloadStatus.READY.value],
+            )
+            self.assertEqual(
+                TrackerItemQueryFakeClient.all_search_calls,
+                [(13526611, "REQ-100")],
+            )
+
     def test_prepare_mapping_context_includes_user_reference_field_in_default_value_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "sample.xlsx"

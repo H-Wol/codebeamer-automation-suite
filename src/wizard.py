@@ -140,8 +140,9 @@ class CodebeamerUploadWizard:
             raise ValueError("upload_df is not ready. Read Excel first.")
 
         self.state.selected_mapping = selected_mapping
-        self.state.schema = self.client.get_tracker_schema(self.state.tracker_id)
-        self.state.schema_df = self.mapper.flatten_schema_fields(self.state.schema)
+        if self.state.schema is None or self.state.schema_df is None:
+            self.state.schema = self.client.get_tracker_schema(self.state.tracker_id)
+            self.state.schema_df = self.mapper.flatten_schema_fields(self.state.schema)
         self.state.comparison_df = self.mapper.compare_upload_df_with_schema(
             upload_df=self.state.upload_df,
             schema_df=self.state.schema_df,
