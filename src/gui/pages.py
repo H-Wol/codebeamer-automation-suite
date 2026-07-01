@@ -52,6 +52,26 @@ def _settings_mode_description(is_offline: bool) -> str:
     return "기본 모드에서는 Codebeamer 서버 연결과 로그인 정보를 사용합니다."
 
 
+def _project_selection_status_text(is_offline: bool) -> str:
+    if bool(is_offline):
+        return "테스트 모드에서는 schema snapshot 기준 가상 프로젝트/트래커를 자동으로 불러옵니다."
+    return "프로젝트 불러오기를 실행하면 프로젝트 목록을 조회합니다."
+
+
+def _project_selection_refresh_button_text(is_offline: bool) -> str:
+    return "스냅샷 불러오기" if bool(is_offline) else "프로젝트 불러오기"
+
+
+def _project_selection_source_signature(settings: Any) -> tuple[str, str, str, str, str]:
+    return (
+        "offline" if bool(getattr(settings, "offline_mode", False)) else "online",
+        str(getattr(settings, "offline_schema_path", "") or "").strip(),
+        str(getattr(settings, "offline_tracker_configuration_path", "") or "").strip(),
+        str(getattr(settings, "base_url", "") or "").strip(),
+        str(getattr(settings, "username", "") or "").strip(),
+    )
+
+
 def _tracker_item_sample_values(upload_preview_df: Any, column_name: str, limit: int = 3) -> list[Any]:
     if upload_preview_df is None or not hasattr(upload_preview_df, "columns"):
         return []
@@ -638,17 +658,15 @@ def create_project_selection_page(
     form.addRow("트래커", tracker_combo)
     layout.addLayout(form)
 
-    status_label = QLabel(
-        "테스트 모드에서는 schema snapshot 기준 가상 프로젝트/트래커를 불러옵니다."
-        if bool(getattr(initial_settings, "offline_mode", False))
-        else "연결 테스트를 실행하면 프로젝트 목록을 불러옵니다."
-    )
+    status_label = QLabel(_project_selection_status_text(bool(getattr(initial_settings, "offline_mode", False))))
     status_label.setObjectName("status_label")
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
     previous_button = QPushButton("이전")
-    refresh_button = QPushButton("프로젝트 불러오기")
+    refresh_button = QPushButton(
+        _project_selection_refresh_button_text(bool(getattr(initial_settings, "offline_mode", False)))
+    )
     next_button = QPushButton("다음")
     refresh_button.setObjectName("primary_button")
     next_button.setObjectName("primary_button")
@@ -662,6 +680,17 @@ def create_project_selection_page(
 
     def _update_next_button_state() -> None:
         next_button.setEnabled(bool(page.selected_project_id and page.selected_tracker_id))
+
+    def _clear_combo_items() -> None:
+        project_combo.blockSignals(True)
+        tracker_combo.blockSignals(True)
+        project_combo.clear()
+        tracker_combo.clear()
+        project_combo.setEnabled(False)
+        tracker_combo.setEnabled(False)
+        project_combo.blockSignals(False)
+        tracker_combo.blockSignals(False)
+        _update_next_button_state()
 
     def _set_items(combo, items: list[dict], selected_id: str) -> None:
         combo.blockSignals(True)
@@ -679,6 +708,24 @@ def create_project_selection_page(
         settings = on_settings_changed(None)
         return settings
 
+    def _sync_from_settings(*, auto_load: bool = False) -> None:
+        settings = _current_settings()
+        is_offline = bool(getattr(settings, "offline_mode", False))
+        refresh_button.setText(_project_selection_refresh_button_text(is_offline))
+        source_signature = _project_selection_source_signature(settings)
+        source_changed = source_signature != getattr(page, "_source_signature", None)
+        if source_changed:
+            page._source_signature = source_signature
+            page.selected_project_id = str(getattr(settings, "default_project_id", "") or "")
+            page.selected_tracker_id = str(getattr(settings, "default_tracker_id", "") or "")
+            _clear_combo_items()
+            status_label.setText(_project_selection_status_text(is_offline))
+        elif not str(status_label.text() or "").strip():
+            status_label.setText(_project_selection_status_text(is_offline))
+
+        if auto_load and is_offline and project_combo.count() == 0:
+            _refresh_projects()
+
     def _refresh_projects() -> None:
         settings = _current_settings()
         try:
@@ -688,10 +735,7 @@ def create_project_selection_page(
             status_label.setText(message)
             if callable(on_error):
                 on_error("프로젝트 조회 실패", message)
-            project_combo.clear()
-            tracker_combo.clear()
-            project_combo.setEnabled(False)
-            tracker_combo.setEnabled(False)
+            _clear_combo_items()
             page.selected_project_id = ""
             page.selected_tracker_id = ""
             _update_next_button_state()
@@ -708,6 +752,10 @@ def create_project_selection_page(
                 selected_index = 0
                 project_combo.setCurrentIndex(0)
             _handle_project_changed(selected_index)
+
+    def _refresh_projects_for_current_settings() -> None:
+        _sync_from_settings(auto_load=False)
+        _refresh_projects()
 
     def _handle_project_changed(index: int) -> None:
         project_id = project_combo.itemData(index)
@@ -762,7 +810,7 @@ def create_project_selection_page(
         page.request_next()
 
     previous_button.clicked.connect(lambda: page.request_previous())
-    refresh_button.clicked.connect(_refresh_projects)
+    refresh_button.clicked.connect(_refresh_projects_for_current_settings)
     next_button.clicked.connect(_go_next)
     project_combo.currentIndexChanged.connect(_handle_project_changed)
     tracker_combo.currentIndexChanged.connect(_handle_tracker_changed)
@@ -788,6 +836,8 @@ def create_project_selection_page(
 
     page.load_selection = _load_selection
     page.get_selection = _get_selection
+    page.on_page_shown = lambda: _sync_from_settings(auto_load=True)
+    _sync_from_settings(auto_load=False)
     return page
 
 

@@ -454,6 +454,9 @@ class MainWindow:
                     label.setProperty("complete", active_index >= 0 and index < active_index)
                     label.style().unpolish(label)
                     label.style().polish(label)
+                on_page_shown = getattr(page, "on_page_shown", None)
+                if callable(on_page_shown):
+                    on_page_shown()
                 self._fit_window_to_current_page(allow_grow=True)
 
             def _attach_navigation(
@@ -620,14 +623,23 @@ class MainWindow:
                 self.statusBar().showMessage("파일 선택 상태를 갱신했습니다.")
 
             def _test_connection(self, settings: GuiSettings) -> list[dict[str, object]]:
+                busy_message = (
+                    "테스트 프로젝트 목록을 불러오는 중입니다."
+                    if bool(getattr(settings, "offline_mode", False))
+                    else "프로젝트 목록을 불러오는 중입니다."
+                )
                 projects = self._run_with_busy(
-                    "프로젝트 목록을 불러오는 중입니다.",
+                    busy_message,
                     self.codebeamer_service.test_connection_and_load_projects,
                     settings,
                 )
                 self.session_state.settings = settings
                 self.session_state.projects = projects
-                self.statusBar().showMessage("연결 테스트와 프로젝트 조회가 완료되었습니다.")
+                self.statusBar().showMessage(
+                    "테스트 프로젝트 목록을 불러왔습니다."
+                    if bool(getattr(settings, "offline_mode", False))
+                    else "연결 테스트와 프로젝트 조회가 완료되었습니다."
+                )
                 return projects
 
             def _load_trackers(self, settings: GuiSettings, project_id: int) -> list[dict[str, object]]:

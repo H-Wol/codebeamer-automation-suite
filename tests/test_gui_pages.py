@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
 import pandas as pd
 
+from src.gui.pages import _project_selection_refresh_button_text
+from src.gui.pages import _project_selection_source_signature
+from src.gui.pages import _project_selection_status_text
 from src.gui.pages import _settings_mode_description
 from src.gui.pages import _settings_mode_toggle_text
 from src.gui.pages import _build_tracker_item_regex_preview_text
@@ -18,6 +22,32 @@ class GuiPagesSettingsModeTest(unittest.TestCase):
     def test_settings_mode_description_changes_by_mode(self) -> None:
         self.assertIn("snapshot", _settings_mode_description(True))
         self.assertIn("Codebeamer", _settings_mode_description(False))
+
+
+class GuiPagesProjectSelectionTest(unittest.TestCase):
+    def test_project_selection_status_text_changes_by_mode(self) -> None:
+        self.assertIn("자동으로", _project_selection_status_text(True))
+        self.assertIn("프로젝트 불러오기", _project_selection_status_text(False))
+
+    def test_project_selection_refresh_button_text_changes_by_mode(self) -> None:
+        self.assertEqual(_project_selection_refresh_button_text(True), "스냅샷 불러오기")
+        self.assertEqual(_project_selection_refresh_button_text(False), "프로젝트 불러오기")
+
+    def test_project_selection_source_signature_ignores_selected_project_id(self) -> None:
+        base_settings = {
+            "offline_mode": True,
+            "offline_schema_path": "/tmp/schema.json",
+            "offline_tracker_configuration_path": "/tmp/config.json",
+            "base_url": "https://example.test",
+            "username": "tester",
+        }
+        left = SimpleNamespace(**base_settings, default_project_id="1")
+        right = SimpleNamespace(**base_settings, default_project_id="99")
+
+        self.assertEqual(
+            _project_selection_source_signature(left),
+            _project_selection_source_signature(right),
+        )
 
 
 class GuiPagesTrackerItemPreviewTest(unittest.TestCase):
