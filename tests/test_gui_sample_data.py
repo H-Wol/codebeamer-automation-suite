@@ -48,6 +48,7 @@ class GuiOfflineSampleDataTest(unittest.TestCase):
         self.assertIn("Related Requirement", preview.headers)
         self.assertEqual(int((~preview.raw_df["Summary"].isna()).sum()), 3)
         self.assertIsNone(preview.raw_df.iloc[1]["Summary"])
+        self.assertEqual(preview.rows[1][0], "")
 
     def test_lookup_issue_sample_contains_expected_problem_values(self) -> None:
         service = GuiExcelService()

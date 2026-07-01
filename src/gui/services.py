@@ -41,6 +41,21 @@ class PreviewData:
     raw_df_by_file: dict[str, pd.DataFrame] = field(default_factory=dict)
 
 
+def gui_display_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and pd.isna(value):
+        return ""
+    if isinstance(value, list):
+        return ", ".join(part for part in (gui_display_text(item) for item in value) if part)
+    if isinstance(value, dict):
+        if value.get("name") is not None:
+            return str(value.get("name")).strip()
+        return str(value).strip()
+    text = str(value).strip()
+    return "" if text.lower() == "nan" else text
+
+
 DEFAULT_OFFLINE_PROJECT_ID = 1
 DEFAULT_OFFLINE_TRACKER_ID = 1
 DEFAULT_OFFLINE_PROJECT_NAME = "Offline Project"
@@ -282,9 +297,7 @@ class GuiExcelService:
         if not raw_df.empty:
             visible_df = raw_df[preview_headers].head(max_preview_rows)
             for _, row in visible_df.iterrows():
-                preview_rows.append(
-                    ["" if value is None else str(value) for value in row.tolist()]
-                )
+                preview_rows.append([gui_display_text(value) for value in row.tolist()])
 
         return PreviewData(
             file_path=str(file_path),
@@ -1705,18 +1718,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _display_text(value: Any) -> str:
-        if value is None:
-            return ""
-        if isinstance(value, float) and pd.isna(value):
-            return ""
-        if isinstance(value, list):
-            return ", ".join(part for part in (GuiUploadPipelineService._display_text(item) for item in value) if part)
-        if isinstance(value, dict):
-            if value.get("name") is not None:
-                return str(value.get("name")).strip()
-            return str(value).strip()
-        text = str(value).strip()
-        return "" if text.lower() == "nan" else text
+        return gui_display_text(value)
 
     @staticmethod
     def _to_row_key(value: Any) -> str:

@@ -7,6 +7,7 @@ from src.mapping_service import MappingService
 from .services import DEFAULT_TRACKER_ITEM_ID_REGEX
 from .services import ROOT_ASSIGNMENT_MODE_FILE_SOURCE
 from .services import ROOT_ASSIGNMENT_MODE_FIXED_VALUE
+from .services import gui_display_text
 from .styles import GUI_THEME_CHOICES
 from .styles import normalize_gui_theme_name
 from src.models import TrackerItemQueryMatchStrategy
@@ -1971,13 +1972,13 @@ def create_validation_page():
         if issue_df is not None and not issue_df.empty:
             for _, row in issue_df.iterrows():
                 rows.append([
-                    str(row.get("severity") or ""),
-                    str(row.get("row_label") or ""),
-                    str(row.get("item_name") or ""),
-                    str(row.get("column") or ""),
-                    str(row.get("raw_value") or ""),
-                    str(row.get("message") or ""),
-                    str(row.get("action") or ""),
+                    gui_display_text(row.get("severity")),
+                    gui_display_text(row.get("row_label")),
+                    gui_display_text(row.get("item_name")),
+                    gui_display_text(row.get("column")),
+                    gui_display_text(row.get("raw_value")),
+                    gui_display_text(row.get("message")),
+                    gui_display_text(row.get("action")),
                 ])
         table.setRowCount(len(rows))
         for row_index, values in enumerate(rows):
