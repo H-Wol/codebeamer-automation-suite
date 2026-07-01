@@ -80,6 +80,57 @@ QWidget#busy_overlay {
     background: rgba(19, 38, 58, 0.22);
 }
 
+QDialog#alert_dialog {
+    background: #F4F7FB;
+}
+
+QFrame#alert_surface {
+    background: #FFFFFF;
+    border: 1px solid #D8E1EA;
+    border-radius: 16px;
+}
+
+QFrame#alert_surface[tone="error"] {
+    border: 1px solid #F1C9C9;
+}
+
+QFrame#alert_surface[tone="info"] {
+    border: 1px solid #CBE4F3;
+}
+
+QLabel#alert_badge {
+    color: #0E4A84;
+    background: #EAF4FB;
+    border: 1px solid #CBE4F3;
+    border-radius: 20px;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+QLabel#alert_badge[tone="error"] {
+    color: #C24141;
+    background: #FDEEEE;
+    border: 1px solid #F2C9C9;
+}
+
+QLabel#alert_title {
+    color: #13263A;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+QLabel#alert_message {
+    color: #4E5F72;
+}
+
+QPlainTextEdit#alert_details {
+    color: #425466;
+    background: #F8FBFD;
+    border: 1px solid #D8E1EA;
+    border-radius: 10px;
+    padding: 8px 10px;
+}
+
 QFrame#busy_card {
     background: #FFFFFF;
     border: 1px solid #C8D6E3;

@@ -30,11 +30,12 @@ def _require_qt():
         from PySide6.QtCore import QSize
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QDialog
         from PySide6.QtWidgets import QFrame
         from PySide6.QtWidgets import QHBoxLayout
         from PySide6.QtWidgets import QLabel
         from PySide6.QtWidgets import QMainWindow
-        from PySide6.QtWidgets import QMessageBox
+        from PySide6.QtWidgets import QPlainTextEdit
         from PySide6.QtWidgets import QProgressBar
         from PySide6.QtWidgets import QPushButton
         from PySide6.QtWidgets import QStackedWidget
@@ -46,12 +47,13 @@ def _require_qt():
 
     return {
         "QApplication": QApplication,
+        "QDialog": QDialog,
         "QEventLoop": QEventLoop,
         "QFrame": QFrame,
         "QHBoxLayout": QHBoxLayout,
         "QLabel": QLabel,
         "QMainWindow": QMainWindow,
-        "QMessageBox": QMessageBox,
+        "QPlainTextEdit": QPlainTextEdit,
         "QProgressBar": QProgressBar,
         "QPushButton": QPushButton,
         "QSize": QSize,
@@ -485,15 +487,113 @@ class MainWindow:
                 page.request_next = _go_next
                 page.request_restart = _restart
 
+            @staticmethod
+            def _dialog_message_parts(message: str, fallback: str) -> tuple[str, str]:
+                text = str(message or "").strip()
+                if not text:
+                    return fallback, ""
+
+                lines = [line.strip() for line in text.splitlines() if line.strip()]
+                compact = " ".join(lines) if lines else text
+                if "\n" not in text and len(compact) <= 160:
+                    return compact, ""
+
+                if lines:
+                    summary = lines[0]
+                else:
+                    summary = compact
+                if len(summary) > 160:
+                    summary = f"{summary[:157].rstrip()}..."
+                return summary, text
+
+            def _show_message_dialog(self, title: str, message: str, *, tone: str) -> None:
+                QDialog = self.qt["QDialog"]
+                QFrame = self.qt["QFrame"]
+                QHBoxLayout = self.qt["QHBoxLayout"]
+                QLabel = self.qt["QLabel"]
+                QPlainTextEdit = self.qt["QPlainTextEdit"]
+                QPushButton = self.qt["QPushButton"]
+                QVBoxLayout = self.qt["QVBoxLayout"]
+                Qt = self.qt["Qt"]
+
+                fallback_message = (
+                    "알 수 없는 오류가 발생했습니다."
+                    if tone == "error"
+                    else "작업이 완료되었습니다."
+                )
+                header_text = str(title or ("오류" if tone == "error" else "안내")).strip()
+                summary_text, detail_text = self._dialog_message_parts(message, fallback_message)
+
+                dialog = QDialog(self)
+                dialog.setObjectName("alert_dialog")
+                dialog.setWindowTitle(header_text)
+                dialog.setModal(True)
+                dialog.setMinimumWidth(440)
+
+                root_layout = QVBoxLayout(dialog)
+                root_layout.setContentsMargins(14, 14, 14, 14)
+                root_layout.setSpacing(0)
+
+                surface = QFrame(dialog)
+                surface.setObjectName("alert_surface")
+                surface.setProperty("tone", tone)
+                surface_layout = QVBoxLayout(surface)
+                surface_layout.setContentsMargins(20, 18, 20, 18)
+                surface_layout.setSpacing(14)
+
+                header_row = QHBoxLayout()
+                header_row.setSpacing(14)
+
+                badge = QLabel("!" if tone == "error" else "i")
+                badge.setObjectName("alert_badge")
+                badge.setProperty("tone", tone)
+                badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                badge.setFixedSize(40, 40)
+                header_row.addWidget(badge, 0, Qt.AlignmentFlag.AlignTop)
+
+                copy_layout = QVBoxLayout()
+                copy_layout.setSpacing(6)
+
+                title_label = QLabel(header_text)
+                title_label.setObjectName("alert_title")
+                copy_layout.addWidget(title_label)
+
+                message_label = QLabel(summary_text)
+                message_label.setObjectName("alert_message")
+                message_label.setWordWrap(True)
+                message_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                copy_layout.addWidget(message_label)
+                header_row.addLayout(copy_layout, 1)
+
+                surface_layout.addLayout(header_row)
+
+                if detail_text:
+                    details = QPlainTextEdit(surface)
+                    details.setObjectName("alert_details")
+                    details.setReadOnly(True)
+                    details.setPlainText(detail_text)
+                    details.setFixedHeight(116)
+                    surface_layout.addWidget(details)
+
+                button_row = QHBoxLayout()
+                button_row.addStretch(1)
+                confirm_button = QPushButton("확인")
+                confirm_button.setObjectName("primary_button")
+                confirm_button.setDefault(True)
+                confirm_button.setAutoDefault(True)
+                confirm_button.clicked.connect(dialog.accept)
+                button_row.addWidget(confirm_button)
+                surface_layout.addLayout(button_row)
+
+                root_layout.addWidget(surface)
+                dialog.adjustSize()
+                dialog.exec()
+
             def _show_error_dialog(self, title: str, message: str) -> None:
-                QMessageBox = self.qt["QMessageBox"]
-                text = str(message or "").strip() or "알 수 없는 오류가 발생했습니다."
-                QMessageBox.critical(self, str(title or "오류"), text)
+                self._show_message_dialog(title, message, tone="error")
 
             def _show_info_dialog(self, title: str, message: str) -> None:
-                QMessageBox = self.qt["QMessageBox"]
-                text = str(message or "").strip() or "작업이 완료되었습니다."
-                QMessageBox.information(self, str(title or "안내"), text)
+                self._show_message_dialog(title, message, tone="info")
 
             def _on_settings_changed(self, settings: GuiSettings | None) -> GuiSettings:
                 if settings is None:
