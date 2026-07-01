@@ -48,9 +48,9 @@ GUI `테스트 모드`를 바로 눌러볼 수 있는 샘플 세트는 `data/gui
 
 - `offline_schema.json`
 - `offline_tracker_configuration.json`
-- `files/SWE6_BRAKE_R24_TC_001.xlsx`
-- `files/SWE6_MOTOR_R24_TC_002.xlsx`
-- `files/SWE6_LOOKUP_R24_TC_003.xlsx`
+- `files/SAMPLE_MODULE_A_TC_001.xlsx`
+- `files/SAMPLE_MODULE_B_TC_002.xlsx`
+- `files/SAMPLE_LOOKUP_TC_003.xlsx`
 
 사용 순서와 매핑 팁은 [data/gui-offline-sample/README.md](./data/gui-offline-sample/README.md)에 정리했습니다.
 

@@ -27,12 +27,12 @@ class GuiOfflineSampleDataTest(unittest.TestCase):
         filters = related_requirement_config["choiceOptionSetting"]["referenceFilters"]
 
         self.assertEqual(filters[0]["domainType"], "TRACKER")
-        self.assertEqual(int(filters[0]["domainId"]), 13526611)
+        self.assertEqual(int(filters[0]["domainId"]), 24680001)
 
     def test_happy_path_sample_workbooks_load_in_gui_excel_service(self) -> None:
         service = GuiExcelService()
-        brake_file = FILES_DIR / "SWE6_BRAKE_R24_TC_001.xlsx"
-        motor_file = FILES_DIR / "SWE6_MOTOR_R24_TC_002.xlsx"
+        brake_file = FILES_DIR / "SAMPLE_MODULE_A_TC_001.xlsx"
+        motor_file = FILES_DIR / "SAMPLE_MODULE_B_TC_002.xlsx"
 
         preview = service.load_preview(
             str(brake_file),
@@ -51,7 +51,7 @@ class GuiOfflineSampleDataTest(unittest.TestCase):
 
     def test_lookup_issue_sample_contains_expected_problem_values(self) -> None:
         service = GuiExcelService()
-        lookup_file = FILES_DIR / "SWE6_LOOKUP_R24_TC_003.xlsx"
+        lookup_file = FILES_DIR / "SAMPLE_LOOKUP_TC_003.xlsx"
 
         preview = service.load_preview(
             str(lookup_file),
@@ -60,9 +60,9 @@ class GuiOfflineSampleDataTest(unittest.TestCase):
             summary_column="Summary",
         )
 
-        self.assertEqual(preview.raw_df.loc[0, "Owner"], "jhyun")
-        self.assertEqual(preview.raw_df.loc[0, "Review Team"], "검증1조")
-        self.assertEqual(preview.raw_df.loc[0, "Related Requirement"], "REQ-ALPHA")
+        self.assertEqual(preview.raw_df.loc[0, "Owner"], "sample_user")
+        self.assertEqual(preview.raw_df.loc[0, "Review Team"], "sample_group_a")
+        self.assertEqual(preview.raw_df.loc[0, "Related Requirement"], "SAMPLE-ALPHA")
 
 
 if __name__ == "__main__":

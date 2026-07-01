@@ -41,9 +41,9 @@
       "choiceOptionSetting": {
         "referenceFilters": [
           {
-            "id": 85040133,
+            "id": 91000001,
             "domainType": "TRACKER",
-            "domainId": 13526611,
+            "domainId": 24680001,
             "filterStatusId": 0
           }
         ]
