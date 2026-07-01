@@ -7,6 +7,8 @@ from src.mapping_service import MappingService
 from .services import DEFAULT_TRACKER_ITEM_ID_REGEX
 from .services import ROOT_ASSIGNMENT_MODE_FILE_SOURCE
 from .services import ROOT_ASSIGNMENT_MODE_FIXED_VALUE
+from .styles import GUI_THEME_CHOICES
+from .styles import normalize_gui_theme_name
 from src.models import TrackerItemQueryMatchStrategy
 from src.models import TrackerItemResolutionMode
 
@@ -233,6 +235,7 @@ def create_settings_page(
     settings_store,
     initial_settings,
     on_settings_changed,
+    on_theme_changed=None,
 ):
     qt = _require_qt()
     QWidget = qt["QWidget"]
@@ -243,6 +246,7 @@ def create_settings_page(
     QLineEdit = qt["QLineEdit"]
     QFrame = qt["QFrame"]
     QCheckBox = qt["QCheckBox"]
+    QComboBox = qt["QComboBox"]
     QFileDialog = qt["QFileDialog"]
     QSpinBox = qt["QSpinBox"]
     QDoubleSpinBox = qt["QDoubleSpinBox"]
@@ -273,6 +277,7 @@ def create_settings_page(
         str(getattr(initial_settings, "offline_tracker_configuration_path", "") or "")
     )
     offline_config_button = QPushButton("설정 선택")
+    theme_combo = QComboBox()
     header_row = QSpinBox()
     header_row.setMinimum(1)
     header_row.setValue(initial_settings.excel_header_row)
@@ -295,6 +300,7 @@ def create_settings_page(
         password,
         offline_schema_path,
         offline_config_path,
+        theme_combo,
     ):
         _configure_form_field(field_widget)
 
@@ -316,6 +322,7 @@ def create_settings_page(
     form.addRow("Username", username)
     form.addRow("Password", password)
     form.addRow("", save_password)
+    form.addRow("테마", theme_combo)
     form.addRow("", offline_mode)
     form.addRow("Schema Snapshot", offline_schema_row_widget)
     form.addRow("Config Snapshot", offline_config_row_widget)
@@ -410,6 +417,7 @@ def create_settings_page(
     def _collect_settings():
         current_settings = getattr(page, "_current_settings", initial_settings)
         return type(initial_settings)(
+            theme_name=normalize_gui_theme_name(theme_combo.currentData()),
             base_url=base_url.text().strip(),
             username=username.text().strip(),
             password=password.text(),
@@ -441,6 +449,7 @@ def create_settings_page(
         username.setText(loaded.username)
         password.setText(loaded.password)
         save_password.setChecked(loaded.save_password)
+        _select_theme(normalize_gui_theme_name(getattr(loaded, "theme_name", None)))
         offline_mode.setChecked(bool(getattr(loaded, "offline_mode", False)))
         offline_schema_path.setText(str(getattr(loaded, "offline_schema_path", "") or ""))
         offline_config_path.setText(str(getattr(loaded, "offline_tracker_configuration_path", "") or ""))
@@ -451,6 +460,17 @@ def create_settings_page(
         retry_count.setValue(loaded.rate_limit_max_retries)
         output_dir.setText(loaded.output_dir)
         _sync_offline_mode_state()
+
+    def _select_theme(theme_name: str) -> None:
+        normalized_theme = normalize_gui_theme_name(theme_name)
+        index = theme_combo.findData(normalized_theme)
+        if index < 0:
+            index = 0
+        theme_combo.setCurrentIndex(index)
+
+    def _preview_theme() -> None:
+        if callable(on_theme_changed):
+            on_theme_changed(normalize_gui_theme_name(theme_combo.currentData()))
 
     def _choose_snapshot_path(target_widget, *, title: str) -> None:
         start_path = target_widget.text().strip() or str(getattr(page, "_current_settings", initial_settings).last_file_path or "")
@@ -508,6 +528,7 @@ def create_settings_page(
         lambda: _choose_snapshot_path(offline_config_path, title="오프라인 tracker configuration 선택")
     )
     offline_schema_path.textChanged.connect(lambda _: _update_next_button_state())
+    theme_combo.currentIndexChanged.connect(lambda _: _preview_theme())
     advanced_toggle.toggled.connect(
         lambda checked: (
             advanced_card.setVisible(checked),
@@ -518,6 +539,9 @@ def create_settings_page(
         )
     )
 
+    for theme_key, theme_label in GUI_THEME_CHOICES:
+        theme_combo.addItem(theme_label, theme_key)
+    _select_theme(normalize_gui_theme_name(getattr(initial_settings, "theme_name", None)))
     _sync_offline_mode_state()
     page.get_settings = _collect_settings
     page.set_settings = _apply_settings

@@ -7,6 +7,9 @@ from dataclasses import field
 from pathlib import Path
 from typing import Any
 
+from .styles import DEFAULT_GUI_THEME
+from .styles import normalize_gui_theme_name
+
 
 APP_DIR_NAME = ".codebeamer-automation-suite"
 SETTINGS_FILE_NAME = "gui_settings.json"
@@ -16,6 +19,7 @@ WORKFLOW_PRESET_FILE_NAME = "gui_workflow_preset.json"
 
 @dataclass
 class GuiSettings:
+    theme_name: str = DEFAULT_GUI_THEME
     base_url: str = ""
     username: str = ""
     password: str = ""
@@ -145,6 +149,7 @@ class GuiSettingsStore:
         encrypted_password = payload.pop("password_encrypted", "")
         if payload.get("save_password") and encrypted_password:
             password = self._decrypt_password(encrypted_password)
+        payload["theme_name"] = normalize_gui_theme_name(payload.get("theme_name"))
 
         return GuiSettings(
             password=password,

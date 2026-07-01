@@ -6,8 +6,14 @@ from pathlib import Path
 _ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 _COMBO_ARROW_PATH = (_ASSETS_DIR / "chevron-down.svg").as_posix()
 
+DEFAULT_GUI_THEME = "kepico"
+GUI_THEME_LABELS = {
+    "kepico": "케피코",
+    "igloo": "이글루",
+}
+GUI_THEME_CHOICES = [(key, label) for key, label in GUI_THEME_LABELS.items()]
 
-GUI_STYLESHEET = """
+_BASE_GUI_STYLESHEET = """
 QMainWindow {
     background: #F4F7FB;
 }
@@ -324,4 +330,152 @@ QStatusBar {
     border-top: 1px solid #D8E1EA;
 }
 """
-GUI_STYLESHEET = GUI_STYLESHEET.replace("{combo_arrow}", _COMBO_ARROW_PATH)
+_BASE_GUI_STYLESHEET = _BASE_GUI_STYLESHEET.replace("{combo_arrow}", _COMBO_ARROW_PATH)
+
+_IGLOO_THEME_OVERRIDES = """
+QMainWindow {
+    background: #F2FBFC;
+}
+
+QWidget#app_root {
+    background: #F2FBFC;
+}
+
+QWidget#header_card, QWidget#page_card {
+    border: 1px solid #D3E7E9;
+}
+
+QLabel#app_title {
+    color: #0B6E70;
+}
+
+QLabel#app_subtitle, QLabel#section_label, QLabel#busy_message {
+    color: #60797E;
+}
+
+QLabel#status_label {
+    color: #0B6E70;
+    background: #E5F7F6;
+    border: 1px solid #BFE6E2;
+}
+
+QToolButton#section_toggle {
+    color: #0B6E70;
+}
+
+QToolButton#section_toggle:hover {
+    color: #15918D;
+}
+
+QFrame#advanced_card {
+    background: #F7FCFC;
+    border: 1px solid #D3E7E9;
+}
+
+QDialog#alert_dialog {
+    background: #F2FBFC;
+}
+
+QLabel#alert_badge {
+    color: #0B6E70;
+    background: #E5F7F6;
+    border: 1px solid #BFE6E2;
+}
+
+QFrame#busy_card {
+    border: 1px solid #C8E0E2;
+}
+
+QLabel#summary_label {
+    background: #F6FCFC;
+    border: 1px solid #D3E7E9;
+}
+
+QLabel#step_badge {
+    color: #6C8489;
+    background: #EEF7F8;
+    border: 1px solid #D3E7E9;
+}
+
+QLabel#step_badge[active="true"] {
+    background: #0B6E70;
+    border: 1px solid #0B6E70;
+}
+
+QLabel#step_badge[complete="true"] {
+    color: #0B6E70;
+    background: #E0F5F3;
+    border: 1px solid #AEDFD9;
+}
+
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+    border: 1px solid #16B3AC;
+}
+
+QPushButton:hover {
+    background: #F1FAFB;
+}
+
+QPushButton#primary_button {
+    background: #0B6E70;
+    border: 1px solid #0B6E70;
+}
+
+QPushButton#primary_button:hover {
+    background: #15918D;
+}
+
+QPushButton#primary_button:disabled {
+    background: #AAC8C8;
+    border: 1px solid #AAC8C8;
+}
+
+QTableWidget, QPlainTextEdit, QTabWidget::pane {
+    border: 1px solid #D3E7E9;
+}
+
+QTableWidget {
+    gridline-color: #E4EFF1;
+    alternate-background-color: #F7FCFC;
+    selection-background-color: #D9F0EF;
+}
+
+QHeaderView::section {
+    background: #EEF8F9;
+    color: #486368;
+    border-right: 1px solid #D3E7E9;
+    border-bottom: 1px solid #D3E7E9;
+}
+
+QProgressBar {
+    border: 1px solid #D3E7E9;
+    background: #EAF4F5;
+}
+
+QProgressBar::chunk {
+    background: #16B3AC;
+}
+
+QStatusBar {
+    color: #60797E;
+    border-top: 1px solid #D3E7E9;
+}
+"""
+
+_THEME_OVERRIDES = {
+    "kepico": "",
+    "igloo": _IGLOO_THEME_OVERRIDES,
+}
+
+
+def normalize_gui_theme_name(theme_name: str | None) -> str:
+    normalized = str(theme_name or "").strip().lower()
+    return normalized if normalized in GUI_THEME_LABELS else DEFAULT_GUI_THEME
+
+
+def build_gui_stylesheet(theme_name: str | None = None) -> str:
+    normalized_theme = normalize_gui_theme_name(theme_name)
+    return f"{_BASE_GUI_STYLESHEET}\n{_THEME_OVERRIDES.get(normalized_theme, '')}".strip()
+
+
+GUI_STYLESHEET = build_gui_stylesheet()

@@ -8,6 +8,7 @@ from pathlib import Path
 from src.gui.settings_store import GuiSettings
 from src.gui.settings_store import GuiSettingsStore
 from src.gui.settings_store import GuiWorkflowPreset
+from src.gui.styles import DEFAULT_GUI_THEME
 
 
 try:
@@ -24,6 +25,7 @@ class GuiSettingsStoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             store = GuiSettingsStore(Path(tmp_dir))
             settings = GuiSettings(
+                theme_name="igloo",
                 base_url="https://example.com/cb",
                 username="user",
                 password="secret",
@@ -41,11 +43,13 @@ class GuiSettingsStoreTest(unittest.TestCase):
             self.assertFalse(loaded.save_password)
             self.assertTrue(loaded.offline_mode)
             self.assertEqual(loaded.offline_schema_path, "/tmp/schema.json")
+            self.assertEqual(loaded.theme_name, "igloo")
 
     def test_save_with_password_encrypts_and_restores_password(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             store = GuiSettingsStore(Path(tmp_dir))
             settings = GuiSettings(
+                theme_name="kepico",
                 base_url="https://example.com/cb",
                 username="user",
                 password="secret",
@@ -63,12 +67,14 @@ class GuiSettingsStoreTest(unittest.TestCase):
             self.assertEqual(loaded.password, "secret")
             self.assertTrue(loaded.save_password)
             self.assertEqual(loaded.summary_column, "Summary")
+            self.assertEqual(loaded.theme_name, DEFAULT_GUI_THEME)
 
     def test_save_and_load_workflow_preset_preserves_nested_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             store = GuiSettingsStore(Path(tmp_dir))
             preset = GuiWorkflowPreset(
                 settings=GuiSettings(
+                    theme_name="igloo",
                     base_url="https://example.com/cb",
                     username="user",
                     password="secret",
@@ -118,6 +124,7 @@ class GuiSettingsStoreTest(unittest.TestCase):
             assert loaded is not None
             self.assertEqual(loaded.settings.password, "secret")
             self.assertEqual(loaded.settings.default_project_id, "10")
+            self.assertEqual(loaded.settings.theme_name, "igloo")
             self.assertEqual(loaded.file_options["sheet_name"], "Main")
             self.assertFalse(loaded.root_item_config["enabled"])
             self.assertEqual(loaded.root_item_config["regex_pattern"], r"^(?P<name>.+)$")
@@ -131,3 +138,16 @@ class GuiSettingsStoreTest(unittest.TestCase):
                 loaded.selected_tracker_item_settings["연관 요구사항"]["query_match_strategy"],
                 "last",
             )
+
+    def test_load_normalizes_unknown_theme_name_to_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = GuiSettingsStore(Path(tmp_dir))
+            store.root_dir.mkdir(parents=True, exist_ok=True)
+            store.settings_path.write_text(
+                json.dumps({"theme_name": "unknown", "password_encrypted": ""}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            loaded = store.load()
+
+            self.assertEqual(loaded.theme_name, DEFAULT_GUI_THEME)

@@ -20,6 +20,8 @@ from .services import GuiUploadPipelineService
 from .settings_store import GuiSettings
 from .settings_store import GuiSettingsStore
 from .settings_store import GuiWorkflowPreset
+from .styles import build_gui_stylesheet
+from .styles import normalize_gui_theme_name
 from .worker import BackgroundTask
 from .worker import UploadWorker
 
@@ -330,6 +332,7 @@ class MainWindow:
                     self.settings_store,
                     self.session_state.settings,
                     self._on_settings_changed,
+                    self._apply_theme,
                 )
                 self.project_page = create_project_selection_page(
                     self.session_state.settings,
@@ -438,6 +441,7 @@ class MainWindow:
                 if self.session_state.workflow_preset is not None:
                     self._apply_workflow_preset(self.session_state.workflow_preset, startup=True)
                 else:
+                    self._apply_theme(self.session_state.settings.theme_name)
                     self.statusBar().showMessage("GUI 스켈레톤이 준비되었습니다.")
 
             def _show_page(self, page) -> None:
@@ -486,6 +490,14 @@ class MainWindow:
                 page.request_previous = _go_previous
                 page.request_next = _go_next
                 page.request_restart = _restart
+
+            def _apply_theme(self, theme_name: str | None) -> str:
+                QApplication = self.qt["QApplication"]
+                normalized_theme = normalize_gui_theme_name(theme_name)
+                app = QApplication.instance()
+                if app is not None:
+                    app.setStyleSheet(build_gui_stylesheet(normalized_theme))
+                return normalized_theme
 
             @staticmethod
             def _dialog_message_parts(message: str, fallback: str) -> tuple[str, str]:
@@ -598,9 +610,10 @@ class MainWindow:
             def _on_settings_changed(self, settings: GuiSettings | None) -> GuiSettings:
                 if settings is None:
                     return self.session_state.settings
-                self.session_state.settings = settings
+                normalized_theme = self._apply_theme(settings.theme_name)
+                self.session_state.settings = replace(settings, theme_name=normalized_theme)
                 self.statusBar().showMessage("설정 상태를 갱신했습니다.")
-                return settings
+                return self.session_state.settings
 
             def _on_file_state_changed(self, file_state: dict[str, object]) -> None:
                 self.session_state.file_state = file_state
@@ -745,15 +758,16 @@ class MainWindow:
 
             def _apply_workflow_preset(self, preset: GuiWorkflowPreset, *, startup: bool = False) -> None:
                 self.session_state.workflow_preset = preset
-                self.session_state.settings = replace(preset.settings)
+                normalized_theme = self._apply_theme(preset.settings.theme_name)
+                self.session_state.settings = replace(preset.settings, theme_name=normalized_theme)
 
                 set_settings = getattr(self.settings_page, "set_settings", None)
                 if callable(set_settings):
-                    set_settings(replace(preset.settings))
+                    set_settings(replace(self.session_state.settings))
 
                 load_selection = getattr(self.project_page, "load_selection", None)
                 if callable(load_selection):
-                    load_selection(preset.settings.default_project_id, preset.settings.default_tracker_id)
+                    load_selection(self.session_state.settings.default_project_id, self.session_state.settings.default_tracker_id)
 
                 load_file_state = getattr(self.file_page, "load_state", None)
                 if callable(load_file_state):
