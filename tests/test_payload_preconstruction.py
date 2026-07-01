@@ -506,6 +506,79 @@ class WizardPayloadResolutionTest(unittest.TestCase):
         self.assertEqual(payload["customFields"][0]["values"][0]["id"], 101)
         self.assertEqual(payload["customFields"][0]["values"][0]["type"], "UserReference")
 
+    def test_preview_payload_applies_default_member_field_when_row_value_is_missing(self) -> None:
+        """행 값이 없으면 선택한 공통 기본값으로 MemberField custom field를 채워야 한다."""
+
+        class NotFoundError(Exception):
+            def __init__(self) -> None:
+                self.response = type("Response", (), {"status_code": 404})()
+                super().__init__("not found")
+
+        class FakeMemberClient:
+            def get_user_by_name(self, name: str) -> UserInfo:
+                raise NotFoundError()
+
+            def get_user(self, user_id: int) -> UserInfo:
+                return UserInfo(id=user_id, name=f"User {user_id}")
+
+            def get_user_groups(self):
+                return [
+                    {"id": 301, "name": "QA Group", "type": "GroupReference"},
+                ]
+
+            def get_tracker_field_permissions(self, tracker_id: int, field_id: int):
+                return [
+                    {
+                        "status": {"id": 0, "name": "Unset", "type": "ChoiceOptionReference"},
+                        "permissions": [
+                            {
+                                "role": {"id": 201, "name": "Developer", "type": "RoleReference"},
+                            }
+                        ],
+                    }
+                ]
+
+        wizard = CodebeamerUploadWizard(
+            client=FakeMemberClient(),
+            processor=None,
+            mapper=self.mapper,
+        )
+        wizard.select_project(1)
+        wizard.select_tracker(1)
+        wizard.state.schema_df = self.mapper.flatten_schema_fields([
+            {
+                "id": 1,
+                "name": "Summary",
+                "type": "TextField",
+                "trackerItemField": "name",
+                "valueModel": "TextFieldValue",
+            },
+            {
+                "id": 9,
+                "name": "시험 담당자",
+                "type": "MemberField",
+                "valueModel": "ChoiceFieldValue",
+                "multipleValues": False,
+                "memberTypes": ["USER", "ROLE", "GROUP"],
+            },
+        ])
+        wizard.state.selected_mapping = {"summary": "Summary"}
+        wizard.state.upload_df = pd.DataFrame([
+            {"_row_id": 1, "upload_name": "REQ-1", "summary": "REQ-1"}
+        ])
+        wizard.process_option_mapping(
+            wizard.state.selected_mapping,
+            selected_default_values={"시험 담당자": "Developer"},
+        )
+
+        payload = wizard.preview_payload(1)
+
+        self.assertEqual(payload["name"], "REQ-1")
+        self.assertEqual(payload["customFields"][0]["name"], "시험 담당자")
+        self.assertEqual(payload["customFields"][0]["type"], "ChoiceFieldValue")
+        self.assertEqual(payload["customFields"][0]["values"][0]["id"], 201)
+        self.assertEqual(payload["customFields"][0]["values"][0]["type"], "RoleReference")
+
     def test_process_option_mapping_reports_invalid_default_status_value(self) -> None:
         """잘못된 기본값은 option 검증 단계에서 바로 드러나야 한다."""
         self.wizard.state.schema_df = self.mapper.flatten_schema_fields([

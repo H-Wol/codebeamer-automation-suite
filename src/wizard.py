@@ -1462,6 +1462,29 @@ class CodebeamerUploadWizard:
                     })
                 continue
 
+            if option_info.get("kind") == OptionMapKind.MEMBER_LOOKUP.value:
+                resolved_value, _, lookup_status, lookup_error = self._resolve_member_reference_value(
+                    raw_value,
+                    multiple_values=option_info.get("multiple_values", False),
+                    field_id=option_info.get("field_id"),
+                    member_types=option_info.get("member_types") or [],
+                )
+                if resolved_value is not None:
+                    resolved_defaults[schema_field] = resolved_value
+                else:
+                    errors.append({
+                        **self.mapper._validation_context(
+                            DEFAULT_VALUE_COLUMN_LABEL,
+                            schema_field,
+                            option_info,
+                            raw_value=raw_value,
+                            error=lookup_error,
+                            value_source="default",
+                        ),
+                        "status": lookup_status or "LOOKUP_REQUIRED",
+                    })
+                continue
+
             errors.append({
                 **self.mapper._validation_context(
                     DEFAULT_VALUE_COLUMN_LABEL,
@@ -1550,6 +1573,26 @@ class CodebeamerUploadWizard:
             resolved, _, lookup_status, lookup_error = self._resolve_user_reference_value(
                 raw_value,
                 multiple_values=option_info.get("multiple_values", False),
+            )
+            if resolved is not None:
+                return resolved
+            self._raise_payload_error(
+                "LOOKUP_REQUIRED",
+                schema_field=schema_field,
+                df_col=DEFAULT_VALUE_COLUMN_LABEL,
+                row_id=row_id,
+                detail=(
+                    f"value={raw_value!r} lookup_status={lookup_status!r} "
+                    f"error={lookup_error!r}"
+                ),
+            )
+
+        if kind == OptionMapKind.MEMBER_LOOKUP.value:
+            resolved, _, lookup_status, lookup_error = self._resolve_member_reference_value(
+                raw_value,
+                multiple_values=option_info.get("multiple_values", False),
+                field_id=option_info.get("field_id"),
+                member_types=option_info.get("member_types") or [],
             )
             if resolved is not None:
                 return resolved

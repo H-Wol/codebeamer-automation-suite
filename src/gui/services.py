@@ -570,6 +570,7 @@ class GuiUploadPipelineService:
                     if not options:
                         continue
                 elif option_info.get("kind") in {
+                    OptionMapKind.MEMBER_LOOKUP.value,
                     OptionMapKind.TRACKER_ITEM_DIRECT.value,
                     OptionMapKind.USER_LOOKUP.value,
                 }:
@@ -1070,6 +1071,18 @@ class GuiUploadPipelineService:
                         if str(option.get("name") or "").strip()
                     ]
                     allows_fixed_value = bool(fixed_options)
+                elif (
+                    supported
+                    and not bool(row.get("multiple_values", False))
+                    and kind in {
+                        OptionMapKind.MEMBER_LOOKUP.value,
+                        OptionMapKind.TRACKER_ITEM_DIRECT.value,
+                        OptionMapKind.USER_LOOKUP.value,
+                    }
+                ):
+                    fixed_value_kind = GUI_VALUE_KIND_SCALAR
+                    allows_fixed_value = True
+                    allows_custom_value = True
             elif supported and not bool(row.get("multiple_values", False)):
                 field_type = str(row.get("field_type") or "").strip()
                 if field_type == "BoolField":

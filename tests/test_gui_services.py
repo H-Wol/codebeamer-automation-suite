@@ -276,6 +276,20 @@ class UserReferenceDefaultFakeClient(FakeClient):
         return schema
 
 
+class MemberReferenceDefaultFakeClient(FakeClient):
+    def get_tracker_schema(self, tracker_id: int):
+        schema = super().get_tracker_schema(tracker_id)
+        schema["fields"].append({
+            "id": 9,
+            "name": "검토 담당",
+            "type": "MemberField",
+            "valueModel": "ChoiceFieldValue",
+            "multipleValues": False,
+            "memberTypes": ["USER", "ROLE", "GROUP"],
+        })
+        return schema
+
+
 class TrackerItemDefaultValueFakeClient(FakeClient):
     def get_tracker_schema(self, tracker_id: int):
         schema = super().get_tracker_schema(tracker_id)
@@ -1012,6 +1026,50 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             }
             self.assertIn("담당 사용자", default_candidates)
             self.assertTrue(default_candidates["담당 사용자"].allows_custom_value)
+
+    def test_prepare_mapping_context_includes_member_field_in_default_value_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary"])
+            sheet.append(["REQ-001"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=MemberReferenceDefaultFakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                },
+            )
+
+            default_candidates = {
+                candidate.schema_field: candidate
+                for candidate in mapping_context.default_value_candidates
+            }
+            self.assertIn("검토 담당", default_candidates)
+            self.assertTrue(default_candidates["검토 담당"].allows_custom_value)
 
     def test_prepare_mapping_context_includes_tracker_item_field_in_default_value_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
