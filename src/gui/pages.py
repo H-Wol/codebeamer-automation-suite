@@ -42,6 +42,16 @@ def _is_hidden_user_table_column(column_name: object) -> bool:
     return False
 
 
+def _settings_mode_toggle_text(is_offline: bool) -> str:
+    return "켜짐" if bool(is_offline) else "꺼짐"
+
+
+def _settings_mode_description(is_offline: bool) -> str:
+    if bool(is_offline):
+        return "테스트 모드에서는 저장된 schema/config snapshot으로만 검증합니다."
+    return "기본 모드에서는 Codebeamer 서버 연결과 로그인 정보를 사용합니다."
+
+
 def _tracker_item_sample_values(upload_preview_df: Any, column_name: str, limit: int = 3) -> list[Any]:
     if upload_preview_df is None or not hasattr(upload_preview_df, "columns"):
         return []
@@ -269,8 +279,27 @@ def create_settings_page(
     password.setEchoMode(QLineEdit.EchoMode.Password)
     save_password = QCheckBox("비밀번호 저장")
     save_password.setChecked(initial_settings.save_password)
-    offline_mode = QCheckBox("오프라인 테스트 모드")
-    offline_mode.setChecked(bool(getattr(initial_settings, "offline_mode", False)))
+    mode_card = QFrame()
+    mode_card.setObjectName("advanced_card")
+    mode_layout = QHBoxLayout(mode_card)
+    mode_layout.setContentsMargins(14, 12, 14, 12)
+    mode_layout.setSpacing(12)
+    mode_copy_layout = QVBoxLayout()
+    mode_copy_layout.setContentsMargins(0, 0, 0, 0)
+    mode_copy_layout.setSpacing(4)
+    mode_title = QLabel("테스트 모드")
+    mode_title.setObjectName("mode_title")
+    mode_description = QLabel("")
+    mode_description.setObjectName("section_label")
+    mode_description.setWordWrap(True)
+    mode_copy_layout.addWidget(mode_title)
+    mode_copy_layout.addWidget(mode_description)
+    mode_layout.addLayout(mode_copy_layout, 1)
+    mode_toggle = QPushButton()
+    mode_toggle.setObjectName("mode_toggle")
+    mode_toggle.setCheckable(True)
+    mode_toggle.setChecked(bool(getattr(initial_settings, "offline_mode", False)))
+    mode_layout.addWidget(mode_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
     offline_schema_path = QLineEdit(str(getattr(initial_settings, "offline_schema_path", "") or ""))
     offline_schema_button = QPushButton("스키마 선택")
     offline_config_path = QLineEdit(
@@ -304,6 +333,8 @@ def create_settings_page(
     ):
         _configure_form_field(field_widget)
 
+    layout.addWidget(mode_card)
+
     offline_schema_row_widget = QWidget()
     offline_schema_row = QHBoxLayout(offline_schema_row_widget)
     offline_schema_row.setContentsMargins(0, 0, 0, 0)
@@ -323,10 +354,23 @@ def create_settings_page(
     form.addRow("Password", password)
     form.addRow("", save_password)
     form.addRow("테마", theme_combo)
-    form.addRow("", offline_mode)
-    form.addRow("Schema Snapshot", offline_schema_row_widget)
-    form.addRow("Config Snapshot", offline_config_row_widget)
     layout.addLayout(form)
+
+    offline_card = QFrame()
+    offline_card.setObjectName("advanced_card")
+    offline_layout = QVBoxLayout(offline_card)
+    offline_layout.setContentsMargins(14, 12, 14, 12)
+    offline_layout.setSpacing(8)
+    offline_description = QLabel("테스트 모드에서만 사용하는 snapshot 경로입니다.")
+    offline_description.setObjectName("section_label")
+    offline_layout.addWidget(offline_description)
+    offline_form = QFormLayout()
+    _configure_form_layout(offline_form)
+    offline_form.setContentsMargins(0, 0, 0, 0)
+    offline_form.addRow("Schema Snapshot", offline_schema_row_widget)
+    offline_form.addRow("Config Snapshot", offline_config_row_widget)
+    offline_layout.addLayout(offline_form)
+    layout.addWidget(offline_card)
 
     advanced_toggle = QToolButton()
     advanced_toggle.setObjectName("section_toggle")
@@ -397,22 +441,37 @@ def create_settings_page(
     layout.addStretch(1)
 
     def _update_next_button_state() -> None:
-        if offline_mode.isChecked():
+        if mode_toggle.isChecked():
             next_button.setEnabled(bool(Path(offline_schema_path.text().strip()).is_file()))
             return
         next_button.setEnabled(bool(base_url.text().strip() and username.text().strip() and password.text()))
 
+    def _request_settings_reflow() -> None:
+        request_content_reflow = getattr(page, "request_content_reflow", None)
+        if callable(request_content_reflow):
+            request_content_reflow(
+                allow_grow=bool(
+                    mode_toggle.isChecked()
+                    or advanced_toggle.isChecked()
+                    or status_label.isVisible()
+                )
+            )
+
     def _sync_offline_mode_state() -> None:
-        is_offline = bool(offline_mode.isChecked())
+        is_offline = bool(mode_toggle.isChecked())
+        mode_toggle.setText(_settings_mode_toggle_text(is_offline))
+        mode_description.setText(_settings_mode_description(is_offline))
         base_url.setEnabled(not is_offline)
         username.setEnabled(not is_offline)
         password.setEnabled(not is_offline)
         save_password.setEnabled(not is_offline)
+        offline_card.setVisible(is_offline)
         offline_schema_path.setEnabled(is_offline)
         offline_schema_button.setEnabled(is_offline)
         offline_config_path.setEnabled(is_offline)
         offline_config_button.setEnabled(is_offline)
         _update_next_button_state()
+        _request_settings_reflow()
 
     def _collect_settings():
         current_settings = getattr(page, "_current_settings", initial_settings)
@@ -422,7 +481,7 @@ def create_settings_page(
             username=username.text().strip(),
             password=password.text(),
             save_password=save_password.isChecked(),
-            offline_mode=offline_mode.isChecked(),
+            offline_mode=mode_toggle.isChecked(),
             offline_schema_path=offline_schema_path.text().strip(),
             offline_tracker_configuration_path=offline_config_path.text().strip(),
             default_project_id=str(getattr(current_settings, "default_project_id", "") or ""),
@@ -439,9 +498,7 @@ def create_settings_page(
     def _set_status(message: str) -> None:
         status_label.setVisible(bool(message))
         status_label.setText(message)
-        request_content_reflow = getattr(page, "request_content_reflow", None)
-        if callable(request_content_reflow):
-            request_content_reflow(allow_grow=bool(message))
+        _request_settings_reflow()
 
     def _apply_settings(loaded) -> None:
         page._current_settings = loaded
@@ -450,7 +507,7 @@ def create_settings_page(
         password.setText(loaded.password)
         save_password.setChecked(loaded.save_password)
         _select_theme(normalize_gui_theme_name(getattr(loaded, "theme_name", None)))
-        offline_mode.setChecked(bool(getattr(loaded, "offline_mode", False)))
+        mode_toggle.setChecked(bool(getattr(loaded, "offline_mode", False)))
         offline_schema_path.setText(str(getattr(loaded, "offline_schema_path", "") or ""))
         offline_config_path.setText(str(getattr(loaded, "offline_tracker_configuration_path", "") or ""))
         header_row.setValue(loaded.excel_header_row)
@@ -500,7 +557,7 @@ def create_settings_page(
         current = _collect_settings()
         if current.offline_mode:
             if not current.offline_schema_path:
-                _set_status("오프라인 모드에서는 schema snapshot JSON 경로가 필요합니다.")
+                _set_status("테스트 모드에서는 schema snapshot JSON 경로가 필요합니다.")
                 return
             if not Path(current.offline_schema_path).is_file():
                 _set_status("선택한 schema snapshot JSON 파일을 찾을 수 없습니다.")
@@ -520,12 +577,12 @@ def create_settings_page(
     base_url.textChanged.connect(lambda _: _update_next_button_state())
     username.textChanged.connect(lambda _: _update_next_button_state())
     password.textChanged.connect(lambda _: _update_next_button_state())
-    offline_mode.toggled.connect(lambda _: _sync_offline_mode_state())
+    mode_toggle.toggled.connect(lambda _: _sync_offline_mode_state())
     offline_schema_button.clicked.connect(
-        lambda: _choose_snapshot_path(offline_schema_path, title="오프라인 schema snapshot 선택")
+        lambda: _choose_snapshot_path(offline_schema_path, title="테스트 schema snapshot 선택")
     )
     offline_config_button.clicked.connect(
-        lambda: _choose_snapshot_path(offline_config_path, title="오프라인 tracker configuration 선택")
+        lambda: _choose_snapshot_path(offline_config_path, title="테스트 tracker configuration 선택")
     )
     offline_schema_path.textChanged.connect(lambda _: _update_next_button_state())
     theme_combo.currentIndexChanged.connect(lambda _: _preview_theme())
@@ -535,7 +592,7 @@ def create_settings_page(
             advanced_toggle.setArrowType(
                 Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
             ),
-            getattr(page, "request_content_reflow", lambda **_: None)(allow_grow=checked),
+            _request_settings_reflow(),
         )
     )
 
@@ -587,7 +644,7 @@ def create_project_selection_page(
     layout.addLayout(form)
 
     status_label = QLabel(
-        "오프라인 모드에서는 schema snapshot 기준 가상 프로젝트/트래커를 불러옵니다."
+        "테스트 모드에서는 schema snapshot 기준 가상 프로젝트/트래커를 불러옵니다."
         if bool(getattr(initial_settings, "offline_mode", False))
         else "연결 테스트를 실행하면 프로젝트 목록을 불러옵니다."
     )
@@ -646,7 +703,7 @@ def create_project_selection_page(
             return
         _set_items(project_combo, projects, page.selected_project_id)
         status_label.setText(
-            "오프라인 프로젝트 목록을 불러왔습니다."
+            "테스트 프로젝트 목록을 불러왔습니다."
             if bool(getattr(settings, "offline_mode", False))
             else "프로젝트 목록을 불러왔습니다."
         )
@@ -687,7 +744,7 @@ def create_project_selection_page(
             page.selected_tracker_id = str(tracker_combo.currentData())
         _update_next_button_state()
         if bool(getattr(settings, "offline_mode", False)):
-            status_label.setText("오프라인 tracker snapshot 정보를 불러왔습니다.")
+            status_label.setText("테스트 tracker snapshot 정보를 불러왔습니다.")
         else:
             status_label.setText(f"프로젝트 {project_combo.currentText()}의 트래커를 불러왔습니다.")
 

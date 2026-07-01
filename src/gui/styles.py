@@ -56,6 +56,12 @@ QLabel#section_label {
     padding-bottom: 2px;
 }
 
+QLabel#mode_title {
+    color: #13263A;
+    font-size: 14px;
+    font-weight: 700;
+}
+
 QLabel#status_label {
     color: #0E4A84;
     background: #EAF4FB;
@@ -258,6 +264,31 @@ QPushButton#primary_button:disabled {
     border: 1px solid #A9BBCD;
 }
 
+QPushButton#mode_toggle {
+    min-width: 72px;
+    min-height: 34px;
+    padding: 0 14px;
+    border-radius: 17px;
+    border: 1px solid #C9D5E2;
+    background: #FFFFFF;
+    color: #5B6B7F;
+    font-weight: 700;
+}
+
+QPushButton#mode_toggle:hover {
+    background: #F4F8FC;
+}
+
+QPushButton#mode_toggle:checked {
+    background: #0E4A84;
+    color: #FFFFFF;
+    border: 1px solid #0E4A84;
+}
+
+QPushButton#mode_toggle:checked:hover {
+    background: #1260A8;
+}
+
 QPushButton#danger_button {
     background: #FFFFFF;
     color: #C24141;
@@ -353,6 +384,10 @@ QLabel#app_subtitle, QLabel#section_label, QLabel#busy_message {
     color: #60797E;
 }
 
+QLabel#mode_title {
+    color: #153A3F;
+}
+
 QLabel#status_label {
     color: #0B6E70;
     background: #E5F7F6;
@@ -428,6 +463,23 @@ QPushButton#primary_button:hover {
 QPushButton#primary_button:disabled {
     background: #AAC8C8;
     border: 1px solid #AAC8C8;
+}
+
+QPushButton#mode_toggle {
+    color: #60797E;
+}
+
+QPushButton#mode_toggle:hover {
+    background: #F1FAFB;
+}
+
+QPushButton#mode_toggle:checked {
+    background: #0B6E70;
+    border: 1px solid #0B6E70;
+}
+
+QPushButton#mode_toggle:checked:hover {
+    background: #15918D;
 }
 
 QTableWidget, QPlainTextEdit, QTabWidget::pane {

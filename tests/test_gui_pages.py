@@ -4,8 +4,20 @@ import unittest
 
 import pandas as pd
 
+from src.gui.pages import _settings_mode_description
+from src.gui.pages import _settings_mode_toggle_text
 from src.gui.pages import _build_tracker_item_regex_preview_text
 from src.gui.pages import _tracker_item_sample_values
+
+
+class GuiPagesSettingsModeTest(unittest.TestCase):
+    def test_settings_mode_toggle_text_matches_enabled_state(self) -> None:
+        self.assertEqual(_settings_mode_toggle_text(True), "켜짐")
+        self.assertEqual(_settings_mode_toggle_text(False), "꺼짐")
+
+    def test_settings_mode_description_changes_by_mode(self) -> None:
+        self.assertIn("snapshot", _settings_mode_description(True))
+        self.assertIn("Codebeamer", _settings_mode_description(False))
 
 
 class GuiPagesTrackerItemPreviewTest(unittest.TestCase):

@@ -851,7 +851,7 @@ class MainWindow:
                 if self.session_state.settings.offline_mode:
                     self.upload_page.dry_run_checkbox.setChecked(True)
                     self.upload_page.dry_run_checkbox.setEnabled(False)
-                    self.upload_page.status_label.setText("오프라인 모드에서는 Dry Run만 실행할 수 있습니다.")
+                    self.upload_page.status_label.setText("테스트 모드에서는 Dry Run만 실행할 수 있습니다.")
                 else:
                     self.upload_page.dry_run_checkbox.setEnabled(True)
                 self._show_page(self.upload_page)
@@ -934,9 +934,9 @@ class MainWindow:
                     self.upload_page.status_label.setText("업로드 컨텍스트가 없습니다.")
                     return
                 if self.session_state.settings.offline_mode and not self.upload_page.dry_run_checkbox.isChecked():
-                    message = "오프라인 모드에서는 Dry Run만 실행할 수 있습니다."
+                    message = "테스트 모드에서는 Dry Run만 실행할 수 있습니다."
                     self.upload_page.status_label.setText(message)
-                    self._show_error_dialog("오프라인 업로드 제한", message)
+                    self._show_error_dialog("테스트 모드 업로드 제한", message)
                     return
                 output_dir = str(Path(self.session_state.settings.output_dir))
                 self.upload_success_count = 0

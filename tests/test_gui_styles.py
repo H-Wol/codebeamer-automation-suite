@@ -19,6 +19,7 @@ class GuiStylesTest(unittest.TestCase):
         self.assertIn("#0B6E70", stylesheet)
         self.assertIn("#16B3AC", stylesheet)
         self.assertIn("QPushButton#primary_button", stylesheet)
+        self.assertIn("QPushButton#mode_toggle", stylesheet)
 
     def test_build_gui_stylesheet_defaults_to_kepico_when_theme_is_invalid(self) -> None:
         default_stylesheet = build_gui_stylesheet(DEFAULT_GUI_THEME)

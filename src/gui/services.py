@@ -97,7 +97,7 @@ class OfflineGuiClient:
     @classmethod
     def from_settings(cls, settings) -> "OfflineGuiClient":
         schema_path = str(getattr(settings, "offline_schema_path", "") or "").strip()
-        schema = _load_json_snapshot(schema_path, label="오프라인 schema")
+        schema = _load_json_snapshot(schema_path, label="테스트 schema")
         tracker_configuration = None
         configuration_path = str(
             getattr(settings, "offline_tracker_configuration_path", "") or ""
@@ -105,7 +105,7 @@ class OfflineGuiClient:
         if configuration_path:
             tracker_configuration = _load_json_snapshot(
                 configuration_path,
-                label="오프라인 tracker configuration",
+                label="테스트 tracker configuration",
             )
         return cls(
             schema=schema,
@@ -140,7 +140,7 @@ class OfflineGuiClient:
 
     def create_item(self, tracker_id: int, payload: dict[str, Any], parent_item_id: int | None = None) -> dict[str, Any]:
         del tracker_id, payload, parent_item_id
-        raise RuntimeError("오프라인 모드에서는 실제 업로드를 실행할 수 없습니다. Dry Run만 사용해야 합니다.")
+        raise RuntimeError("테스트 모드에서는 실제 업로드를 실행할 수 없습니다. Dry Run만 사용해야 합니다.")
 
     def get_user(self, user_id: int):
         raise RuntimeError(f"offline snapshot does not provide user lookup by id: {user_id}")
