@@ -42,6 +42,18 @@ GUI 스켈레톤 실행:
 py -3 gui_main.py
 ```
 
+## GUI 오프라인 예시 데이터
+
+GUI `테스트 모드`를 바로 눌러볼 수 있는 샘플 세트는 `data/gui-offline-sample/` 에 있습니다.
+
+- `offline_schema.json`
+- `offline_tracker_configuration.json`
+- `files/SWE6_BRAKE_R24_TC_001.xlsx`
+- `files/SWE6_MOTOR_R24_TC_002.xlsx`
+- `files/SWE6_LOOKUP_R24_TC_003.xlsx`
+
+사용 순서와 매핑 팁은 [data/gui-offline-sample/README.md](./data/gui-offline-sample/README.md)에 정리했습니다.
+
 ## GUI 구현 현황
 
 현재 `feature/upload-gui` 브랜치 기준 GUI에서 실제로 연결된 범위는 다음과 같습니다.
@@ -105,6 +117,7 @@ py -3 gui_main.py
 - `src/wizard.py`: 업로드 오케스트레이션, preview, 업로드, 상태 저장
 - `src/models/`: reference, field value, tracker item, user info, wizard state 모델
 - `src/gui/`: PySide6 기반 단계형 GUI, 서비스 계층, upload worker
+- `data/gui-offline-sample/`: GUI 테스트 모드용 snapshot, 다중 Excel 샘플, 사용 안내
 - `docs/`: 사용 가이드와 아키텍처 문서
 - `output/`: 실행 결과 산출물 저장 디렉터리
 

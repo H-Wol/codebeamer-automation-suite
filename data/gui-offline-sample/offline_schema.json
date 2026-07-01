@@ -1,0 +1,201 @@
+{
+  "id": 424242,
+  "name": "GUI Offline Sample Tracker",
+  "fields": [
+    {
+      "id": 1,
+      "name": "Summary",
+      "label": "Summary",
+      "type": "TextField",
+      "hidden": false,
+      "mandatory": true,
+      "valueModel": "TextFieldValue",
+      "mandatoryInStatuses": [],
+      "trackerItemField": "name"
+    },
+    {
+      "id": 2,
+      "name": "Description",
+      "label": "Description",
+      "type": "TextField",
+      "hidden": false,
+      "valueModel": "TextFieldValue",
+      "mandatoryInStatuses": []
+    },
+    {
+      "id": 3,
+      "name": "Priority",
+      "label": "Priority",
+      "type": "OptionChoiceField",
+      "hidden": false,
+      "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+      "mandatoryInStatuses": [],
+      "options": [
+        {
+          "id": 301,
+          "name": "High",
+          "type": "ChoiceOptionReference"
+        },
+        {
+          "id": 302,
+          "name": "Medium",
+          "type": "ChoiceOptionReference"
+        },
+        {
+          "id": 303,
+          "name": "Low",
+          "type": "ChoiceOptionReference"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Approved",
+      "label": "Approved",
+      "type": "BoolField",
+      "hidden": false,
+      "valueModel": "BoolFieldValue",
+      "mandatoryInStatuses": []
+    },
+    {
+      "id": 5,
+      "name": "Verification Stage",
+      "label": "Verification Stage",
+      "type": "OptionChoiceField",
+      "hidden": false,
+      "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+      "mandatoryInStatuses": [],
+      "multipleValues": true,
+      "options": [
+        {
+          "id": 501,
+          "name": "Draft",
+          "type": "ChoiceOptionReference"
+        },
+        {
+          "id": 502,
+          "name": "Review",
+          "type": "ChoiceOptionReference"
+        },
+        {
+          "id": 503,
+          "name": "Approved",
+          "type": "ChoiceOptionReference"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Test Steps",
+      "label": "Test Steps",
+      "type": "TableField",
+      "hidden": false,
+      "valueModel": "TableFieldValue",
+      "mandatoryInStatuses": [],
+      "columns": [
+        {
+          "id": 601,
+          "name": "Action",
+          "label": "Action",
+          "type": "TextField",
+          "hidden": false,
+          "valueModel": "TextFieldValue",
+          "mandatoryInStatuses": []
+        },
+        {
+          "id": 602,
+          "name": "Expected result",
+          "label": "Expected result",
+          "type": "TextField",
+          "hidden": false,
+          "valueModel": "TextFieldValue",
+          "mandatoryInStatuses": []
+        },
+        {
+          "id": 603,
+          "name": "Critical",
+          "label": "Critical",
+          "type": "BoolField",
+          "hidden": false,
+          "valueModel": "BoolFieldValue",
+          "mandatoryInStatuses": []
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "name": "Related Requirement",
+      "label": "Related Requirement",
+      "type": "TrackerItemChoiceField",
+      "hidden": false,
+      "referenceType": "TrackerItemReference",
+      "valueModel": "ChoiceFieldValue<TrackerItemReference>",
+      "mandatoryInStatuses": [],
+      "multipleValues": true
+    },
+    {
+      "id": 8,
+      "name": "Owner",
+      "label": "Owner",
+      "type": "ReferenceField",
+      "hidden": false,
+      "referenceType": "UserReference",
+      "valueModel": "ChoiceFieldValue<UserReference>",
+      "mandatoryInStatuses": []
+    },
+    {
+      "id": 9,
+      "name": "Review Team",
+      "label": "Review Team",
+      "type": "MemberField",
+      "hidden": false,
+      "valueModel": "ChoiceFieldValue",
+      "mandatoryInStatuses": [],
+      "multipleValues": true,
+      "memberTypes": [
+        "USER",
+        "ROLE",
+        "GROUP"
+      ]
+    },
+    {
+      "id": 10,
+      "name": "Subsystem",
+      "label": "Subsystem",
+      "type": "TextField",
+      "hidden": false,
+      "valueModel": "TextFieldValue",
+      "mandatoryInStatuses": []
+    },
+    {
+      "id": 11,
+      "name": "Release Tag",
+      "label": "Release Tag",
+      "type": "TextField",
+      "hidden": false,
+      "valueModel": "TextFieldValue",
+      "mandatoryInStatuses": []
+    },
+    {
+      "id": 12,
+      "name": "Document Type",
+      "label": "Document Type",
+      "type": "OptionChoiceField",
+      "hidden": false,
+      "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+      "mandatoryInStatuses": [],
+      "options": [
+        {
+          "id": 1201,
+          "name": "Test Suite",
+          "type": "ChoiceOptionReference"
+        },
+        {
+          "id": 1202,
+          "name": "Test Case Review",
+          "type": "ChoiceOptionReference"
+        }
+      ]
+    }
+  ]
+}
