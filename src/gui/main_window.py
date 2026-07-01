@@ -675,6 +675,7 @@ class MainWindow:
                         self.session_state.mapping_context.default_value_candidates,
                         self.session_state.mapping_context.selected_default_values,
                         self.session_state.mapping_context.selected_tracker_item_settings,
+                        self.session_state.mapping_context.wizard.state.upload_df,
                     )
                     self.session_state.validation_context = None
                     self.session_state.upload_result = None
@@ -787,6 +788,7 @@ class MainWindow:
                     self.session_state.mapping_context.default_value_candidates,
                     self.session_state.mapping_context.selected_default_values,
                     self.session_state.mapping_context.selected_tracker_item_settings,
+                    self.session_state.mapping_context.wizard.state.upload_df,
                 )
                 self._show_page(self.mapping_page)
 

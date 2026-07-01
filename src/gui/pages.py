@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
+from src.mapping_service import MappingService
 from .services import DEFAULT_TRACKER_ITEM_ID_REGEX
 from .services import ROOT_ASSIGNMENT_MODE_FILE_SOURCE
 from .services import ROOT_ASSIGNMENT_MODE_FIXED_VALUE
@@ -36,6 +38,99 @@ def _is_hidden_user_table_column(column_name: object) -> bool:
     if "__" in text:
         return True
     return False
+
+
+def _tracker_item_sample_values(upload_preview_df: Any, column_name: str, limit: int = 3) -> list[Any]:
+    if upload_preview_df is None or not hasattr(upload_preview_df, "columns"):
+        return []
+    normalized_column = str(column_name).strip()
+    if normalized_column not in upload_preview_df.columns:
+        return []
+
+    samples: list[Any] = []
+    seen_keys: set[str] = set()
+    for raw_value in upload_preview_df[normalized_column].tolist():
+        if raw_value is None:
+            continue
+        if isinstance(raw_value, str) and not raw_value.strip():
+            continue
+        if isinstance(raw_value, list):
+            flattened = [str(item).strip() for item in raw_value if item is not None and str(item).strip()]
+            if not flattened:
+                continue
+            sample_key = repr(flattened)
+        else:
+            sample_key = str(raw_value).strip()
+            if not sample_key:
+                continue
+        if sample_key in seen_keys:
+            continue
+        seen_keys.add(sample_key)
+        samples.append(raw_value)
+        if len(samples) >= max(int(limit), 1):
+            break
+    return samples
+
+
+def _format_tracker_item_example_value(raw_value: Any) -> str:
+    if isinstance(raw_value, list):
+        parts = [str(item).strip() for item in raw_value if item is not None and str(item).strip()]
+        if not parts:
+            return "(빈 값)"
+        return ", ".join(parts[:3]) + (" ..." if len(parts) > 3 else "")
+    text = str(raw_value or "").strip()
+    return text or "(빈 값)"
+
+
+def _format_tracker_item_example_resolution(resolved_value: Any) -> str:
+    if isinstance(resolved_value, list):
+        ids = [str(item.get("id")) for item in resolved_value if isinstance(item, dict) and item.get("id") is not None]
+        return ", ".join(ids) if ids else "(해석 실패)"
+    if isinstance(resolved_value, dict) and resolved_value.get("id") is not None:
+        return str(resolved_value["id"])
+    return "(해석 실패)"
+
+
+def _normalize_tracker_item_regex_preview_error(exc: Exception) -> str:
+    message = str(exc).strip()
+    lowered = message.lower()
+    if "regex pattern is empty" in lowered:
+        return "정규식 비어 있음"
+    if "did not match value" in lowered:
+        return "불일치"
+    if "did not produce numeric id" in lowered:
+        return "숫자 ID 아님"
+    if "produced empty match" in lowered:
+        return "빈 결과"
+    return message or "해석 실패"
+
+
+def _build_tracker_item_regex_preview_text(
+    sample_values: list[Any],
+    *,
+    pattern: str,
+    multiple_values: bool,
+) -> str:
+    regex_pattern = str(pattern or "").strip()
+    if not regex_pattern:
+        return "정규식 없음"
+    if not sample_values:
+        return "샘플 값 없음"
+
+    examples: list[str] = []
+    for raw_value in sample_values[:3]:
+        source_text = _format_tracker_item_example_value(raw_value)
+        try:
+            resolved_value = MappingService.resolve_tracker_item_reference_value_with_regex(
+                raw_value,
+                multiple_values=multiple_values,
+                pattern=regex_pattern,
+            )
+            result_text = _format_tracker_item_example_resolution(resolved_value)
+        except Exception as exc:
+            result_text = _normalize_tracker_item_regex_preview_error(exc)
+        examples.append(f"{source_text} -> {result_text}")
+    return " | ".join(examples)
 
 def _require_qt():
     try:
@@ -1329,10 +1424,10 @@ def create_mapping_page(on_validate_requested, on_error=None):
     tracker_item_help_label.setWordWrap(True)
     layout.addWidget(tracker_item_help_label)
 
-    tracker_item_table = QTableWidget(0, 6)
-    tracker_item_table.setHorizontalHeaderLabels(["Excel 컬럼", "Codebeamer 필드", "방식", "다건 결과", "정규식", "조회 소스"])
+    tracker_item_table = QTableWidget(0, 7)
+    tracker_item_table.setHorizontalHeaderLabels(["Excel 컬럼", "Codebeamer 필드", "방식", "다건 결과", "정규식", "예시", "조회 소스"])
     tracker_item_table.setAlternatingRowColors(True)
-    _configure_table_columns(tracker_item_table, [220, 220, 140, 160, 260, 200])
+    _configure_table_columns(tracker_item_table, [220, 220, 140, 160, 260, 320, 200])
     layout.addWidget(tracker_item_table)
 
     status_label = QLabel("")
@@ -1355,6 +1450,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
     page._mapping_validated = False
     page._schema_rows_by_name = {}
     page._tracker_item_settings = {}
+    page._upload_preview_df = None
 
     def _mark_dirty() -> None:
         page._mapping_validated = False
@@ -1396,6 +1492,31 @@ def create_mapping_page(on_validate_requested, on_error=None):
             "ID를 추출할 정규식"
             if is_regex
             else "query 모드에서는 선택 파일 전체 값을 중복 제거 후 사전 조회합니다."
+        )
+
+    def _tracker_item_example_text(df_column: str, schema_field: str, mode: str, regex_pattern: str) -> str:
+        if mode != TrackerItemResolutionMode.REGEX.value:
+            return "query 모드에서는 미사용"
+        schema_row = page._schema_rows_by_name.get(schema_field, {})
+        sample_values = _tracker_item_sample_values(page._upload_preview_df, df_column)
+        return _build_tracker_item_regex_preview_text(
+            sample_values,
+            pattern=regex_pattern,
+            multiple_values=bool(schema_row.get("multiple_values", False)),
+        )
+
+    def _refresh_tracker_item_example(row_index: int, df_column: str, schema_field: str, mode_combo, regex_edit) -> None:
+        example_item = tracker_item_table.item(row_index, 5)
+        if example_item is None:
+            example_item = QTableWidgetItem("")
+            tracker_item_table.setItem(row_index, 5, example_item)
+        example_item.setText(
+            _tracker_item_example_text(
+                df_column,
+                schema_field,
+                str(mode_combo.currentData() or TrackerItemResolutionMode.REGEX.value),
+                regex_edit.text().strip(),
+            )
         )
 
     def _populate_tracker_item_table(mapping: dict[str, str], tracker_item_settings: dict[str, dict[str, object]]) -> None:
@@ -1454,6 +1575,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
             regex_edit = QLineEdit(selected_regex)
             tracker_item_table.setCellWidget(row_index, 4, regex_edit)
             _sync_tracker_item_controls(mode_combo, regex_edit, strategy_combo)
+            tracker_item_table.setItem(row_index, 5, QTableWidgetItem(""))
 
             source_text = (
                 ", ".join(f"tracker {tracker_id}" for tracker_id in source_tracker_ids)
@@ -1464,18 +1586,25 @@ def create_mapping_page(on_validate_requested, on_error=None):
                     else "configuration source 없음"
                 )
             )
-            tracker_item_table.setItem(row_index, 5, QTableWidgetItem(source_text))
+            tracker_item_table.setItem(row_index, 6, QTableWidgetItem(source_text))
+            _refresh_tracker_item_example(row_index, df_column, schema_field, mode_combo, regex_edit)
 
             mode_combo.currentIndexChanged.connect(
-                lambda _index, combo=mode_combo, edit=regex_edit, strategy=strategy_combo: (
+                lambda _index, row=row_index, column=df_column, field=schema_field, combo=mode_combo, edit=regex_edit, strategy=strategy_combo: (
                     _sync_tracker_item_controls(combo, edit, strategy),
+                    _refresh_tracker_item_example(row, column, field, combo, edit),
+                    _mark_dirty(),
+                )
+            )
+            regex_edit.textChanged.connect(
+                lambda _text, row=row_index, column=df_column, field=schema_field, combo=mode_combo, edit=regex_edit: (
+                    _refresh_tracker_item_example(row, column, field, combo, edit),
                     _mark_dirty(),
                 )
             )
             strategy_combo.currentTextChanged.connect(lambda _text: _mark_dirty())
-            regex_edit.textChanged.connect(lambda _text: _mark_dirty())
 
-        _configure_table_columns(tracker_item_table, [220, 220, 140, 160, 260, 200])
+        _configure_table_columns(tracker_item_table, [220, 220, 140, 160, 260, 320, 200])
         if candidates:
             tracker_item_help_label.setText(
                 "TrackerItemChoiceField 는 정규식 ID 추출 또는 source tracker 사전 조회를 선택하고, query 다건 결과 처리 방식도 지정하세요."
@@ -1510,9 +1639,11 @@ def create_mapping_page(on_validate_requested, on_error=None):
         default_value_candidates: list,
         selected_default_values: dict[str, str],
         selected_tracker_item_settings: dict[str, dict[str, object]],
+        upload_preview_df=None,
     ) -> None:
         page._mapping_validated = False
         next_button.setEnabled(False)
+        page._upload_preview_df = upload_preview_df
         page._schema_rows_by_name = {
             str(row["field_name"]): row
             for _, row in schema_df.iterrows()
