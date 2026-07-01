@@ -579,6 +579,41 @@ class WizardPayloadResolutionTest(unittest.TestCase):
         self.assertEqual(payload["customFields"][0]["values"][0]["id"], 201)
         self.assertEqual(payload["customFields"][0]["values"][0]["type"], "RoleReference")
 
+    def test_build_root_item_payload_wraps_single_fixed_value_for_multi_choice_field(self) -> None:
+        """상단 데이터의 다중 선택형 필드는 단일 입력도 한 건짜리 목록으로 직렬화해야 한다."""
+        self.wizard.select_project(1)
+        self.wizard.select_tracker(1)
+        self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
+            {
+                "id": 1,
+                "name": "Summary",
+                "type": "TextField",
+                "trackerItemField": "name",
+                "valueModel": "TextFieldValue",
+            },
+            {
+                "id": 2,
+                "name": "태그",
+                "type": "OptionChoiceField",
+                "multipleValues": True,
+                "options": [{"id": 11, "name": "Open"}],
+                "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+            },
+        ])
+        self.wizard.state.option_maps = self.mapper.build_option_maps_from_schema(self.wizard.state.schema_df)
+
+        payload = self.wizard._build_root_item_payload(
+            "ROOT-REQ",
+            root_field_values={"태그": "Open"},
+        )
+
+        self.assertEqual(payload["name"], "ROOT-REQ")
+        self.assertEqual(payload["customFields"][0]["name"], "태그")
+        self.assertEqual(payload["customFields"][0]["type"], "ChoiceFieldValue")
+        self.assertEqual(len(payload["customFields"][0]["values"]), 1)
+        self.assertEqual(payload["customFields"][0]["values"][0]["id"], 11)
+        self.assertEqual(payload["customFields"][0]["values"][0]["name"], "Open")
+
     def test_process_option_mapping_reports_invalid_default_status_value(self) -> None:
         """잘못된 기본값은 option 검증 단계에서 바로 드러나야 한다."""
         self.wizard.state.schema_df = self.mapper.flatten_schema_fields([

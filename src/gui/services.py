@@ -1059,11 +1059,7 @@ class GuiUploadPipelineService:
                     OptionMapKind.UNSUPPORTED.value,
                     OptionMapKind.REFERENCE_LOOKUP.value,
                 }
-                if (
-                    supported
-                    and not bool(row.get("multiple_values", False))
-                    and kind == OptionMapKind.STATIC_OPTIONS.value
-                ):
+                if supported and kind == OptionMapKind.STATIC_OPTIONS.value:
                     fixed_value_kind = GUI_VALUE_KIND_STATIC_OPTIONS
                     fixed_options = [
                         str(option.get("name")).strip()
@@ -1073,7 +1069,6 @@ class GuiUploadPipelineService:
                     allows_fixed_value = bool(fixed_options)
                 elif (
                     supported
-                    and not bool(row.get("multiple_values", False))
                     and kind in {
                         OptionMapKind.MEMBER_LOOKUP.value,
                         OptionMapKind.TRACKER_ITEM_DIRECT.value,

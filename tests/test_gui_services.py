@@ -1255,6 +1255,58 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             self.assertTrue(summary_candidate.allows_fixed_value)
             self.assertTrue(summary_candidate.allows_custom_value)
 
+    def test_build_root_item_preview_context_allows_fixed_value_for_multi_tracker_item_field(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "ABC_REQ-001.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary"])
+            sheet.append(["REQ-001"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=TrackerItemQueryFakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "file_paths": [str(path)],
+                    "preview_file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                },
+            )
+
+            preview_context = service.build_root_item_preview_context(
+                mapping_context,
+                {"regex_pattern": "", "regex_target": "file_stem", "field_assignments": {}},
+            )
+
+            related_candidate = next(
+                candidate
+                for candidate in preview_context.field_candidates
+                if candidate.schema_field == "연관 요구사항"
+            )
+
+            self.assertTrue(related_candidate.allows_fixed_value)
+            self.assertTrue(related_candidate.allows_custom_value)
+
     def test_build_root_item_payload_spec_uses_regex_mapped_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ABC_REQ-001.xlsx"
