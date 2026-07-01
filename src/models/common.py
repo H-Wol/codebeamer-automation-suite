@@ -216,6 +216,13 @@ class TrackerItemResolutionMode(str, Enum):
     QUERY = "query"
 
 
+class TrackerItemQueryMatchStrategy(str, Enum):
+    FIRST = "first"
+    LAST = "last"
+    BEST = "best"
+    ERROR = "error"
+
+
 class UserLookupStatus(str, Enum):
     MEMBER_LOOKUP_AMBIGUOUS = "MEMBER_LOOKUP_AMBIGUOUS"
     MEMBER_LOOKUP_FAILED = "MEMBER_LOOKUP_FAILED"

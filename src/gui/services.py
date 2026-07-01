@@ -18,6 +18,7 @@ from src.mapping_service import MappingService
 from src.models import OptionMapKind
 from src.models import OptionCheckStatus
 from src.models import PayloadStatus
+from src.models import TrackerItemQueryMatchStrategy
 from src.models import TrackerItemResolutionMode
 from src.upload_pipeline import load_tracker_schema_df
 from src.upload_pipeline import prepare_upload_dataframe
@@ -568,7 +569,10 @@ class GuiUploadPipelineService:
                     ]
                     if not options:
                         continue
-                elif option_info.get("kind") == OptionMapKind.USER_LOOKUP.value:
+                elif option_info.get("kind") in {
+                    OptionMapKind.TRACKER_ITEM_DIRECT.value,
+                    OptionMapKind.USER_LOOKUP.value,
+                }:
                     value_kind = GUI_VALUE_KIND_SCALAR
                     allows_custom_value = True
                 else:
@@ -821,6 +825,7 @@ class GuiUploadPipelineService:
                     if candidate.supports_query
                     else TrackerItemResolutionMode.REGEX.value
                 ),
+                "query_match_strategy": TrackerItemQueryMatchStrategy.BEST.value,
                 "regex_pattern": DEFAULT_TRACKER_ITEM_ID_REGEX,
                 "source_tracker_ids": list(candidate.source_tracker_ids),
             }
@@ -847,12 +852,24 @@ class GuiUploadPipelineService:
                 TrackerItemResolutionMode.QUERY.value,
             }:
                 raw_mode = normalized_settings[candidate.schema_field]["mode"]
+            raw_query_match_strategy = str(
+                raw_setting.get("query_match_strategy")
+                or normalized_settings[candidate.schema_field]["query_match_strategy"]
+            ).strip()
+            if raw_query_match_strategy not in {
+                TrackerItemQueryMatchStrategy.FIRST.value,
+                TrackerItemQueryMatchStrategy.LAST.value,
+                TrackerItemQueryMatchStrategy.BEST.value,
+                TrackerItemQueryMatchStrategy.ERROR.value,
+            }:
+                raw_query_match_strategy = normalized_settings[candidate.schema_field]["query_match_strategy"]
             normalized_settings[candidate.schema_field] = {
                 "mode": (
                     raw_mode
                     if raw_mode != TrackerItemResolutionMode.QUERY.value or candidate.supports_query
                     else TrackerItemResolutionMode.REGEX.value
                 ),
+                "query_match_strategy": raw_query_match_strategy,
                 "regex_pattern": str(
                     raw_setting.get("regex_pattern")
                     or normalized_settings[candidate.schema_field]["regex_pattern"]

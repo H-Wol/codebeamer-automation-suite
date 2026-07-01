@@ -100,6 +100,7 @@ class GuiSettingsStoreTest(unittest.TestCase):
                 selected_tracker_item_settings={
                     "연관 요구사항": {
                         "mode": "query",
+                        "query_match_strategy": "last",
                         "regex_pattern": r"(\\d+)",
                         "source_tracker_ids": [13526611],
                     }
@@ -125,4 +126,8 @@ class GuiSettingsStoreTest(unittest.TestCase):
             self.assertEqual(
                 loaded.selected_tracker_item_settings["연관 요구사항"]["source_tracker_ids"],
                 [13526611],
+            )
+            self.assertEqual(
+                loaded.selected_tracker_item_settings["연관 요구사항"]["query_match_strategy"],
+                "last",
             )

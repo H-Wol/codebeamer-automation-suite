@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from difflib import SequenceMatcher
 import json
 import time
 from pathlib import Path
@@ -18,6 +19,7 @@ from .models import OptionMapKind
 from .models import PayloadStatus
 from .models import ReferenceType
 from .models import ResolvedFieldKind
+from .models import TrackerItemQueryMatchStrategy
 from .models import TrackerItemResolutionMode
 from .models import GroupReference
 from .models import RoleReference
@@ -737,11 +739,23 @@ class CodebeamerUploadWizard:
             )
         if mode == TrackerItemResolutionMode.QUERY.value and not normalized_source_tracker_ids:
             mode = TrackerItemResolutionMode.REGEX.value
+        query_match_strategy = str(
+            raw_setting.get("query_match_strategy")
+            or TrackerItemQueryMatchStrategy.BEST.value
+        ).strip()
+        if query_match_strategy not in {
+            TrackerItemQueryMatchStrategy.FIRST.value,
+            TrackerItemQueryMatchStrategy.LAST.value,
+            TrackerItemQueryMatchStrategy.BEST.value,
+            TrackerItemQueryMatchStrategy.ERROR.value,
+        }:
+            query_match_strategy = TrackerItemQueryMatchStrategy.BEST.value
 
         return {
             "mode": mode,
             "regex_pattern": str(raw_setting.get("regex_pattern") or DEFAULT_TRACKER_ITEM_ID_REGEX).strip(),
             "source_tracker_ids": normalized_source_tracker_ids,
+            "query_match_strategy": query_match_strategy,
         }
 
     def _decorate_tracker_item_option_maps(
@@ -761,9 +775,59 @@ class CodebeamerUploadWizard:
                 "tracker_item_mode": setting["mode"],
                 "tracker_item_regex_pattern": setting["regex_pattern"],
                 "tracker_item_source_tracker_ids": setting["source_tracker_ids"],
+                "tracker_item_query_match_strategy": setting["query_match_strategy"],
             }
 
         return decorated
+
+    @staticmethod
+    def _tracker_item_candidate_similarity(lookup_text: str, candidate_name: Any) -> tuple[int, int, int, float, int]:
+        normalized_lookup = str(lookup_text or "").strip().casefold()
+        normalized_candidate = str(candidate_name or "").strip().casefold()
+        if not normalized_candidate:
+            return (0, 0, 0, 0.0, 0)
+        exact_match = int(normalized_candidate == normalized_lookup)
+        prefix_match = int(bool(normalized_lookup) and normalized_candidate.startswith(normalized_lookup))
+        contains_match = int(bool(normalized_lookup) and normalized_lookup in normalized_candidate)
+        similarity = SequenceMatcher(None, normalized_lookup, normalized_candidate).ratio()
+        length_penalty = -abs(len(normalized_candidate) - len(normalized_lookup))
+        return (exact_match, prefix_match, contains_match, similarity, length_penalty)
+
+    def _select_tracker_item_query_candidate(
+        self,
+        lookup_text: str,
+        candidates: list[dict[str, Any]],
+        option_info: dict[str, Any],
+    ) -> TrackerItemLookupCacheEntry:
+        strategy = str(
+            option_info.get("tracker_item_query_match_strategy")
+            or TrackerItemQueryMatchStrategy.BEST.value
+        ).strip()
+        if len(candidates) == 1:
+            return candidates[0], "RESOLVED", None
+        if strategy == TrackerItemQueryMatchStrategy.FIRST.value:
+            return candidates[0], "RESOLVED", None
+        if strategy == TrackerItemQueryMatchStrategy.LAST.value:
+            return candidates[-1], "RESOLVED", None
+        if strategy == TrackerItemQueryMatchStrategy.BEST.value:
+            best_candidate = max(
+                candidates,
+                key=lambda candidate: self._tracker_item_candidate_similarity(
+                    lookup_text,
+                    candidate.get("name"),
+                ),
+            )
+            return best_candidate, "RESOLVED", None
+
+        candidate_names = ", ".join(
+            str(candidate.get("name") or candidate.get("id"))
+            for candidate in candidates[:5]
+        )
+        return (
+            None,
+            OptionCheckStatus.TRACKER_ITEM_LOOKUP_AMBIGUOUS.value,
+            f"tracker item lookup is ambiguous: {candidate_names}",
+        )
 
     def _lookup_tracker_item_reference_by_query(
         self,
@@ -809,23 +873,17 @@ class CodebeamerUploadWizard:
                         "type": ReferenceType.TRACKER_ITEM.value,
                     })
 
-            if len(resolved_candidates) == 1:
-                entry = (resolved_candidates[0], "RESOLVED", None)
-            elif not resolved_candidates:
+            if resolved_candidates:
+                entry = self._select_tracker_item_query_candidate(
+                    lookup_text,
+                    resolved_candidates,
+                    option_info,
+                )
+            else:
                 entry = (
                     None,
                     OptionCheckStatus.TRACKER_ITEM_LOOKUP_NOT_FOUND.value,
                     f"tracker item lookup failed: {lookup_text!r}",
-                )
-            else:
-                candidate_names = ", ".join(
-                    str(candidate.get("name") or candidate.get("id"))
-                    for candidate in resolved_candidates[:5]
-                )
-                entry = (
-                    None,
-                    OptionCheckStatus.TRACKER_ITEM_LOOKUP_AMBIGUOUS.value,
-                    f"tracker item lookup is ambiguous: {candidate_names}",
                 )
         except Exception as exc:
             entry = (None, OptionCheckStatus.LOOKUP_REQUIRED.value, str(exc))

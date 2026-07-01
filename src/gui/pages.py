@@ -5,6 +5,7 @@ from pathlib import Path
 from .services import DEFAULT_TRACKER_ITEM_ID_REGEX
 from .services import ROOT_ASSIGNMENT_MODE_FILE_SOURCE
 from .services import ROOT_ASSIGNMENT_MODE_FIXED_VALUE
+from src.models import TrackerItemQueryMatchStrategy
 from src.models import TrackerItemResolutionMode
 
 
@@ -1328,10 +1329,10 @@ def create_mapping_page(on_validate_requested, on_error=None):
     tracker_item_help_label.setWordWrap(True)
     layout.addWidget(tracker_item_help_label)
 
-    tracker_item_table = QTableWidget(0, 5)
-    tracker_item_table.setHorizontalHeaderLabels(["Excel 컬럼", "Codebeamer 필드", "방식", "정규식", "조회 소스"])
+    tracker_item_table = QTableWidget(0, 6)
+    tracker_item_table.setHorizontalHeaderLabels(["Excel 컬럼", "Codebeamer 필드", "방식", "다건 결과", "정규식", "조회 소스"])
     tracker_item_table.setAlternatingRowColors(True)
-    _configure_table_columns(tracker_item_table, [220, 220, 140, 280, 200])
+    _configure_table_columns(tracker_item_table, [220, 220, 140, 160, 260, 200])
     layout.addWidget(tracker_item_table)
 
     status_label = QLabel("")
@@ -1379,9 +1380,18 @@ def create_mapping_page(on_validate_requested, on_error=None):
             })
         return candidates
 
-    def _sync_tracker_item_regex_state(mode_combo, regex_edit) -> None:
+    def _tracker_item_query_strategy_options() -> list[tuple[str, str]]:
+        return [
+            ("가장 비슷한 값", TrackerItemQueryMatchStrategy.BEST.value),
+            ("첫 번째 결과", TrackerItemQueryMatchStrategy.FIRST.value),
+            ("마지막 결과", TrackerItemQueryMatchStrategy.LAST.value),
+            ("오류로 처리", TrackerItemQueryMatchStrategy.ERROR.value),
+        ]
+
+    def _sync_tracker_item_controls(mode_combo, regex_edit, strategy_combo) -> None:
         is_regex = mode_combo.currentData() == TrackerItemResolutionMode.REGEX.value
         regex_edit.setEnabled(is_regex)
+        strategy_combo.setEnabled(not is_regex)
         regex_edit.setPlaceholderText(
             "ID를 추출할 정규식"
             if is_regex
@@ -1412,6 +1422,10 @@ def create_mapping_page(on_validate_requested, on_error=None):
             selected_mode = str(selected_setting.get("mode") or default_mode).strip()
             if selected_mode == TrackerItemResolutionMode.QUERY.value and not supports_query:
                 selected_mode = TrackerItemResolutionMode.REGEX.value
+            selected_query_strategy = str(
+                selected_setting.get("query_match_strategy")
+                or TrackerItemQueryMatchStrategy.BEST.value
+            ).strip()
             selected_regex = str(selected_setting.get("regex_pattern") or DEFAULT_TRACKER_ITEM_ID_REGEX).strip()
 
             column_item = QTableWidgetItem(df_column)
@@ -1430,9 +1444,16 @@ def create_mapping_page(on_validate_requested, on_error=None):
             mode_combo.setCurrentIndex(mode_index if mode_index >= 0 else 0)
             tracker_item_table.setCellWidget(row_index, 2, mode_combo)
 
+            strategy_combo = QComboBox()
+            for label, value in _tracker_item_query_strategy_options():
+                strategy_combo.addItem(label, value)
+            strategy_index = strategy_combo.findData(selected_query_strategy)
+            strategy_combo.setCurrentIndex(strategy_index if strategy_index >= 0 else 0)
+            tracker_item_table.setCellWidget(row_index, 3, strategy_combo)
+
             regex_edit = QLineEdit(selected_regex)
-            tracker_item_table.setCellWidget(row_index, 3, regex_edit)
-            _sync_tracker_item_regex_state(mode_combo, regex_edit)
+            tracker_item_table.setCellWidget(row_index, 4, regex_edit)
+            _sync_tracker_item_controls(mode_combo, regex_edit, strategy_combo)
 
             source_text = (
                 ", ".join(f"tracker {tracker_id}" for tracker_id in source_tracker_ids)
@@ -1443,17 +1464,21 @@ def create_mapping_page(on_validate_requested, on_error=None):
                     else "configuration source 없음"
                 )
             )
-            tracker_item_table.setItem(row_index, 4, QTableWidgetItem(source_text))
+            tracker_item_table.setItem(row_index, 5, QTableWidgetItem(source_text))
 
             mode_combo.currentIndexChanged.connect(
-                lambda _index, combo=mode_combo, edit=regex_edit: (_sync_tracker_item_regex_state(combo, edit), _mark_dirty())
+                lambda _index, combo=mode_combo, edit=regex_edit, strategy=strategy_combo: (
+                    _sync_tracker_item_controls(combo, edit, strategy),
+                    _mark_dirty(),
+                )
             )
+            strategy_combo.currentTextChanged.connect(lambda _text: _mark_dirty())
             regex_edit.textChanged.connect(lambda _text: _mark_dirty())
 
-        _configure_table_columns(tracker_item_table, [220, 220, 140, 280, 200])
+        _configure_table_columns(tracker_item_table, [220, 220, 140, 160, 260, 200])
         if candidates:
             tracker_item_help_label.setText(
-                "TrackerItemChoiceField 는 정규식 ID 추출 또는 source tracker 사전 조회 중 하나를 선택하세요."
+                "TrackerItemChoiceField 는 정규식 ID 추출 또는 source tracker 사전 조회를 선택하고, query 다건 결과 처리 방식도 지정하세요."
             )
         else:
             tracker_item_help_label.setText("현재 매핑에는 별도 Tracker Item 처리 설정이 필요한 필드가 없습니다.")
@@ -1592,8 +1617,9 @@ def create_mapping_page(on_validate_requested, on_error=None):
         for row_index in range(tracker_item_table.rowCount()):
             source_item = tracker_item_table.item(row_index, 0)
             mode_combo = tracker_item_table.cellWidget(row_index, 2)
-            regex_edit = tracker_item_table.cellWidget(row_index, 3)
-            if source_item is None or mode_combo is None or regex_edit is None:
+            strategy_combo = tracker_item_table.cellWidget(row_index, 3)
+            regex_edit = tracker_item_table.cellWidget(row_index, 4)
+            if source_item is None or mode_combo is None or strategy_combo is None or regex_edit is None:
                 continue
             metadata = source_item.data(Qt.ItemDataRole.UserRole) or {}
             schema_field = str(metadata.get("schema_field") or "").strip()
@@ -1601,6 +1627,9 @@ def create_mapping_page(on_validate_requested, on_error=None):
                 continue
             settings[schema_field] = {
                 "mode": str(mode_combo.currentData() or TrackerItemResolutionMode.REGEX.value),
+                "query_match_strategy": str(
+                    strategy_combo.currentData() or TrackerItemQueryMatchStrategy.BEST.value
+                ),
                 "regex_pattern": regex_edit.text().strip(),
                 "source_tracker_ids": list(metadata.get("source_tracker_ids") or []),
             }
