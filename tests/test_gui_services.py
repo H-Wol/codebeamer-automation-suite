@@ -182,7 +182,7 @@ class TrackerItemQueryFakeClient(FakeClient):
             "fields": [
                 {
                     "label": "연관 요구사항",
-                    "choiceConfigOptionsSetting": {
+                    "choiceOptionSetting": {
                         "referenceFilters": [
                             {
                                 "domainType": "TRACKER",
@@ -216,7 +216,7 @@ class TrackerItemNonTrackerConfigFakeClient(TrackerItemQueryFakeClient):
             "fields": [
                 {
                     "label": "연관 요구사항",
-                    "choiceConfigOptionsSetting": {
+                    "choiceOptionSetting": {
                         "referenceFilters": [
                             {
                                 "domainType": "PROJECT",
@@ -249,7 +249,7 @@ class TrackerItemReferenceIdConfigFakeClient(TrackerItemQueryFakeClient):
                 {
                     "referenceId": 17,
                     "label": "Software Unit Design Specification",
-                    "choiceConfigOptionsSetting": {
+                    "choiceOptionSetting": {
                         "referenceFilters": [
                             {
                                 "domainType": "TRACKER",
