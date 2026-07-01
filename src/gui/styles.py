@@ -28,6 +28,15 @@ QWidget#header_card, QWidget#page_card {
     border-radius: 10px;
 }
 
+QScrollArea#page_scroll_area {
+    background: transparent;
+    border: none;
+}
+
+QScrollArea#page_scroll_area > QWidget > QWidget {
+    background: transparent;
+}
+
 QLabel {
     color: #13263A;
 }
@@ -384,6 +393,31 @@ QStatusBar {
     color: #5B6B7F;
     border-top: 1px solid #D8E1EA;
 }
+
+QScrollBar:vertical {
+    background: #EFF4F8;
+    width: 12px;
+    margin: 4px 2px 4px 2px;
+    border-radius: 6px;
+}
+
+QScrollBar::handle:vertical {
+    background: #B8C7D5;
+    min-height: 28px;
+    border-radius: 6px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #97AEC3;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical,
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: transparent;
+    border: none;
+}
 """
 _BASE_GUI_STYLESHEET = _BASE_GUI_STYLESHEET.replace("{combo_arrow}", _COMBO_ARROW_PATH)
 
@@ -398,6 +432,10 @@ QWidget#app_root {
 
 QWidget#header_card, QWidget#page_card {
     border: 1px solid #D3E7E9;
+}
+
+QScrollArea#page_scroll_area > QWidget > QWidget {
+    background: transparent;
 }
 
 QLabel#app_title {
@@ -549,6 +587,18 @@ QProgressBar::chunk {
 QStatusBar {
     color: #60797E;
     border-top: 1px solid #D3E7E9;
+}
+
+QScrollBar:vertical {
+    background: #EAF5F6;
+}
+
+QScrollBar::handle:vertical {
+    background: #A6C9CC;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #7FB4B8;
 }
 """
 

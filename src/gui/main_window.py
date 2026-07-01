@@ -40,6 +40,7 @@ def _require_qt():
         from PySide6.QtWidgets import QPlainTextEdit
         from PySide6.QtWidgets import QProgressBar
         from PySide6.QtWidgets import QPushButton
+        from PySide6.QtWidgets import QScrollArea
         from PySide6.QtWidgets import QStackedWidget
         from PySide6.QtWidgets import QStatusBar
         from PySide6.QtWidgets import QVBoxLayout
@@ -58,6 +59,7 @@ def _require_qt():
         "QPlainTextEdit": QPlainTextEdit,
         "QProgressBar": QProgressBar,
         "QPushButton": QPushButton,
+        "QScrollArea": QScrollArea,
         "QSize": QSize,
         "QStackedWidget": QStackedWidget,
         "QStatusBar": QStatusBar,
@@ -112,9 +114,11 @@ class MainWindow:
                 self.upload_total_count = 0
                 self._upload_event_started_at = {}
                 self._upload_batch_started_at = None
+                self._current_page = None
+                self.page_scroll_areas = {}
                 self.setWindowTitle("Codebeamer Upload GUI")
-                self.resize(qt["QSize"](920, 500))
-                self.setMinimumSize(qt["QSize"](760, 400))
+                self.resize(qt["QSize"](1160, 780))
+                self.setMinimumSize(qt["QSize"](860, 620))
                 self._build_shell()
                 self.setStatusBar(qt["QStatusBar"]())
                 self._build_pages()
@@ -220,6 +224,22 @@ class MainWindow:
                 self.setCentralWidget(root)
                 self._update_busy_overlay_geometry()
 
+            def _create_page_scroll_area(self, page):
+                QFrame = self.qt["QFrame"]
+                QScrollArea = self.qt["QScrollArea"]
+                Qt = self.qt["Qt"]
+
+                scroll_area = QScrollArea()
+                scroll_area.setObjectName("page_scroll_area")
+                scroll_area.setWidget(page)
+                scroll_area.setWidgetResizable(True)
+                scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+                scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+                scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+                scroll_area.verticalScrollBar().setSingleStep(24)
+                self.page_scroll_areas[page] = scroll_area
+                return scroll_area
+
             def _content_height_for_page(self, page) -> int:
                 if page is None:
                     return self.height()
@@ -253,13 +273,24 @@ class MainWindow:
                     + status_height
                 )
 
+            def _window_height_cap(self) -> int:
+                screen = self.screen()
+                available_height = 1080
+                if screen is not None:
+                    available_height = max(screen.availableGeometry().height(), self.minimumHeight())
+                return max(self.minimumHeight(), int(available_height * 0.88))
+
             def _fit_window_to_current_page(self, *, allow_grow: bool) -> None:
-                page = self.stack.currentWidget() if hasattr(self, "stack") else None
+                page = self._current_page if hasattr(self, "_current_page") else None
                 if page is None:
                     return
 
-                target_height = max(self.minimumHeight(), self._content_height_for_page(page))
-                if not allow_grow and target_height >= self.height():
+                target_height = min(
+                    max(self.minimumHeight(), self._content_height_for_page(page)),
+                    self._window_height_cap(),
+                )
+                current_height = self.height()
+                if not allow_grow and target_height > current_height and current_height <= self._window_height_cap():
                     return
 
                 self.resize(self.width(), target_height)
@@ -414,7 +445,7 @@ class MainWindow:
                     self.upload_page,
                     self.result_page,
                 ):
-                    self.stack.addWidget(page)
+                    self.stack.addWidget(self._create_page_scroll_area(page))
 
                 self.page_meta = {
                     self.settings_page: ("설정", "연결 정보와 기본 실행 옵션을 입력합니다.", 0),
@@ -445,7 +476,9 @@ class MainWindow:
                     self.statusBar().showMessage("GUI 스켈레톤이 준비되었습니다.")
 
             def _show_page(self, page) -> None:
-                self.stack.setCurrentWidget(page)
+                self._current_page = page
+                page_scroll_area = self.page_scroll_areas.get(page, page)
+                self.stack.setCurrentWidget(page_scroll_area)
                 title, subtitle, active_index = self.page_meta.get(page, ("", "", -1))
                 self.page_title_label.setText(title)
                 self.page_subtitle_label.setText(subtitle)
@@ -457,6 +490,8 @@ class MainWindow:
                 on_page_shown = getattr(page, "on_page_shown", None)
                 if callable(on_page_shown):
                     on_page_shown()
+                if page_scroll_area is not None and hasattr(page_scroll_area, "verticalScrollBar"):
+                    page_scroll_area.verticalScrollBar().setValue(0)
                 self._fit_window_to_current_page(allow_grow=True)
 
             def _attach_navigation(
