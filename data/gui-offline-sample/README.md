@@ -26,7 +26,10 @@
    - `Sheet Name`: `Upload`
    - `Header Row`: `1`
    - `Summary Column`: `Summary`
-7. 첫 Dry Run에서는 아래 컬럼 위주로 매핑하면 서버 lookup 없이 끝까지 확인할 수 있습니다.
+7. 상단 데이터 단계는 두 가지 중 하나로 진행합니다.
+   - 루트 parent item이 필요 없으면 `파일별 상단 데이터 생성`을 끄고 넘어갑니다.
+   - 루트 parent item을 만들고 싶으면 기본 summary source를 파일명으로 두고, 필요 시 정규식 미리보기만 확인합니다.
+8. 첫 Dry Run에서는 아래 컬럼 위주로 매핑하면 서버 lookup 없이 끝까지 확인할 수 있습니다.
    - `Summary`
    - `Description`
    - `Priority`
@@ -36,9 +39,10 @@
    - `Test Steps.Expected result`
    - `Test Steps.Critical`
    - `Related Requirement`
-8. `Related Requirement`는 테스트 모드에서 query lookup이 아니라 기본 regex ID 추출 방식으로 두는 편이 맞습니다.
+9. `Related Requirement`는 테스트 모드에서 query lookup이 아니라 기본 regex ID 추출 방식으로 두는 편이 맞습니다.
    - 샘플 값은 `[REQ:9001001]` 같은 형식이라 기본 regex로 바로 인식됩니다.
-9. `Owner`, `Review Team`은 오프라인 snapshot에 사용자/그룹 디렉터리가 없으므로 첫 성공 경로에서는 매핑하지 않는 편이 맞습니다.
+10. `Owner`, `Review Team`은 오프라인 snapshot에 사용자/그룹 디렉터리가 없으므로 첫 성공 경로에서는 매핑하지 않는 편이 맞습니다.
+11. 업로드 단계에서는 `Dry Run`을 켠 상태로만 진행할 수 있습니다.
 
 이슈 화면 확인용 샘플:
 
@@ -50,3 +54,5 @@
 
 - 상단 데이터 summary를 파일명 전체로 쓰려면 정규식 `^(.*)\\.xlsx$` 를 사용하면 됩니다.
 - 샘플 파일명은 `SAMPLE_<MODULE>_TC_<번호>.xlsx` 규칙이라 미리보기 검증에도 적합합니다.
+- 예: `^SAMPLE_(?P<module>[A-Z]+)_TC_(?P<case_no>\\d+)$`
+  - `SAMPLE_MODULE_A_TC_001.xlsx` 에서는 `module=MODULE_A`, `case_no=001`

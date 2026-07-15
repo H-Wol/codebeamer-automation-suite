@@ -23,6 +23,16 @@
 - 해당 필드 매핑을 잠시 제외
 - 또는 동적 resolution 지원 추가
 
+## 테스트 모드에서 실제 업로드가 시작되지 않음
+
+의미:
+- 테스트 모드는 offline snapshot 기반 검증용입니다.
+- 실제 `create_item()` 호출은 차단되어 있습니다.
+
+대응:
+- 테스트 모드에서는 `Dry Run`만 사용합니다.
+- 실제 업로드가 필요하면 테스트 모드를 끄고 온라인 연결 설정으로 다시 진행합니다.
+
 ## `TableField` 데이터가 업로드되지 않음
 
 확인할 점:
@@ -45,11 +55,47 @@
 - 설정된 summary 컬럼명이 실제 Excel 헤더와 다름
 - 잘못된 sheet 선택
 - header row 설정 오류
+- 파일 설정을 바꾼 뒤 `데이터 불러오기`를 다시 실행하지 않음
 
 대응:
 - `EXCEL_HEADER_ROW` 확인
 - 선택한 sheet 재확인
 - 실제 Excel 헤더 문자열 확인
+- GUI에서는 설정 변경 후 반드시 `데이터 불러오기`를 눌러 미리보기를 다시 생성
+
+## 상단 데이터 정규식이 예상대로 동작하지 않음
+
+확인할 점:
+- 정규식 대상이 `파일명(확장자 제외)` 인지 `전체 파일명` 인지
+- 필요한 값이 전체 match 인지 group 인지
+- 선택한 필드가 `파일명/정규식` source 를 지원하는지
+
+대응:
+- 상단 데이터 화면의 파일명 파싱 미리보기에서 먼저 결과를 확인
+- 일부 파일에서만 값이 비면 정규식과 source 선택을 함께 다시 확인
+- 루트 parent item 생성이 필요 없으면 해당 옵션을 끄고 진행
+
+## `TrackerItemChoiceField` 가 query 모드로 활성화되지 않음
+
+가능한 원인:
+- tracker configuration snapshot 또는 live configuration 에 source tracker 정보가 없음
+- configuration 의 `fields` 목록과 schema field id 가 매칭되지 않음
+- 해당 필드가 tracker 기반이 아닌 다른 구조라 query 를 지원하지 않음
+
+대응:
+- configuration 응답의 `fields` 목록에서 `referenceId == schema.field_id` 인지 먼저 확인
+- matched field 아래 `choiceOptionSetting` 또는 `choiceConfigOptionsSetting` 의 `referenceFilters` 를 확인
+- source tracker를 찾지 못하면 현재는 regex ID 추출 방식만 사용
+
+## 다중 파일인데 검증 이슈가 한 파일 기준으로만 보임
+
+의미:
+- 현재 검증 화면의 상세 이슈 테이블은 대표 파일 기준으로 표시합니다.
+- 대신 상단 요약에는 선택 파일 수와 전체 예상 항목 수를 함께 표시합니다.
+
+대응:
+- 다른 파일의 세부 이슈를 보려면 파일 단계에서 대표 미리보기 파일을 바꿔 다시 검증
+- 전체 배치 가능 건수는 검증 요약과 업로드 총 건수를 함께 확인
 
 ## `xlwings` 로 workbook을 열지 못함
 
@@ -70,6 +116,10 @@
 
 ## 저장 산출물이 혼란스러움
 
-참고:
-- 저장소에는 레거시 경로와 v2 경로가 함께 존재함
-- 가능한 한 v2 CLI 경로에서 생성한 산출물을 기준으로 검토하는 것을 권장
+확인할 점:
+- GUI 결과 화면은 내부 생성 컬럼을 숨겨서 보여줍니다.
+- 실제 `output/` 산출물에는 디버깅용 내부 컬럼이 포함될 수 있습니다.
+
+대응:
+- 사용자 확인은 GUI 결과 화면을 우선 보고
+- 원인 분석이 필요할 때만 `payload_df`, `failed_df`, `unresolved_df`, `payload_preview.jsonl`을 직접 확인
