@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from difflib import SequenceMatcher
 import json
 import time
@@ -1772,10 +1773,10 @@ class CodebeamerUploadWizard:
                 continue
 
             field_row = matched.iloc[0]
-            tracker_field = field_row["tracker_item_field"]
-            if not tracker_field:
-                continue
             if bool(field_row.get("is_table_field")):
+                continue
+            tracker_field = str(field_row.get("tracker_item_field") or schema_field).strip()
+            if not tracker_field:
                 continue
 
             df_col = f"{df_col_prefix}:{schema_field}"
@@ -1820,7 +1821,7 @@ class CodebeamerUploadWizard:
                 continue
 
             field_row = matched.iloc[0]
-            tracker_field = field_row["tracker_item_field"]
+            tracker_field = str(field_row.get("tracker_item_field") or schema_field).strip()
             if not tracker_field:
                 continue
 
@@ -1912,10 +1913,17 @@ class CodebeamerUploadWizard:
 
         return custom_fields
 
-    def _build_row_payload(self, row: pd.Series, row_id: int) -> dict[str, Any]:
-        """단일 행에서 순수 item payload만 계산한다."""
+    def _build_row_item(
+        self,
+        row: pd.Series,
+        row_id: int,
+        *,
+        default_name: str | None,
+    ) -> TrackerItemBase:
+        """행 값과 기본값을 반영한 TrackerItem 조립 결과를 만든다."""
         item = TrackerItemBase()
-        item.name = str(row.get("upload_name", ""))
+        if default_name is not None:
+            item.name = str(default_name)
         applied_schema_fields: set[str] = set()
 
         for df_col, schema_field in self.state.selected_mapping.items():
@@ -1924,11 +1932,10 @@ class CodebeamerUploadWizard:
                 continue
 
             field_row = matched.iloc[0]
-            tracker_field = field_row["tracker_item_field"]
-
-            if not tracker_field:
-                continue
             if bool(field_row.get("is_table_field")):
+                continue
+            tracker_field = str(field_row.get("tracker_item_field") or schema_field).strip()
+            if not tracker_field:
                 continue
 
             field_value = None
@@ -1963,16 +1970,224 @@ class CodebeamerUploadWizard:
             row_id=row_id,
             applied_schema_fields=applied_schema_fields,
         )
-
-        payload = item.create_new_item_payload()
         table_custom_fields = self._build_table_custom_fields(row)
         if table_custom_fields:
-            existing_custom_fields = payload.get("customFields", [])
-            payload["customFields"] = existing_custom_fields + [
-                field.to_dict() for field in table_custom_fields
-            ]
+            for field in table_custom_fields:
+                item.add_field_value(field)
 
+        return item
+
+    def _build_row_payload(self, row: pd.Series, row_id: int) -> dict[str, Any]:
+        """단일 생성 행에서 순수 item payload만 계산한다."""
+        item = self._build_row_item(
+            row,
+            row_id,
+            default_name=str(row.get("upload_name", "")),
+        )
+        payload = item.create_new_item_payload()
         return self._serialize_payload_value(payload)
+
+    @staticmethod
+    def _update_item_id_column_name(source_df: pd.DataFrame) -> str | None:
+        """업데이트 모드에서 사용할 Excel ID 열 이름을 찾는다."""
+        exact_match = None
+        for column_name in source_df.columns:
+            normalized = str(column_name or "").strip()
+            if not normalized or normalized.startswith("_"):
+                continue
+            if normalized == "id":
+                return normalized
+            if normalized.casefold() == "id" and exact_match is None:
+                exact_match = normalized
+        return exact_match
+
+    @staticmethod
+    def _parse_update_item_id(raw_value: Any) -> int:
+        """업데이트 대상 item id를 정수로 정규화한다."""
+        if raw_value is None:
+            raise ValueError("missing")
+        if isinstance(raw_value, bool):
+            raise ValueError(f"invalid: {raw_value!r}")
+        if isinstance(raw_value, int):
+            if raw_value > 0:
+                return raw_value
+            raise ValueError(f"invalid: {raw_value!r}")
+        if isinstance(raw_value, float):
+            if pd.isna(raw_value):
+                raise ValueError("missing")
+            if raw_value.is_integer() and raw_value > 0:
+                return int(raw_value)
+            raise ValueError(f"invalid: {raw_value!r}")
+
+        text = str(raw_value).strip()
+        if not text:
+            raise ValueError("missing")
+        if text.lower() == "nan":
+            raise ValueError("missing")
+        if text.isdigit():
+            normalized = int(text)
+            if normalized > 0:
+                return normalized
+        if text.endswith(".0") and text[:-2].isdigit():
+            normalized = int(text[:-2])
+            if normalized > 0:
+                return normalized
+        raise ValueError(f"invalid: {raw_value!r}")
+
+    def _existing_item(self, item_id: int, *, row_id: int, df_col: str) -> dict[str, Any]:
+        """기존 item payload를 조회하고 캐시에 보관한다."""
+        cached = self.state.existing_item_cache.get(int(item_id))
+        if isinstance(cached, dict):
+            return deepcopy(cached)
+
+        try:
+            existing_item = self.client.get_item(int(item_id))
+        except Exception as exc:
+            self._raise_payload_error(
+                "UPDATE_ITEM_FETCH_FAILED",
+                schema_field="id",
+                df_col=df_col,
+                row_id=row_id,
+                detail=f"item_id={int(item_id)} error={exc}",
+            )
+
+        if not isinstance(existing_item, dict):
+            self._raise_payload_error(
+                "UPDATE_ITEM_FETCH_FAILED",
+                schema_field="id",
+                df_col=df_col,
+                row_id=row_id,
+                detail=f"item_id={int(item_id)} returned invalid payload",
+            )
+
+        self.state.existing_item_cache[int(item_id)] = dict(existing_item)
+        return deepcopy(existing_item)
+
+    @staticmethod
+    def _custom_field_key(field_payload: Any) -> tuple[str, Any] | None:
+        """custom field 병합용 식별 키를 만든다."""
+        if not isinstance(field_payload, dict):
+            return None
+        field_id = field_payload.get("fieldId")
+        if field_id is not None:
+            try:
+                return ("fieldId", int(field_id))
+            except Exception:
+                pass
+        field_name = str(field_payload.get("name") or "").strip()
+        if field_name:
+            return ("name", field_name.casefold())
+        return None
+
+    @classmethod
+    def _merge_custom_fields(
+        cls,
+        existing_fields: Any,
+        updated_fields: Any,
+    ) -> list[dict[str, Any]]:
+        """기존 custom field 목록에 수정 대상 field만 덮어쓴다."""
+        merged_fields: list[dict[str, Any]] = []
+        field_indexes: dict[tuple[str, Any], int] = {}
+
+        for existing_field in existing_fields if isinstance(existing_fields, list) else []:
+            if not isinstance(existing_field, dict):
+                continue
+            merged_fields.append(deepcopy(existing_field))
+            field_key = cls._custom_field_key(existing_field)
+            if field_key is not None:
+                field_indexes[field_key] = len(merged_fields) - 1
+
+        for updated_field in updated_fields if isinstance(updated_fields, list) else []:
+            if not isinstance(updated_field, dict):
+                continue
+            copied_field = deepcopy(updated_field)
+            field_key = cls._custom_field_key(updated_field)
+            if field_key is None or field_key not in field_indexes:
+                merged_fields.append(copied_field)
+                if field_key is not None:
+                    field_indexes[field_key] = len(merged_fields) - 1
+                continue
+            merged_fields[field_indexes[field_key]] = copied_field
+
+        return merged_fields
+
+    def _build_update_row_payload(
+        self,
+        row: pd.Series,
+        row_id: int,
+        *,
+        id_column_name: str,
+        duplicate_item_ids: set[int],
+        fetch_existing_item: bool,
+    ) -> tuple[int, dict[str, Any]]:
+        """단일 업데이트 행의 대상 id와 PUT payload를 계산한다."""
+        if id_column_name not in row.index:
+            self._raise_payload_error(
+                "UPDATE_ITEM_ID_COLUMN_MISSING",
+                schema_field="id",
+                df_col="id",
+                row_id=row_id,
+                detail="update mode requires an Excel 'id' column",
+            )
+
+        raw_item_id = row.get(id_column_name)
+        try:
+            target_item_id = self._parse_update_item_id(raw_item_id)
+        except ValueError as exc:
+            if str(exc) == "missing":
+                self._raise_payload_error(
+                    "UPDATE_ITEM_ID_MISSING",
+                    schema_field="id",
+                    df_col=id_column_name,
+                    row_id=row_id,
+                    detail="update target item id is empty",
+                )
+            self._raise_payload_error(
+                "UPDATE_ITEM_ID_INVALID",
+                schema_field="id",
+                df_col=id_column_name,
+                row_id=row_id,
+                detail=f"value={raw_item_id!r}",
+            )
+
+        if target_item_id in duplicate_item_ids:
+            self._raise_payload_error(
+                "UPDATE_ITEM_ID_DUPLICATE",
+                schema_field="id",
+                df_col=id_column_name,
+                row_id=row_id,
+                detail=f"item_id={target_item_id}",
+            )
+
+        partial_item = self._build_row_item(
+            row,
+            row_id,
+            default_name=None,
+        )
+        partial_payload = self._serialize_payload_value(partial_item.to_dict())
+
+        if not fetch_existing_item:
+            partial_payload["id"] = int(target_item_id)
+            return int(target_item_id), partial_payload
+
+        existing_item = self._existing_item(
+            target_item_id,
+            row_id=row_id,
+            df_col=id_column_name,
+        )
+        merged_payload = deepcopy(existing_item)
+
+        for payload_key, payload_value in partial_payload.items():
+            if payload_key == "customFields":
+                merged_payload["customFields"] = self._merge_custom_fields(
+                    merged_payload.get("customFields"),
+                    payload_value,
+                )
+                continue
+            merged_payload[payload_key] = payload_value
+
+        merged_payload["id"] = int(target_item_id)
+        return int(target_item_id), merged_payload
 
     @staticmethod
     def _normalize_root_item_name(root_item_name: str | None) -> str | None:
@@ -2012,7 +2227,12 @@ class CodebeamerUploadWizard:
             return "Top-level row was not uploaded."
         return f"Parent row {int(parent_row_id)} was not uploaded successfully."
 
-    def build_payloads(self, force: bool = False) -> pd.DataFrame:
+    def build_payloads(
+        self,
+        force: bool = False,
+        *,
+        fetch_existing_items: bool = True,
+    ) -> pd.DataFrame:
         """현재 업로드 대상 전체 행의 payload를 한 번에 계산해 cache한다."""
         if self.state.schema_df is None:
             raise ValueError("schema_df is required before payload generation.")
@@ -2022,15 +2242,54 @@ class CodebeamerUploadWizard:
 
         source_df = self._payload_source_df()
         payload_rows: list[dict[str, Any]] = []
+        upload_mode = str(self.state.upload_mode or "create").strip().lower() or "create"
+        id_column_name = None
+        duplicate_item_ids: set[int] = set()
+
+        if upload_mode == "update":
+            id_column_name = self._update_item_id_column_name(source_df)
+            if id_column_name is not None:
+                item_id_counts: dict[int, int] = {}
+                for _, row in source_df.iterrows():
+                    try:
+                        target_item_id = self._parse_update_item_id(row.get(id_column_name))
+                    except ValueError:
+                        continue
+                    item_id_counts[target_item_id] = item_id_counts.get(target_item_id, 0) + 1
+                duplicate_item_ids = {
+                    item_id
+                    for item_id, item_count in item_id_counts.items()
+                    if item_count > 1
+                }
 
         for _, row in source_df.iterrows():
             row_id = int(row["_row_id"])
             try:
-                payload_json = self._build_row_payload(row, row_id)
+                payload_json = None
+                target_item_id = None
+                if upload_mode == "update":
+                    if id_column_name is None:
+                        self._raise_payload_error(
+                            "UPDATE_ITEM_ID_COLUMN_MISSING",
+                            schema_field="id",
+                            df_col="id",
+                            row_id=row_id,
+                            detail="update mode requires an Excel 'id' column",
+                        )
+                    target_item_id, payload_json = self._build_update_row_payload(
+                        row,
+                        row_id,
+                        id_column_name=id_column_name,
+                        duplicate_item_ids=duplicate_item_ids,
+                        fetch_existing_item=fetch_existing_items,
+                    )
+                else:
+                    payload_json = self._build_row_payload(row, row_id)
                 payload_rows.append({
                     "_row_id": row_id,
                     "parent_row_id": row.get("parent_row_id"),
                     "upload_name": row.get("upload_name"),
+                    "_target_item_id": target_item_id,
                     "payload_json": payload_json,
                     "payload_status": PayloadStatus.READY.value,
                     "payload_error": None,
@@ -2040,6 +2299,7 @@ class CodebeamerUploadWizard:
                     "_row_id": row_id,
                     "parent_row_id": row.get("parent_row_id"),
                     "upload_name": row.get("upload_name"),
+                    "_target_item_id": None,
                     "payload_json": None,
                     "payload_status": PayloadStatus.FAILED.value,
                     "payload_error": str(exc),
@@ -2297,6 +2557,132 @@ class CodebeamerUploadWizard:
                     root_item_name=root_item_name if should_create_root_item else None,
                 )
             )
+
+        return _finalize(unresolved_df)
+
+    def update_items(
+        self,
+        dry_run: bool = False,
+        continue_on_error: bool = True,
+        *,
+        event_callback=None,
+        cancel_requested=None,
+        pause_requested=None,
+    ) -> dict[str, Any]:
+        """대상 item id를 기준으로 PUT 업데이트를 실행하고 결과를 모아 돌려준다."""
+        if self.state.tracker_id is None:
+            raise ValueError("tracker_id is not set.")
+
+        payload_df = self.build_payloads(force=True, fetch_existing_items=True)
+        ready_df = payload_df[payload_df["payload_status"] == PayloadStatus.READY.value].copy()
+        payload_failed_df = payload_df[payload_df["payload_status"] == PayloadStatus.FAILED.value].copy()
+
+        success_logs: list[dict[str, Any]] = []
+        failed_logs = [
+            {
+                "_row_id": int(row["_row_id"]),
+                "parent_row_id": row.get("parent_row_id"),
+                "upload_name": row.get("upload_name"),
+                "target_item_id": row.get("_target_item_id"),
+                "error": row.get("payload_error"),
+                "status": PayloadStatus.FAILED.value,
+            }
+            for _, row in payload_failed_df.iterrows()
+        ]
+
+        def _finalize(unresolved_df: pd.DataFrame) -> dict[str, Any]:
+            self.state.upload_result = {
+                "root_item_id": None,
+                "created_map": {},
+                "success_df": pd.DataFrame(success_logs),
+                "failed_df": pd.DataFrame(failed_logs),
+                "unresolved_df": unresolved_df,
+            }
+            return self.state.upload_result
+
+        pending_row_ids = ready_df["_row_id"].tolist()
+
+        for current_index, (_, row) in enumerate(ready_df.iterrows()):
+            while pause_requested is not None and pause_requested():
+                time.sleep(0.1)
+            if cancel_requested is not None and cancel_requested():
+                break
+
+            row_id = int(row["_row_id"])
+            pending_row_ids = [value for value in pending_row_ids if value != row_id]
+            target_item_id = int(row["_target_item_id"])
+
+            try:
+                if event_callback is not None:
+                    event_callback({
+                        "type": "row_started",
+                        "row_id": row_id,
+                        "upload_name": row["upload_name"],
+                        "item_id": target_item_id,
+                    })
+
+                if dry_run:
+                    result = {"id": target_item_id}
+                else:
+                    result = self.client.update_item(
+                        target_item_id,
+                        row["payload_json"],
+                    )
+
+                success_logs.append({
+                    "_row_id": row_id,
+                    "parent_row_id": row.get("parent_row_id"),
+                    "upload_name": row.get("upload_name"),
+                    "target_item_id": target_item_id,
+                    "updated_item_id": result.get("id", target_item_id),
+                    "status": UploadStatus.SUCCESS.value,
+                })
+                message = f"Row {row['upload_name']} updated successfully: item_id={target_item_id}"
+                if event_callback is not None:
+                    event_callback({
+                        "type": "row_success",
+                        "row_id": row_id,
+                        "upload_name": row["upload_name"],
+                        "item_id": target_item_id,
+                        "message": message,
+                    })
+            except Exception as exc:
+                error_status_code = self._http_status_code(exc)
+                error_response_json = self._response_json(exc)
+                error_message = str(error_response_json) if error_response_json is not None else str(exc)
+
+                failed_logs.append({
+                    "_row_id": row_id,
+                    "parent_row_id": row.get("parent_row_id"),
+                    "upload_name": row.get("upload_name"),
+                    "target_item_id": target_item_id,
+                    "error_status_code": error_status_code,
+                    "error_response_json": error_response_json,
+                    "error": error_message,
+                    "status": UploadStatus.FAILED.value,
+                })
+                if event_callback is not None:
+                    event_callback({
+                        "type": "row_failed",
+                        "row_id": row_id,
+                        "upload_name": row["upload_name"],
+                        "item_id": target_item_id,
+                        "message": error_message,
+                        "status_code": error_status_code,
+                        "response_json": error_response_json,
+                    })
+
+                if not continue_on_error:
+                    unresolved_df = ready_df.iloc[current_index + 1 :].copy()
+                    if not unresolved_df.empty:
+                        unresolved_df["status"] = UploadStatus.UNRESOLVED_PARENT.value
+                        unresolved_df["error"] = "이전 업데이트 실패로 실행이 중단되었습니다."
+                    return _finalize(unresolved_df)
+
+        unresolved_df = ready_df[ready_df["_row_id"].isin(pending_row_ids)].copy()
+        if not unresolved_df.empty:
+            unresolved_df["status"] = UploadStatus.UNRESOLVED_PARENT.value
+            unresolved_df["error"] = "업데이트가 완료되지 않았습니다."
 
         return _finalize(unresolved_df)
 

@@ -104,6 +104,8 @@ def run_validation_pipeline(
     selected_mapping: dict[str, str],
     selected_default_values: dict[str, Any] | None = None,
     selected_tracker_item_settings: dict[str, dict[str, Any]] | None = None,
+    *,
+    fetch_existing_items: bool = True,
 ) -> ValidationPreparation:
     """CLI와 GUI가 공통으로 쓰는 검증 및 payload 생성 시퀀스다."""
     comparison_df = wizard.load_schema_and_compare(selected_mapping)
@@ -112,7 +114,10 @@ def run_validation_pipeline(
         selected_default_values=selected_default_values,
         selected_tracker_item_settings=selected_tracker_item_settings,
     )
-    payload_df = wizard.build_payloads(force=True)
+    payload_df = wizard.build_payloads(
+        force=True,
+        fetch_existing_items=fetch_existing_items,
+    )
     return ValidationPreparation(
         comparison_df=comparison_df,
         selected_option_mapping=selected_option_mapping,

@@ -8,6 +8,7 @@ from pathlib import Path
 from src.gui.settings_store import GuiSettings
 from src.gui.settings_store import GuiSettingsStore
 from src.gui.settings_store import GuiWorkflowPreset
+from src.gui.settings_store import GUI_UPLOAD_MODE_UPDATE
 from src.gui.styles import DEFAULT_GUI_THEME
 
 
@@ -55,6 +56,7 @@ class GuiSettingsStoreTest(unittest.TestCase):
                 password="secret",
                 save_password=True,
                 summary_column="Summary",
+                upload_mode=GUI_UPLOAD_MODE_UPDATE,
             )
 
             store.save(settings)
@@ -68,6 +70,7 @@ class GuiSettingsStoreTest(unittest.TestCase):
             self.assertTrue(loaded.save_password)
             self.assertEqual(loaded.summary_column, "Summary")
             self.assertEqual(loaded.theme_name, DEFAULT_GUI_THEME)
+            self.assertEqual(loaded.upload_mode, GUI_UPLOAD_MODE_UPDATE)
 
     def test_save_and_load_workflow_preset_preserves_nested_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -84,6 +87,7 @@ class GuiSettingsStoreTest(unittest.TestCase):
                     excel_header_row=2,
                     summary_column="요약",
                     excel_sheet_name="Main",
+                    upload_mode=GUI_UPLOAD_MODE_UPDATE,
                 ),
                 file_options={
                     "sheet_name": "Main",
@@ -125,6 +129,7 @@ class GuiSettingsStoreTest(unittest.TestCase):
             self.assertEqual(loaded.settings.password, "secret")
             self.assertEqual(loaded.settings.default_project_id, "10")
             self.assertEqual(loaded.settings.theme_name, "igloo")
+            self.assertEqual(loaded.settings.upload_mode, GUI_UPLOAD_MODE_UPDATE)
             self.assertEqual(loaded.file_options["sheet_name"], "Main")
             self.assertFalse(loaded.root_item_config["enabled"])
             self.assertEqual(loaded.root_item_config["regex_pattern"], r"^(?P<name>.+)$")
@@ -151,3 +156,16 @@ class GuiSettingsStoreTest(unittest.TestCase):
             loaded = store.load()
 
             self.assertEqual(loaded.theme_name, DEFAULT_GUI_THEME)
+
+    def test_load_normalizes_unknown_upload_mode_to_create(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = GuiSettingsStore(Path(tmp_dir))
+            store.root_dir.mkdir(parents=True, exist_ok=True)
+            store.settings_path.write_text(
+                json.dumps({"upload_mode": "unknown", "password_encrypted": ""}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            loaded = store.load()
+
+            self.assertEqual(loaded.upload_mode, "create")

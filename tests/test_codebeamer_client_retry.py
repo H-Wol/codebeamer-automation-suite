@@ -25,6 +25,14 @@ class RetryingClient(CodebeamerClient):
             raise response
         return response
 
+    def _put(self, path: str, json_body: dict | None = None, params: dict | None = None):
+        del path, json_body, params
+        self.calls += 1
+        response = self._responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
 
 class CodebeamerClientRetryTest(unittest.TestCase):
     def test_create_item_retries_with_configured_delay_multiples(self) -> None:
@@ -62,6 +70,24 @@ class CodebeamerClientRetryTest(unittest.TestCase):
 
         self.assertEqual(client.calls, 3)
         self.assertEqual(slept, [1.5, 3.0])
+
+    def test_update_item_retries_with_configured_delay_multiples(self) -> None:
+        slept: list[float] = []
+        client = RetryingClient(
+            [_RateLimitError(), {"id": 456}],
+            base_url="https://example.com/cb",
+            username="user",
+            password="pass",
+            rate_limit_retry_delay_seconds=3.0,
+            rate_limit_max_retries=2,
+            sleep_fn=slept.append,
+        )
+
+        result = client.update_item(456, {"name": "REQ-456"})
+
+        self.assertEqual(result["id"], 456)
+        self.assertEqual(client.calls, 2)
+        self.assertEqual(slept, [3.0])
 
 
 if __name__ == "__main__":

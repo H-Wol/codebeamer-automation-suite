@@ -8,6 +8,9 @@ from .services import DEFAULT_TRACKER_ITEM_ID_REGEX
 from .services import ROOT_ASSIGNMENT_MODE_FILE_SOURCE
 from .services import ROOT_ASSIGNMENT_MODE_FIXED_VALUE
 from .services import gui_display_text
+from .settings_store import GUI_UPLOAD_MODE_CREATE
+from .settings_store import GUI_UPLOAD_MODE_UPDATE
+from .settings_store import normalize_gui_upload_mode
 from .styles import GUI_THEME_CHOICES
 from .styles import normalize_gui_theme_name
 from src.models import TrackerItemQueryMatchStrategy
@@ -45,6 +48,13 @@ def _is_hidden_user_table_column(column_name: object) -> bool:
 
 def _settings_mode_toggle_text(is_offline: bool) -> str:
     return "테스트"
+
+
+def _settings_upload_mode_choices() -> list[tuple[str, str]]:
+    return [
+        (GUI_UPLOAD_MODE_CREATE, "업로드"),
+        (GUI_UPLOAD_MODE_UPDATE, "업데이트"),
+    ]
 
 
 def _settings_mode_description(is_offline: bool) -> str:
@@ -322,6 +332,7 @@ def create_settings_page(
     )
     offline_config_button = QPushButton("설정 선택")
     theme_combo = QComboBox()
+    upload_mode_combo = QComboBox()
     header_row = QSpinBox()
     header_row.setMinimum(1)
     header_row.setValue(initial_settings.excel_header_row)
@@ -345,6 +356,7 @@ def create_settings_page(
         offline_schema_path,
         offline_config_path,
         theme_combo,
+        upload_mode_combo,
     ):
         _configure_form_field(field_widget)
 
@@ -366,6 +378,7 @@ def create_settings_page(
     form.addRow("Username", username)
     form.addRow("Password", password)
     form.addRow("", save_password)
+    form.addRow("작업 모드", upload_mode_combo)
     form.addRow("테마", theme_combo)
     form.addRow("", mode_row_widget)
     layout.addLayout(form)
@@ -445,6 +458,7 @@ def create_settings_page(
         bool(
             getattr(initial_settings, "offline_mode", False)
             and str(getattr(initial_settings, "offline_schema_path", "") or "").strip()
+            and normalize_gui_upload_mode(getattr(initial_settings, "upload_mode", None)) != GUI_UPLOAD_MODE_UPDATE
         ) or bool(initial_settings.base_url and initial_settings.username and initial_settings.password)
     )
     buttons.addWidget(load_button)
@@ -455,8 +469,11 @@ def create_settings_page(
     layout.addStretch(1)
 
     def _update_next_button_state() -> None:
+        is_update_mode = normalize_gui_upload_mode(upload_mode_combo.currentData()) == GUI_UPLOAD_MODE_UPDATE
         if mode_toggle.isChecked():
-            next_button.setEnabled(bool(Path(offline_schema_path.text().strip()).is_file()))
+            next_button.setEnabled(
+                bool(Path(offline_schema_path.text().strip()).is_file()) and not is_update_mode
+            )
             return
         next_button.setEnabled(bool(base_url.text().strip() and username.text().strip() and password.text()))
 
@@ -493,6 +510,7 @@ def create_settings_page(
         current_settings = getattr(page, "_current_settings", initial_settings)
         return type(initial_settings)(
             theme_name=normalize_gui_theme_name(theme_combo.currentData()),
+            upload_mode=normalize_gui_upload_mode(upload_mode_combo.currentData()),
             base_url=base_url.text().strip(),
             username=username.text().strip(),
             password=password.text(),
@@ -523,6 +541,7 @@ def create_settings_page(
         password.setText(loaded.password)
         save_password.setChecked(loaded.save_password)
         _select_theme(normalize_gui_theme_name(getattr(loaded, "theme_name", None)))
+        _select_upload_mode(normalize_gui_upload_mode(getattr(loaded, "upload_mode", None)))
         mode_toggle.setChecked(bool(getattr(loaded, "offline_mode", False)))
         offline_schema_path.setText(str(getattr(loaded, "offline_schema_path", "") or ""))
         offline_config_path.setText(str(getattr(loaded, "offline_tracker_configuration_path", "") or ""))
@@ -540,6 +559,13 @@ def create_settings_page(
         if index < 0:
             index = 0
         theme_combo.setCurrentIndex(index)
+
+    def _select_upload_mode(upload_mode: str) -> None:
+        normalized_mode = normalize_gui_upload_mode(upload_mode)
+        index = upload_mode_combo.findData(normalized_mode)
+        if index < 0:
+            index = 0
+        upload_mode_combo.setCurrentIndex(index)
 
     def _preview_theme() -> None:
         if callable(on_theme_changed):
@@ -572,6 +598,9 @@ def create_settings_page(
     def _go_next():
         current = _collect_settings()
         if current.offline_mode:
+            if current.upload_mode == GUI_UPLOAD_MODE_UPDATE:
+                _set_status("테스트 모드에서는 업데이트 작업을 지원하지 않습니다.")
+                return
             if not current.offline_schema_path:
                 _set_status("테스트 모드에서는 schema snapshot JSON 경로가 필요합니다.")
                 return
@@ -601,6 +630,7 @@ def create_settings_page(
         lambda: _choose_snapshot_path(offline_config_path, title="테스트 tracker configuration 선택")
     )
     offline_schema_path.textChanged.connect(lambda _: _update_next_button_state())
+    upload_mode_combo.currentIndexChanged.connect(lambda _: _update_next_button_state())
     theme_combo.currentIndexChanged.connect(lambda _: _preview_theme())
     advanced_toggle.toggled.connect(
         lambda checked: (
@@ -614,7 +644,10 @@ def create_settings_page(
 
     for theme_key, theme_label in GUI_THEME_CHOICES:
         theme_combo.addItem(theme_label, theme_key)
+    for upload_mode, upload_mode_label in _settings_upload_mode_choices():
+        upload_mode_combo.addItem(upload_mode_label, upload_mode)
     _select_theme(normalize_gui_theme_name(getattr(initial_settings, "theme_name", None)))
+    _select_upload_mode(normalize_gui_upload_mode(getattr(initial_settings, "upload_mode", None)))
     _sync_offline_mode_state()
     page.get_settings = _collect_settings
     page.set_settings = _apply_settings

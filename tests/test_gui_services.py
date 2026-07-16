@@ -12,6 +12,7 @@ from src.gui.services import GuiCodebeamerService
 from src.gui.services import GuiExcelService
 from src.gui.services import GuiUploadPipelineService
 from src.gui.settings_store import GuiSettings
+from src.gui.settings_store import GUI_UPLOAD_MODE_UPDATE
 from src.models import MappingStatus
 from src.models import PayloadStatus
 
@@ -152,6 +153,43 @@ class FakeClient:
     def create_item(self, tracker_id: int, payload: dict, parent_item_id: int | None = None):
         del tracker_id, payload, parent_item_id
         return {"id": 1}
+
+
+class UpdateModeFakeClient(FakeClient):
+    all_update_calls: list[tuple[int, dict]] = []
+    all_get_item_calls: list[int] = []
+
+    @classmethod
+    def reset_calls(cls) -> None:
+        cls.all_update_calls = []
+        cls.all_get_item_calls = []
+
+    def get_item(self, item_id: int):
+        self.__class__.all_get_item_calls.append(int(item_id))
+        return {
+            "id": int(item_id),
+            "name": f"기존-{item_id}",
+            "description": "기존 설명",
+            "status": {"id": 201, "name": "Open", "type": "ChoiceOptionReference"},
+            "customFields": [
+                {
+                    "fieldId": 3,
+                    "name": "담당자",
+                    "type": "TextFieldValue",
+                    "value": "기존 담당자",
+                },
+                {
+                    "fieldId": 999,
+                    "name": "기타",
+                    "type": "TextFieldValue",
+                    "value": "보존",
+                },
+            ],
+        }
+
+    def update_item(self, item_id: int, payload: dict):
+        self.__class__.all_update_calls.append((int(item_id), dict(payload)))
+        return {"id": int(item_id)}
 
 
 class TrackerItemQueryFakeClient(FakeClient):
@@ -518,7 +556,228 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             self.assertTrue(mapping_context.default_value_candidates[0].allows_custom_value)
             self.assertEqual(mapping_context.default_value_candidates[1].options, ["Open", "Review"])
             self.assertEqual(mapping_context.file_paths, [str(path)])
+
+    def test_prepare_mapping_context_keeps_update_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["id", "Summary", "담당자"])
+            sheet.append([101, "REQ-101", "홍길동"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=UpdateModeFakeClient,
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                upload_mode=GUI_UPLOAD_MODE_UPDATE,
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "preview_file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                },
+            )
+
+            self.assertEqual(mapping_context.upload_mode, GUI_UPLOAD_MODE_UPDATE)
+            self.assertEqual(mapping_context.wizard.state.upload_mode, GUI_UPLOAD_MODE_UPDATE)
+
+    def test_validate_mapping_blocks_update_mode_when_id_column_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary", "담당자"])
+            sheet.append(["REQ-101", "홍길동"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                upload_mode=GUI_UPLOAD_MODE_UPDATE,
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "preview_file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                },
+            )
+            validation_context = service.validate_mapping(
+                mapping_context,
+                {"Summary": "Summary"},
+            )
+
+            self.assertTrue(validation_context.has_blocking_issues)
+            self.assertTrue(
+                validation_context.issue_df["message"].str.contains("id 열", regex=False).any()
+            )
+            self.assertEqual(
+                list(mapping_context.wizard.state.payload_df["payload_status"]),
+                [PayloadStatus.FAILED.value],
+            )
+
+    def test_run_batch_upload_uses_update_mode_put_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            UpdateModeFakeClient.reset_calls()
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["id", "Summary", "담당자"])
+            sheet.append([101, "REQ-101", "홍길동"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=UpdateModeFakeClient,
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                upload_mode=GUI_UPLOAD_MODE_UPDATE,
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+            file_state = {
+                "file_path": str(path),
+                "file_paths": [str(path)],
+                "preview_file_path": str(path),
+                "sheet_name": "Main",
+                "header_row": 1,
+                "summary_column": "Summary",
+            }
+
+            mapping_context = service.prepare_mapping_context(settings, file_state)
+            validation_context = service.validate_mapping(
+                mapping_context,
+                {"Summary": "Summary", "담당자": "담당자"},
+                {"Status": "Review"},
+            )
+
+            self.assertFalse(validation_context.has_blocking_issues)
+            payload = mapping_context.wizard.state.payload_df.iloc[0]["payload_json"]
+            self.assertEqual(payload["id"], 101)
+            self.assertEqual(payload["name"], "REQ-101")
+            self.assertEqual(payload["status"]["name"], "Review")
+            self.assertEqual(UpdateModeFakeClient.all_get_item_calls, [])
+
+            result = service.run_batch_upload(
+                settings,
+                file_state,
+                mapping_context,
+                dry_run=False,
+                continue_on_error=True,
+                output_dir=str(Path(tmp_dir) / "output"),
+            )
+
+            self.assertEqual(len(result["success_df"]), 1)
+            self.assertTrue(result["failed_df"].empty)
+            self.assertTrue(result["unresolved_df"].empty)
+            self.assertEqual(UpdateModeFakeClient.all_get_item_calls, [101])
+            self.assertEqual(UpdateModeFakeClient.all_update_calls[0][0], 101)
+            self.assertEqual(UpdateModeFakeClient.all_update_calls[0][1]["name"], "REQ-101")
+            self.assertEqual(UpdateModeFakeClient.all_update_calls[0][1]["description"], "기존 설명")
+            self.assertEqual(UpdateModeFakeClient.all_update_calls[0][1]["status"]["name"], "Review")
+            self.assertEqual(
+                next(field["value"] for field in UpdateModeFakeClient.all_update_calls[0][1]["customFields"] if field["fieldId"] == 3),
+                "홍길동",
+            )
+            self.assertEqual(
+                next(field["value"] for field in UpdateModeFakeClient.all_update_calls[0][1]["customFields"] if field["fieldId"] == 999),
+                "보존",
+            )
             self.assertEqual(mapping_context.representative_file_path, str(path))
+
+    def test_validate_mapping_blocks_duplicate_update_ids_across_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            first_path = Path(tmp_dir) / "first.xlsx"
+            second_path = Path(tmp_dir) / "second.xlsx"
+
+            for path, summary in (
+                (first_path, "REQ-101-A"),
+                (second_path, "REQ-101-B"),
+            ):
+                workbook = Workbook()
+                sheet = workbook.active
+                sheet.title = "Main"
+                sheet.append(["id", "Summary"])
+                sheet.append([101, summary])
+                workbook.save(path)
+                workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=UpdateModeFakeClient,
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                upload_mode=GUI_UPLOAD_MODE_UPDATE,
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+            file_state = {
+                "file_path": str(first_path),
+                "file_paths": [str(first_path), str(second_path)],
+                "preview_file_path": str(first_path),
+                "sheet_name": "Main",
+                "header_row": 1,
+                "summary_column": "Summary",
+            }
+
+            mapping_context = service.prepare_mapping_context(settings, file_state)
+            validation_context = service.validate_mapping(
+                mapping_context,
+                {"Summary": "Summary"},
+            )
+
+            self.assertTrue(validation_context.has_blocking_issues)
+            self.assertEqual(mapping_context.batch_duplicate_update_item_ids, {101})
+            self.assertTrue(
+                validation_context.issue_df["message"].str.contains("여러 파일에서 같은 item id가 중복", regex=False).any()
+            )
 
     def test_prepare_mapping_context_uses_file_selection_header_and_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

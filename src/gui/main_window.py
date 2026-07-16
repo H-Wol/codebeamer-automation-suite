@@ -20,6 +20,8 @@ from .services import GuiUploadPipelineService
 from .settings_store import GuiSettings
 from .settings_store import GuiSettingsStore
 from .settings_store import GuiWorkflowPreset
+from .settings_store import GUI_UPLOAD_MODE_UPDATE
+from .settings_store import normalize_gui_upload_mode
 from .styles import build_gui_stylesheet
 from .styles import normalize_gui_theme_name
 from .worker import BackgroundTask
@@ -901,6 +903,12 @@ class MainWindow:
                     self.upload_page.status_label.setText("테스트 모드에서는 Dry Run만 실행할 수 있습니다.")
                 else:
                     self.upload_page.dry_run_checkbox.setEnabled(True)
+                    action_label = (
+                        "업데이트"
+                        if normalize_gui_upload_mode(getattr(self.session_state.settings, "upload_mode", None)) == GUI_UPLOAD_MODE_UPDATE
+                        else "업로드"
+                    )
+                    self.upload_page.status_label.setText(f"{action_label} 준비 완료")
                 self._show_page(self.upload_page)
 
             def _enter_result_page(self) -> None:
@@ -931,6 +939,32 @@ class MainWindow:
                         self.session_state.workflow_preset,
                     )
                 self.session_state.mapping_context = mapping_context
+                upload_mode = normalize_gui_upload_mode(mapping_context.upload_mode)
+                if upload_mode == GUI_UPLOAD_MODE_UPDATE:
+                    self._attach_navigation(
+                        self.mapping_page,
+                        previous_page=self.file_page,
+                        next_page=self.validation_page,
+                        next_handler=self._enter_validation_page,
+                    )
+                    self.mapping_page.load_context(
+                        self.session_state.mapping_context.upload_columns,
+                        self.session_state.mapping_context.schema_df,
+                        self.session_state.mapping_context.selected_mapping,
+                        self.session_state.mapping_context.default_value_candidates,
+                        self.session_state.mapping_context.selected_default_values,
+                        self.session_state.mapping_context.selected_tracker_item_settings,
+                        self.session_state.mapping_context.wizard.state.upload_df,
+                    )
+                    self._show_page(self.mapping_page)
+                    return
+
+                self._attach_navigation(
+                    self.mapping_page,
+                    previous_page=self.root_item_page,
+                    next_page=self.validation_page,
+                    next_handler=self._enter_validation_page,
+                )
                 root_preview_context = self.pipeline_service.build_root_item_preview_context(
                     mapping_context,
                     mapping_context.root_item_config,
@@ -1008,7 +1042,12 @@ class MainWindow:
                 self.upload_page.start_button.setEnabled(False)
                 self.upload_page.pause_button.setEnabled(True)
                 self.upload_page.cancel_button.setEnabled(True)
-                self.upload_page.status_label.setText("업로드 실행 중")
+                action_label = (
+                    "업데이트"
+                    if normalize_gui_upload_mode(getattr(self.session_state.settings, "upload_mode", None)) == GUI_UPLOAD_MODE_UPDATE
+                    else "업로드"
+                )
+                self.upload_page.status_label.setText(f"{action_label} 실행 중")
                 self.upload_worker.start()
 
             def _pause_upload(self) -> None:

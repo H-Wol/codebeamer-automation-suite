@@ -15,11 +15,21 @@ APP_DIR_NAME = ".codebeamer-automation-suite"
 SETTINGS_FILE_NAME = "gui_settings.json"
 KEY_FILE_NAME = "gui_settings.key"
 WORKFLOW_PRESET_FILE_NAME = "gui_workflow_preset.json"
+GUI_UPLOAD_MODE_CREATE = "create"
+GUI_UPLOAD_MODE_UPDATE = "update"
+
+
+def normalize_gui_upload_mode(upload_mode: str | None) -> str:
+    normalized = str(upload_mode or "").strip().lower()
+    if normalized in {GUI_UPLOAD_MODE_CREATE, GUI_UPLOAD_MODE_UPDATE}:
+        return normalized
+    return GUI_UPLOAD_MODE_CREATE
 
 
 @dataclass
 class GuiSettings:
     theme_name: str = DEFAULT_GUI_THEME
+    upload_mode: str = GUI_UPLOAD_MODE_CREATE
     base_url: str = ""
     username: str = ""
     password: str = ""
@@ -150,6 +160,7 @@ class GuiSettingsStore:
         if payload.get("save_password") and encrypted_password:
             password = self._decrypt_password(encrypted_password)
         payload["theme_name"] = normalize_gui_theme_name(payload.get("theme_name"))
+        payload["upload_mode"] = normalize_gui_upload_mode(payload.get("upload_mode"))
 
         return GuiSettings(
             password=password,

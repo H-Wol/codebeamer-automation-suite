@@ -25,6 +25,9 @@ from src.upload_pipeline import prepare_upload_dataframe
 from src.upload_pipeline import run_validation_pipeline
 from src.upload_pipeline import suggest_mapping_from_headers
 from src.wizard import CodebeamerUploadWizard
+from .settings_store import GUI_UPLOAD_MODE_CREATE
+from .settings_store import GUI_UPLOAD_MODE_UPDATE
+from .settings_store import normalize_gui_upload_mode
 
 
 @dataclass
@@ -156,6 +159,13 @@ class OfflineGuiClient:
     def create_item(self, tracker_id: int, payload: dict[str, Any], parent_item_id: int | None = None) -> dict[str, Any]:
         del tracker_id, payload, parent_item_id
         raise RuntimeError("테스트 모드에서는 실제 업로드를 실행할 수 없습니다. Dry Run만 사용해야 합니다.")
+
+    def update_item(self, item_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        del item_id, payload
+        raise RuntimeError("테스트 모드에서는 업데이트를 실행할 수 없습니다. Dry Run만 사용해야 합니다.")
+
+    def get_item(self, item_id: int) -> dict[str, Any]:
+        raise RuntimeError(f"offline snapshot does not provide item lookup by id: {item_id}")
 
     def get_user(self, user_id: int):
         raise RuntimeError(f"offline snapshot does not provide user lookup by id: {user_id}")
@@ -393,6 +403,7 @@ class TrackerItemFieldCandidate:
 @dataclass
 class MappingContext:
     wizard: CodebeamerUploadWizard
+    upload_mode: str
     schema_df: pd.DataFrame
     upload_columns: list[str]
     selected_mapping: dict[str, str]
@@ -409,6 +420,8 @@ class MappingContext:
     summary_column: str
     preview_data: PreviewData | None
     root_item_config: dict[str, Any]
+    existing_item_cache: dict[int, dict[str, Any]]
+    batch_duplicate_update_item_ids: set[int]
 
 
 @dataclass
@@ -496,13 +509,15 @@ class GuiUploadPipelineService:
             summary_col=settings.summary_column,
             logger=self.logger,
         )
-        return CodebeamerUploadWizard(
+        wizard = CodebeamerUploadWizard(
             client=client,
             processor=processor,
             mapper=self.mapper,
             reader=reader,
             logger=self.logger,
         )
+        wizard.state.upload_mode = normalize_gui_upload_mode(getattr(settings, "upload_mode", None))
+        return wizard
 
     @staticmethod
     def _is_gui_excluded_schema_field(row: pd.Series | dict[str, Any]) -> bool:
@@ -1537,6 +1552,130 @@ class GuiUploadPipelineService:
             )
         return total_rows
 
+    def _raw_df_for_file(
+        self,
+        mapping_context: MappingContext,
+        file_path: str,
+    ) -> pd.DataFrame:
+        cached_raw_df = self._cached_raw_df_for_file(mapping_context.preview_data, file_path)
+        if cached_raw_df is not None:
+            return cached_raw_df.copy()
+
+        reader = self.reader_cls(
+            header_row=mapping_context.header_row,
+            summary_col=mapping_context.summary_column,
+            logger=self.logger,
+        )
+        return reader.read_excel(
+            file_path=file_path,
+            sheet_name=mapping_context.sheet_name,
+        )
+
+    def _upload_df_for_file(
+        self,
+        mapping_context: MappingContext,
+        *,
+        file_path: str,
+        list_cols: list[str],
+    ) -> pd.DataFrame:
+        raw_df = self._raw_df_for_file(mapping_context, file_path)
+        processor = HierarchyProcessor(
+            header_row=mapping_context.header_row,
+            summary_col=mapping_context.summary_column,
+            logger=self.logger,
+        )
+        merged_df = processor.merge_multiline_records(raw_df, list_cols=list_cols)
+        hierarchy_df = processor.add_hierarchy_by_indent(merged_df)
+        return processor.build_upload_df(hierarchy_df, list_cols=list_cols)
+
+    @classmethod
+    def _build_batch_update_duplicate_issue_df(
+        cls,
+        mapping_context: MappingContext,
+        *,
+        file_upload_dfs: dict[str, pd.DataFrame],
+    ) -> tuple[set[int], pd.DataFrame]:
+        issue_columns = [
+            "severity",
+            "category",
+            "row_id",
+            "row_label",
+            "item_name",
+            "column",
+            "field",
+            "raw_value",
+            "message",
+            "action",
+        ]
+        if normalize_gui_upload_mode(mapping_context.upload_mode) != GUI_UPLOAD_MODE_UPDATE:
+            return set(), pd.DataFrame(columns=issue_columns)
+
+        occurrences_by_item_id: dict[int, list[dict[str, str]]] = {}
+        for file_path, upload_df in file_upload_dfs.items():
+            if upload_df is None or upload_df.empty:
+                continue
+
+            id_column_name = CodebeamerUploadWizard._update_item_id_column_name(upload_df)
+            if not id_column_name:
+                continue
+
+            for _, row in upload_df.iterrows():
+                try:
+                    item_id = CodebeamerUploadWizard._parse_update_item_id(row.get(id_column_name))
+                except ValueError:
+                    continue
+
+                item_name = gui_display_text(row.get("upload_name"))
+                if not item_name:
+                    for fallback_column in ("Summary", "summary", "요약", "name"):
+                        if fallback_column in row.index:
+                            item_name = gui_display_text(row.get(fallback_column))
+                        if item_name:
+                            break
+
+                occurrences_by_item_id.setdefault(item_id, []).append({
+                    "file_name": Path(file_path).name,
+                    "row_label": cls._build_row_label(row),
+                    "item_name": item_name,
+                })
+
+        duplicate_item_ids = {
+            item_id
+            for item_id, occurrences in occurrences_by_item_id.items()
+            if len(occurrences) > 1
+        }
+        if not duplicate_item_ids:
+            return set(), pd.DataFrame(columns=issue_columns)
+
+        issues: list[dict[str, str]] = []
+        for item_id in sorted(duplicate_item_ids):
+            occurrences = occurrences_by_item_id[item_id]
+            location_texts = []
+            for occurrence in occurrences[:5]:
+                location = occurrence["file_name"]
+                if occurrence["row_label"]:
+                    location = f"{location} {occurrence['row_label']}"
+                location_texts.append(location)
+            remaining_count = len(occurrences) - len(location_texts)
+            location_summary = ", ".join(location_texts)
+            if remaining_count > 0:
+                location_summary = f"{location_summary} 외 {remaining_count}건"
+
+            issues.append({
+                "severity": "오류",
+                "category": "업데이트",
+                "row_id": "",
+                "row_label": "",
+                "item_name": "",
+                "column": "id",
+                "field": "id",
+                "raw_value": str(item_id),
+                "message": f"여러 파일에서 같은 item id가 중복됩니다. 대상 id={item_id} ({location_summary})",
+                "action": "한 item id는 배치 전체에서 한 번만 수정되도록 파일을 정리한 뒤 다시 검증하세요.",
+            })
+
+        return duplicate_item_ids, pd.DataFrame(issues, columns=issue_columns)
+
     def prepare_mapping_context(self, settings, file_state: dict[str, Any]) -> MappingContext:
         file_paths = self._normalize_file_paths(file_state)
         representative_file_path = self._representative_file_path(file_state)
@@ -1546,6 +1685,7 @@ class GuiUploadPipelineService:
         wizard = self.create_wizard(settings)
         wizard.select_project(int(settings.default_project_id))
         wizard.select_tracker(int(settings.default_tracker_id))
+        wizard.state.upload_mode = normalize_gui_upload_mode(getattr(settings, "upload_mode", None))
 
         schema, schema_df = load_tracker_schema_df(wizard)
         tracker_configuration = None
@@ -1616,6 +1756,7 @@ class GuiUploadPipelineService:
 
         return MappingContext(
             wizard=wizard,
+            upload_mode=normalize_gui_upload_mode(getattr(settings, "upload_mode", None)),
             schema_df=mappable_schema_df,
             upload_columns=upload_columns,
             selected_mapping=selected_mapping,
@@ -1632,6 +1773,8 @@ class GuiUploadPipelineService:
             summary_column=target_summary_column,
             preview_data=preview,
             root_item_config=self._default_root_item_config(mappable_schema_df),
+            existing_item_cache={},
+            batch_duplicate_update_item_ids=set(),
         )
 
     def validate_mapping(
@@ -1644,6 +1787,7 @@ class GuiUploadPipelineService:
         wizard = mapping_context.wizard
         list_cols = self.mapper.get_list_columns_for_mapping(selected_mapping, mapping_context.schema_df)
         wizard.load_raw_dataframe(wizard.state.raw_df.copy(), list_cols=list_cols)
+        wizard.state.upload_mode = normalize_gui_upload_mode(mapping_context.upload_mode)
         normalized_default_values = {
             str(field_name).strip(): str(raw_value).strip()
             for field_name, raw_value in (selected_default_values or {}).items()
@@ -1660,13 +1804,16 @@ class GuiUploadPipelineService:
         mapping_context.tracker_item_field_candidates = tracker_item_field_candidates
         wizard.state.selected_tracker_item_settings = dict(normalized_tracker_item_settings)
         wizard.state.tracker_item_lookup_cache = dict(mapping_context.tracker_item_lookup_cache)
+        wizard.state.existing_item_cache = {}
         validation_result = run_validation_pipeline(
             wizard,
             selected_mapping,
             selected_default_values=normalized_default_values,
             selected_tracker_item_settings=normalized_tracker_item_settings,
+            fetch_existing_items=normalize_gui_upload_mode(mapping_context.upload_mode) != GUI_UPLOAD_MODE_UPDATE,
         )
         mapping_context.tracker_item_lookup_cache = dict(wizard.state.tracker_item_lookup_cache)
+        mapping_context.existing_item_cache = {}
         comparison_df = validation_result.comparison_df
         comparison_df = self._gui_visible_comparison_df(comparison_df)
         option_check_df = (
@@ -1698,6 +1845,24 @@ class GuiUploadPipelineService:
             row_context_df=row_context_df,
             selected_default_values=normalized_default_values,
         )
+        mapping_context.batch_duplicate_update_item_ids = set()
+        if normalize_gui_upload_mode(mapping_context.upload_mode) == GUI_UPLOAD_MODE_UPDATE:
+            file_upload_dfs = {
+                file_path: self._upload_df_for_file(
+                    mapping_context,
+                    file_path=file_path,
+                    list_cols=list_cols,
+                )
+                for file_path in mapping_context.file_paths
+            }
+            duplicate_item_ids, duplicate_issue_df = self._build_batch_update_duplicate_issue_df(
+                mapping_context,
+                file_upload_dfs=file_upload_dfs,
+            )
+            mapping_context.batch_duplicate_update_item_ids = set(duplicate_item_ids)
+            if not duplicate_issue_df.empty:
+                issue_df = pd.concat([issue_df, duplicate_issue_df], ignore_index=True)
+                issue_df = self._finalize_issue_df(issue_df)
         summary_stats = self._build_summary_stats(issue_df, row_context_df)
         summary_stats["file_count"] = len(mapping_context.file_paths)
         summary_stats["batch_total_rows"] = self._count_batch_upload_rows(
@@ -1914,7 +2079,11 @@ class GuiUploadPipelineService:
             return 0
 
         ready_count = int((payload_df["payload_status"] == PayloadStatus.READY.value).sum())
-        if ready_count > 0 and root_item_name:
+        if (
+            ready_count > 0
+            and root_item_name
+            and str(getattr(wizard.state, "upload_mode", GUI_UPLOAD_MODE_CREATE)) == GUI_UPLOAD_MODE_CREATE
+        ):
             ready_count += 1
         return ready_count
 
@@ -1946,6 +2115,7 @@ class GuiUploadPipelineService:
         wizard = self.create_wizard(settings)
         wizard.select_project(int(settings.default_project_id))
         wizard.select_tracker(int(settings.default_tracker_id))
+        wizard.state.upload_mode = normalize_gui_upload_mode(mapping_context.upload_mode)
 
         schema = mapping_context.wizard.state.schema
         if schema is None:
@@ -1969,6 +2139,7 @@ class GuiUploadPipelineService:
         wizard.state.schema_df = schema_df
         wizard.state.selected_tracker_item_settings = dict(mapping_context.selected_tracker_item_settings)
         wizard.state.tracker_item_lookup_cache = dict(mapping_context.tracker_item_lookup_cache)
+        wizard.state.existing_item_cache = {}
         wizard.state.comparison_df = wizard.mapper.compare_upload_df_with_schema(
             upload_df=wizard.state.upload_df,
             schema_df=schema_df,
@@ -1980,7 +2151,10 @@ class GuiUploadPipelineService:
             selected_default_values=mapping_context.selected_default_values,
             selected_tracker_item_settings=mapping_context.selected_tracker_item_settings,
         )
-        wizard.build_payloads(force=True)
+        wizard.build_payloads(
+            force=True,
+            fetch_existing_items=normalize_gui_upload_mode(mapping_context.upload_mode) != GUI_UPLOAD_MODE_UPDATE,
+        )
         return wizard
 
     def run_batch_upload(
@@ -2001,6 +2175,13 @@ class GuiUploadPipelineService:
             raise ValueError("업로드할 Excel 파일이 없습니다.")
         if not mapping_context.selected_mapping:
             raise ValueError("검증된 매핑이 없습니다.")
+        upload_mode = normalize_gui_upload_mode(mapping_context.upload_mode)
+        if upload_mode == GUI_UPLOAD_MODE_UPDATE and bool(getattr(settings, "offline_mode", False)):
+            raise ValueError("테스트 모드에서는 업데이트 작업을 실행할 수 없습니다.")
+        if upload_mode == GUI_UPLOAD_MODE_UPDATE and mapping_context.batch_duplicate_update_item_ids:
+            duplicate_ids = ", ".join(str(item_id) for item_id in sorted(mapping_context.batch_duplicate_update_item_ids))
+            raise ValueError(f"배치 전체에서 중복된 업데이트 대상 id가 있습니다: {duplicate_ids}")
+        action_label = "업데이트" if upload_mode == GUI_UPLOAD_MODE_UPDATE else "업로드"
 
         sheet_name = str(file_state["sheet_name"])
         header_row = int(file_state["header_row"])
@@ -2035,7 +2216,7 @@ class GuiUploadPipelineService:
             file_label = Path(file_path).name
             _emit({
                 "type": "log",
-                "message": f"[{file_label}] 업로드 데이터를 준비하는 중입니다.",
+                "message": f"[{file_label}] {action_label} 데이터를 준비하는 중입니다.",
             })
             try:
                 wizard = self._prepare_wizard_for_file(
@@ -2046,7 +2227,10 @@ class GuiUploadPipelineService:
                     header_row=header_row,
                     summary_col=summary_col,
                 )
-                root_item_name, root_field_values = self.build_root_item_payload_spec(mapping_context, file_path)
+                if upload_mode == GUI_UPLOAD_MODE_CREATE:
+                    root_item_name, root_field_values = self.build_root_item_payload_spec(mapping_context, file_path)
+                else:
+                    root_item_name, root_field_values = None, {}
                 ready_count = self._ready_upload_count(wizard, root_item_name)
                 total_count += ready_count
                 prepared_jobs.append(BatchUploadJob(
@@ -2085,7 +2269,7 @@ class GuiUploadPipelineService:
             _sync_control()
             _emit({
                 "type": "log",
-                "message": f"[{job_index}/{len(prepared_jobs)}] {job.file_label} 업로드를 시작합니다.",
+                "message": f"[{job_index}/{len(prepared_jobs)}] {job.file_label} {action_label}를 시작합니다.",
             })
 
             def _forward_event(event: dict[str, Any]) -> None:
@@ -2106,15 +2290,24 @@ class GuiUploadPipelineService:
 
                 _emit(forwarded)
 
-            result = job.wizard.upload(
-                dry_run=dry_run,
-                continue_on_error=continue_on_error,
-                root_item_name=job.root_item_name,
-                root_field_values=job.root_field_values,
-                event_callback=_forward_event,
-                cancel_requested=cancel_requested,
-                pause_requested=pause_requested,
-            )
+            if upload_mode == GUI_UPLOAD_MODE_UPDATE:
+                result = job.wizard.update_items(
+                    dry_run=dry_run,
+                    continue_on_error=continue_on_error,
+                    event_callback=_forward_event,
+                    cancel_requested=cancel_requested,
+                    pause_requested=pause_requested,
+                )
+            else:
+                result = job.wizard.upload(
+                    dry_run=dry_run,
+                    continue_on_error=continue_on_error,
+                    root_item_name=job.root_item_name,
+                    root_field_values=job.root_field_values,
+                    event_callback=_forward_event,
+                    cancel_requested=cancel_requested,
+                    pause_requested=pause_requested,
+                )
             job.wizard.save_state(job.output_dir)
             created_map_by_file[job.file_path] = result.get("created_map", {})
 
@@ -2360,6 +2553,41 @@ class GuiUploadPipelineService:
                 "선택값을 업로드 형식으로 변환하지 못했습니다.",
                 "Excel 값이나 기본값이 트래커 옵션 이름과 정확히 일치하는지 확인하세요.",
             )
+        if code == "UPDATE_ITEM_ID_COLUMN_MISSING":
+            return (
+                column or "id",
+                field or "id",
+                "업데이트 모드에서는 Excel에 id 열이 반드시 있어야 합니다.",
+                "파일 단계에서 id 열이 포함된 파일을 선택한 뒤 다시 검증하세요.",
+            )
+        if code == "UPDATE_ITEM_ID_MISSING":
+            return (
+                column or "id",
+                field or "id",
+                "업데이트 대상 item id 값이 비어 있습니다.",
+                "해당 행의 id 값을 채운 뒤 다시 검증하세요.",
+            )
+        if code == "UPDATE_ITEM_ID_INVALID":
+            return (
+                column or "id",
+                field or "id",
+                "업데이트 대상 item id를 숫자로 해석할 수 없습니다.",
+                "해당 행의 id 값을 양의 정수로 수정한 뒤 다시 검증하세요.",
+            )
+        if code == "UPDATE_ITEM_ID_DUPLICATE":
+            return (
+                column or "id",
+                field or "id",
+                "같은 item id가 같은 파일 안에 중복되어 있습니다.",
+                "한 item id는 한 번만 나오도록 정리한 뒤 다시 검증하세요.",
+            )
+        if code == "UPDATE_ITEM_FETCH_FAILED":
+            return (
+                column or "id",
+                field or "id",
+                "기존 item 정보를 조회하지 못해 업데이트 payload를 만들 수 없습니다.",
+                "id 값과 서버 연결 상태를 확인한 뒤 다시 검증하세요.",
+            )
 
         if detail:
             return (
@@ -2531,6 +2759,10 @@ class GuiUploadPipelineService:
                 })
 
         issue_df = pd.DataFrame(issues, columns=issue_columns)
+        return cls._finalize_issue_df(issue_df)
+
+    @staticmethod
+    def _finalize_issue_df(issue_df: pd.DataFrame) -> pd.DataFrame:
         if issue_df.empty:
             return issue_df
         issue_df = issue_df.drop_duplicates().reset_index(drop=True)
