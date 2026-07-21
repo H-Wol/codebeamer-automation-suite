@@ -685,6 +685,39 @@ class WizardPayloadResolutionTest(unittest.TestCase):
             ["TrackerItemReference", "TrackerItemReference"],
         )
 
+    def test_preview_payload_builds_tracker_item_choice_field_from_multiline_bracket_text(self) -> None:
+        """다중 TrackerItemChoiceField는 한 셀의 여러 줄 텍스트도 각각 reference로 풀어야 한다."""
+        self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
+            {
+                "id": 15,
+                "name": "연관 요구사항",
+                "type": "TrackerItemChoiceField",
+                "multipleValues": True,
+                "valueModel": "ChoiceFieldValue<TrackerItemReference>",
+            }
+        ])
+        self.wizard.state.selected_mapping = {"related_items": "연관 요구사항"}
+        self.wizard.state.selected_option_mapping = {"related_items": "연관 요구사항"}
+        self.wizard.state.option_maps = self.mapper.build_option_maps_from_schema(self.wizard.state.schema_df)
+        self.wizard.state.upload_df = pd.DataFrame([
+            {
+                "_row_id": 1,
+                "upload_name": "REQ-1",
+                "related_items": "Candidate [REQ:20263671]\nCandidate [REQ:20263672]",
+            }
+        ])
+        self.wizard.state.converted_upload_df = self.mapper.apply_option_resolution(
+            self.wizard.state.upload_df,
+            self.wizard.state.selected_option_mapping,
+            self.wizard.state.option_maps,
+        )
+
+        payload = self.wizard.preview_payload(1)
+        custom_field = payload["customFields"][0]
+
+        self.assertEqual(custom_field["name"], "연관 요구사항")
+        self.assertEqual([value["id"] for value in custom_field["values"]], [20263671, 20263672])
+
 
 if __name__ == "__main__":
     unittest.main()

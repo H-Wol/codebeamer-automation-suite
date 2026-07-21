@@ -742,26 +742,13 @@ class MainWindow:
                 return current_state
 
             def _apply_workflow_preset_to_mapping_context(self, mapping_context, preset: GuiWorkflowPreset) -> None:
-                if preset.root_item_config:
-                    mapping_context.root_item_config = dict(preset.root_item_config)
-                if preset.selected_mapping:
-                    mapping_context.selected_mapping = {
-                        str(df_column): str(schema_field)
-                        for df_column, schema_field in preset.selected_mapping.items()
-                        if str(df_column).strip() and str(schema_field).strip()
-                    }
-                if preset.selected_default_values:
-                    mapping_context.selected_default_values = {
-                        str(field_name): str(value)
-                        for field_name, value in preset.selected_default_values.items()
-                        if str(field_name).strip() and str(value).strip()
-                    }
-                if preset.selected_tracker_item_settings:
-                    mapping_context.selected_tracker_item_settings = {
-                        str(field_name): dict(setting)
-                        for field_name, setting in preset.selected_tracker_item_settings.items()
-                        if str(field_name).strip() and isinstance(setting, dict)
-                    }
+                self.pipeline_service.apply_saved_workflow_values(
+                    mapping_context,
+                    root_item_config=dict(preset.root_item_config or {}),
+                    selected_mapping=dict(preset.selected_mapping or {}),
+                    selected_default_values=dict(preset.selected_default_values or {}),
+                    selected_tracker_item_settings=dict(preset.selected_tracker_item_settings or {}),
+                )
 
             def _collect_workflow_preset(self) -> GuiWorkflowPreset:
                 settings = self._current_settings_snapshot()
@@ -1198,6 +1185,7 @@ class MainWindow:
 
             def _on_upload_finished(self, result: dict) -> None:
                 self.session_state.upload_result = result
+                self.upload_worker = None
                 success_df = result.get("success_df")
                 failed_df = result.get("failed_df")
                 unresolved_df = result.get("unresolved_df")
@@ -1209,6 +1197,7 @@ class MainWindow:
                 self._update_upload_time_label()
                 self._append_timestamped_log("배치 업로드가 완료되었습니다.")
                 self.upload_page.status_label.setText("업로드 완료")
+                self.upload_page.start_button.setEnabled(True)
                 self.upload_page.pause_button.setEnabled(False)
                 self.upload_page.resume_button.setEnabled(False)
                 self.upload_page.cancel_button.setEnabled(False)
@@ -1221,9 +1210,11 @@ class MainWindow:
                     )
 
             def _on_upload_failed(self, message: str) -> None:
+                self.upload_worker = None
                 self.upload_page.status_label.setText(message)
                 self._update_upload_time_label()
                 self._append_timestamped_log(message)
+                self.upload_page.start_button.setEnabled(True)
                 self.upload_page.pause_button.setEnabled(False)
                 self.upload_page.resume_button.setEnabled(False)
                 self.upload_page.cancel_button.setEnabled(False)

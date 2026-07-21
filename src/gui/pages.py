@@ -2226,6 +2226,10 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
         page._activity_row_map = {}
         page.log_view.clear()
         page.response_view.clear()
+        page.start_button.setEnabled(True)
+        page.pause_button.setEnabled(False)
+        page.resume_button.setEnabled(False)
+        page.cancel_button.setEnabled(False)
         page.result_button.setEnabled(False)
 
     page.record_activity_started = record_activity_started
