@@ -902,9 +902,10 @@ class CodebeamerUploadWizard:
         multiple_values = bool(option_info.get("multiple_values", False))
 
         if mode == TrackerItemResolutionMode.QUERY.value:
-            if multiple_values and isinstance(raw_value, list):
+            if multiple_values:
+                lookup_items = self.mapper.normalize_multi_value_items(raw_value)
                 resolved_values = []
-                for item in raw_value:
+                for item in lookup_items:
                     if item is None or self._normalize_lookup_text(item) == "":
                         continue
                     resolved, status, error = self._lookup_tracker_item_reference_by_query(
@@ -915,7 +916,8 @@ class CodebeamerUploadWizard:
                     if resolved is None:
                         return None, status, error
                     resolved_values.append(resolved)
-                return resolved_values or None, "RESOLVED", None
+                if resolved_values:
+                    return resolved_values, "RESOLVED", None
 
             return self._lookup_tracker_item_reference_by_query(schema_field, raw_value, option_info)
 
@@ -956,7 +958,7 @@ class CodebeamerUploadWizard:
 
             unique_values = values_by_field.setdefault(schema_field, set())
             for raw_value in upload_df[df_col].tolist():
-                items = raw_value if isinstance(raw_value, list) else [raw_value]
+                items = self.mapper.normalize_multi_value_items(raw_value)
                 for item in items:
                     normalized = self._normalize_lookup_text(item)
                     if normalized:

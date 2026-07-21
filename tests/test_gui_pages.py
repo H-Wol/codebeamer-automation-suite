@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 from types import SimpleNamespace
 
@@ -12,6 +13,10 @@ from src.gui.pages import _settings_mode_description
 from src.gui.pages import _settings_mode_toggle_text
 from src.gui.pages import _build_tracker_item_regex_preview_text
 from src.gui.pages import _tracker_item_sample_values
+from src.gui.pages import create_upload_page
+
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
 class GuiPagesSettingsModeTest(unittest.TestCase):
@@ -89,6 +94,36 @@ class GuiPagesTrackerItemPreviewTest(unittest.TestCase):
         sample_values = _tracker_item_sample_values(upload_preview_df, "연관 요구사항")
 
         self.assertEqual(sample_values, ["REQ-100", ["REQ-200", ""], "REQ-300"])
+
+
+class GuiPagesUploadPageTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        cls._app = QApplication.instance() or QApplication([])
+
+    def test_upload_page_reset_restores_start_button_state(self) -> None:
+        page = create_upload_page(
+            lambda: None,
+            lambda: None,
+            lambda: None,
+            lambda: None,
+        )
+
+        page.start_button.setEnabled(False)
+        page.pause_button.setEnabled(True)
+        page.resume_button.setEnabled(True)
+        page.cancel_button.setEnabled(True)
+        page.result_button.setEnabled(True)
+
+        page.reset(3)
+
+        self.assertTrue(page.start_button.isEnabled())
+        self.assertFalse(page.pause_button.isEnabled())
+        self.assertFalse(page.resume_button.isEnabled())
+        self.assertFalse(page.cancel_button.isEnabled())
+        self.assertFalse(page.result_button.isEnabled())
 
 
 if __name__ == "__main__":

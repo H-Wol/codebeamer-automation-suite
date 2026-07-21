@@ -610,6 +610,70 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             self.assertEqual(list(upload_df["upload_name"]), ["REQ-001"])
             self.assertNotIn("_synthetic_root", upload_df.columns)
 
+    def test_apply_saved_workflow_values_keeps_auto_mapping_when_saved_columns_do_not_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary", "담당자", "테이블필드.컬럼A", "id", "parent"])
+            sheet.append(["REQ-001", "홍길동", "값1", "1", ""])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                },
+            )
+
+            service.apply_saved_workflow_values(
+                mapping_context,
+                root_item_config={"enabled": False},
+                selected_mapping={
+                    "Summary": "Status",
+                    "예전담당자": "담당자",
+                },
+                selected_default_values={
+                    "Status": "Open",
+                    "없는필드": "무시",
+                },
+                selected_tracker_item_settings={
+                    "없는필드": {
+                        "mode": "query",
+                        "source_tracker_ids": [13526611],
+                    }
+                },
+            )
+
+            self.assertFalse(mapping_context.root_item_config["enabled"])
+            self.assertEqual(mapping_context.selected_mapping["Summary"], "Status")
+            self.assertEqual(mapping_context.selected_mapping["담당자"], "담당자")
+            self.assertEqual(mapping_context.selected_mapping["테이블필드.컬럼A"], "테이블필드")
+            self.assertNotIn("예전담당자", mapping_context.selected_mapping)
+            self.assertEqual(mapping_context.selected_default_values, {"Status": "Open"})
+            self.assertEqual(mapping_context.selected_tracker_item_settings, {})
+
     def test_prepare_mapping_context_reuses_cached_preview_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "sample.xlsx"

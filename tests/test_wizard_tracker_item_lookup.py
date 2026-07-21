@@ -83,6 +83,31 @@ class WizardTrackerItemLookupTest(unittest.TestCase):
         self.assertEqual([value["id"] for value in first_values], [101, 202])
         self.assertEqual([value["id"] for value in second_values], [101])
 
+    def test_process_option_mapping_splits_multiline_query_values_for_multiple_tracker_items(self) -> None:
+        self.wizard.state.upload_df = pd.DataFrame([
+            {"_row_id": 1, "related_items": "REQ-100\nREQ-200"},
+        ])
+
+        self.wizard.process_option_mapping(
+            {"related_items": "연관 요구사항"},
+            selected_tracker_item_settings={
+                "연관 요구사항": {
+                    "mode": TrackerItemResolutionMode.QUERY.value,
+                    "source_tracker_ids": [13526611],
+                }
+            },
+        )
+
+        self.assertEqual(
+            self.client.search_calls,
+            [(13526611, "REQ-100"), (13526611, "REQ-200")],
+        )
+
+        converted = self.wizard.state.converted_upload_df
+        self.assertIsNotNone(converted)
+        resolved_values = converted.iloc[0]["related_items__resolved"]
+        self.assertEqual([value["id"] for value in resolved_values], [101, 202])
+
     def test_process_option_mapping_uses_first_tracker_item_query_match(self) -> None:
         self.client = FakeTrackerItemFirstMatchClient()
         self.wizard = CodebeamerUploadWizard(
