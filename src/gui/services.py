@@ -1870,6 +1870,99 @@ class GuiUploadPipelineService:
             tracker_item_settings_source,
         )
 
+    @staticmethod
+    def _normalize_selected_mapping(
+        selected_mapping: dict[str, str] | None,
+        *,
+        upload_columns: list[str],
+        schema_df: pd.DataFrame,
+    ) -> dict[str, str]:
+        """현재 upload 컬럼과 schema에 실제로 존재하는 매핑만 남긴다."""
+        if not selected_mapping:
+            return {}
+
+        valid_upload_columns = {
+            str(column).strip()
+            for column in upload_columns
+            if str(column).strip()
+        }
+        valid_schema_fields = {
+            str(field_name).strip()
+            for field_name in schema_df["field_name"].dropna().tolist()
+            if str(field_name).strip()
+        }
+
+        normalized_mapping: dict[str, str] = {}
+        for df_column, schema_field in selected_mapping.items():
+            normalized_column = str(df_column).strip()
+            normalized_field = str(schema_field).strip()
+            if not normalized_column or not normalized_field:
+                continue
+            if normalized_column not in valid_upload_columns:
+                continue
+            if normalized_field not in valid_schema_fields:
+                continue
+            normalized_mapping[normalized_column] = normalized_field
+        return normalized_mapping
+
+    def apply_saved_workflow_values(
+        self,
+        mapping_context: MappingContext,
+        *,
+        root_item_config: dict[str, Any] | None = None,
+        selected_mapping: dict[str, str] | None = None,
+        selected_default_values: dict[str, str] | None = None,
+        selected_tracker_item_settings: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
+        """현재 파일 기준 자동 추천은 유지하고, 저장된 preset은 유효한 항목만 덮어쓴다."""
+        if root_item_config:
+            mapping_context.root_item_config = dict(root_item_config)
+
+        merged_mapping = self._normalize_selected_mapping(
+            mapping_context.selected_mapping,
+            upload_columns=mapping_context.upload_columns,
+            schema_df=mapping_context.schema_df,
+        )
+        merged_mapping.update(
+            self._normalize_selected_mapping(
+                selected_mapping,
+                upload_columns=mapping_context.upload_columns,
+                schema_df=mapping_context.schema_df,
+            )
+        )
+        mapping_context.selected_mapping = merged_mapping
+
+        valid_schema_fields = {
+            str(field_name).strip()
+            for field_name in mapping_context.schema_df["field_name"].dropna().tolist()
+            if str(field_name).strip()
+        }
+
+        default_values_source = (
+            selected_default_values
+            if selected_default_values is not None
+            else mapping_context.selected_default_values
+        )
+        mapping_context.selected_default_values = {
+            str(field_name).strip(): str(raw_value).strip()
+            for field_name, raw_value in (default_values_source or {}).items()
+            if str(field_name).strip() in valid_schema_fields and str(raw_value).strip()
+        }
+
+        tracker_item_settings_source = (
+            selected_tracker_item_settings
+            if selected_tracker_item_settings is not None
+            else mapping_context.selected_tracker_item_settings
+        )
+        (
+            mapping_context.tracker_item_field_candidates,
+            mapping_context.selected_tracker_item_settings,
+        ) = self._normalize_tracker_item_settings(
+            mapping_context.schema_df,
+            mapping_context.selected_mapping,
+            tracker_item_settings_source,
+        )
+
     def validate_mapping(
         self,
         mapping_context: MappingContext,
