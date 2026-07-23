@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from enum import Enum
 from typing import Any
@@ -262,6 +263,26 @@ class DomainModel:
     def to_dict(self) -> dict[str, Any]:
         """각 모델이 스스로를 dict로 바꾸도록 강제하는 공통 규약이다."""
         raise NotImplementedError
+
+
+def _normalize_scalar_value(value: Any) -> Any:
+    """정수처럼 보이는 float와 NaN을 payload 친화적인 scalar로 정리한다."""
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        if math.isnan(value):
+            return None
+        if value.is_integer():
+            return int(value)
+    return value
+
+
+def _stringify_scalar(value: Any) -> str | None:
+    """문자열 필드 직렬화 전에 숫자 표현을 안정적으로 정규화한다."""
+    normalized = _normalize_scalar_value(value)
+    if normalized is None:
+        return None
+    return str(normalized)
 
 
 def _serialize_value(value: Any) -> Any:

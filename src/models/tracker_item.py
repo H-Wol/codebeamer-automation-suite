@@ -16,6 +16,7 @@ from .common import _as_list
 from .common import _camel_to_snake
 from .common import _coerce_bool
 from .common import _drop_none
+from .common import _stringify_scalar
 from .field_values import AbstractFieldValue
 from .field_values import TableFieldValue
 from .field_values import _build_field_value
@@ -318,7 +319,7 @@ class TrackerItemBase(DomainModel):
             return True
 
         if tracker_field in self.STRING_FIELDS and value is not None:
-            setattr(self, tracker_field, str(value))
+            setattr(self, tracker_field, _stringify_scalar(value))
             return True
 
         setattr(self, tracker_field, value)

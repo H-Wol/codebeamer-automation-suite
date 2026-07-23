@@ -84,6 +84,22 @@ class HierarchyProcessorSplitTest(unittest.TestCase):
         self.assertEqual(int(hierarchy_df.iloc[1]["parent_row_id"]), 0)
         self.assertEqual(list(upload_df["upload_name"]), ["Parent", "Child"])
 
+    def test_processor_keeps_integer_like_values_without_decimal_suffix_after_merge(self) -> None:
+        processor = HierarchyProcessor(summary_col="요약")
+        raw_df = pd.DataFrame([
+            {"요약": "REQ-001", "코드": 12, "_excel_row": 2, "_summary_indent": 0},
+            {"요약": "REQ-002", "코드": None, "_excel_row": 3, "_summary_indent": 0},
+        ])
+
+        merged_df = processor.merge_multiline_records(raw_df, list_cols=[])
+        hierarchy_df = processor.add_hierarchy_by_indent(merged_df)
+        upload_df = processor.build_upload_df(hierarchy_df, list_cols=[])
+
+        self.assertEqual(merged_df["코드"].tolist(), [12, None])
+        self.assertIsInstance(merged_df.iloc[0]["코드"], int)
+        self.assertEqual(upload_df["코드"].tolist(), [12, None])
+        self.assertIsInstance(upload_df.iloc[0]["코드"], int)
+
 
 class PayloadCacheWizardTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -154,6 +170,43 @@ class PayloadCacheWizardTest(unittest.TestCase):
             saved_payload = json.loads(first_line)
             self.assertEqual(saved_payload["payload_status"], PayloadStatus.READY.value)
             self.assertEqual(saved_payload["payload_json"]["name"], "REQ-001")
+
+    def test_preview_payload_keeps_integer_like_text_values_without_decimal_suffix(self) -> None:
+        schema = [
+            {
+                "id": 1,
+                "name": "Summary",
+                "type": "TextField",
+                "trackerItemField": "name",
+                "valueModel": "TextFieldValue",
+            },
+            {
+                "id": 2,
+                "name": "코드",
+                "type": "TextField",
+                "valueModel": "TextFieldValue",
+            },
+        ]
+        client = StaticSchemaClient(schema)
+        wizard = CountingWizard(
+            client=client,
+            processor=self.processor,
+            mapper=self.mapper,
+        )
+        wizard.select_project(1)
+        wizard.select_tracker(2)
+        raw_df = pd.DataFrame([
+            {"요약": "REQ-001", "코드": 12, "_excel_row": 2, "_summary_indent": 0},
+            {"요약": "REQ-002", "코드": None, "_excel_row": 3, "_summary_indent": 0},
+        ])
+        wizard.load_raw_dataframe(raw_df, list_cols=[])
+        wizard.load_schema_and_compare({"요약": "Summary", "코드": "코드"})
+        wizard.process_option_mapping({"요약": "Summary", "코드": "코드"})
+
+        preview_payload = wizard.preview_payload(0)
+
+        self.assertEqual(wizard.state.upload_df.iloc[0]["코드"], 12)
+        self.assertEqual(preview_payload["customFields"][0]["value"], "12")
 
     def test_upload_creates_file_root_before_existing_hierarchy(self) -> None:
         processor = HierarchyProcessor(summary_col="요약")

@@ -98,6 +98,24 @@ class TrackerItemPreconstructionTest(unittest.TestCase):
 
         self.assertEqual(item.name, "REQ-001")
 
+    def test_set_field_value_normalizes_integer_like_float_for_builtin_text(self) -> None:
+        """builtin 문자열 필드는 12.0 대신 12처럼 정규화해 저장해야 한다."""
+        item = TrackerItemBase()
+
+        item.set_field_value(
+            "name",
+            12.0,
+            {
+                "field_name": "Summary",
+                "field_type": "TextField",
+                "is_supported": True,
+                "payload_target_kind": PayloadTargetKind.BUILTIN_FIELD.value,
+                "preconstruction_kind": PreconstructionKind.BUILTIN_DIRECT.value,
+            },
+        )
+
+        self.assertEqual(item.name, "12")
+
     def test_set_field_value_builds_custom_field_value(self) -> None:
         """custom field는 알맞은 FieldValue 객체로 감싸져야 한다."""
         item = TrackerItemBase()
