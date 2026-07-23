@@ -454,7 +454,7 @@ class GuiExcelServiceTest(unittest.TestCase):
             workbook.save(path)
             workbook.close()
 
-            preview = GuiExcelService(reader_cls=FakeExcelReader).load_preview(
+            preview = GuiExcelService().load_preview(
                 str(path),
                 sheet_name="Main",
                 header_row=1,
@@ -465,6 +465,28 @@ class GuiExcelServiceTest(unittest.TestCase):
             self.assertEqual(preview.headers, ["Summary", "담당자", "비고"])
             self.assertEqual(preview.rows[0], ["REQ-001", "홍길동", "메모"])
             self.assertEqual(preview.suggested_summary, "Summary")
+
+    def test_load_preview_displays_integer_like_numbers_without_decimal_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary", "번호", "실수"])
+            sheet.append(["REQ-001", 101, 1.5])
+            sheet.append(["REQ-002", 202, 2.0])
+            workbook.save(path)
+            workbook.close()
+
+            preview = GuiExcelService(reader_cls=FakeExcelReader).load_preview(
+                str(path),
+                sheet_name="Main",
+                header_row=1,
+                max_preview_rows=5,
+            )
+
+            self.assertEqual(preview.rows[0], ["REQ-001", "101", "1.5"])
+            self.assertEqual(preview.rows[1], ["REQ-002", "202", "2"])
 
     def test_load_preview_preloads_raw_data_for_all_selected_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

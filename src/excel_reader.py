@@ -60,6 +60,30 @@ class ExcelReader:
             normalized = normalized[:width]
         return normalized
 
+    @classmethod
+    def _normalize_cell_value(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, float):
+            if pd.isna(value):
+                return None
+            if value.is_integer():
+                return int(value)
+        return value
+
+    @classmethod
+    def _normalize_dataframe_values(cls, dataframe: pd.DataFrame) -> pd.DataFrame:
+        if dataframe.empty:
+            return dataframe
+
+        work = dataframe.copy().astype(object)
+        for column in work.columns:
+            work[column] = pd.Series(
+                [cls._normalize_cell_value(value) for value in work[column].tolist()],
+                dtype=object,
+            )
+        return work
+
     def _openpyxl_sheet_names(self, file_path: str) -> list[str]:
         workbook = load_workbook(file_path, read_only=True, data_only=True)
         try:
@@ -237,7 +261,7 @@ class ExcelReader:
                     record["_summary_indent"] = indent_level
                     records.append(record)
 
-                return pd.DataFrame(records)
+                return self._normalize_dataframe_values(pd.DataFrame(records))
             finally:
                 workbook.close()
 
@@ -280,7 +304,7 @@ class ExcelReader:
                 record["_summary_indent"] = indent_level
                 records.append(record)
 
-            return pd.DataFrame(records)
+            return self._normalize_dataframe_values(pd.DataFrame(records))
         finally:
             if workbook is not None:
                 try:

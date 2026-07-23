@@ -27,6 +27,8 @@ class HierarchyProcessor:
     def normalize_scalar(cls, value: Any) -> Any:
         if cls.is_blank(value):
             return None
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
         if isinstance(value, str):
             return value.strip()
         return value
