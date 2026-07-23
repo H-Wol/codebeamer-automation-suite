@@ -4,8 +4,6 @@ from typing import Any
 
 import pandas as pd
 
-from .models.common import _normalize_scalar_value
-
 
 class HierarchyProcessor:
     """raw DataFrame를 계층 업로드용 DataFrame으로 후처리하는 전용 processor다."""
@@ -29,7 +27,6 @@ class HierarchyProcessor:
     def normalize_scalar(cls, value: Any) -> Any:
         if cls.is_blank(value):
             return None
-        value = _normalize_scalar_value(value)
         if isinstance(value, str):
             return value.strip()
         return value
@@ -122,7 +119,7 @@ class HierarchyProcessor:
 
             merged_rows.append(row_out)
 
-        merged_df = self._normalize_dataframe_values(pd.DataFrame(merged_rows).reset_index(drop=True))
+        merged_df = self._normalize_dataframe_values(pd.DataFrame(merged_rows, dtype=object).reset_index(drop=True))
         merged_df["_row_id"] = merged_df.index
         return merged_df
 
@@ -152,8 +149,8 @@ class HierarchyProcessor:
             stack.append({"row_id": index, "indent": current_indent})
             prev_indent = current_indent
 
-        work["depth"] = depths
-        work["parent_row_id"] = parent_row_ids
+        work["depth"] = pd.Series(depths, dtype=object)
+        work["parent_row_id"] = pd.Series(parent_row_ids, dtype=object)
         return self._normalize_dataframe_values(work)
 
     def build_upload_df(self, hierarchy_df: pd.DataFrame, list_cols: list[str] | None = None) -> pd.DataFrame:

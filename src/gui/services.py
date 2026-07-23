@@ -49,8 +49,6 @@ def gui_display_text(value: Any) -> str:
         return ""
     if isinstance(value, float) and pd.isna(value):
         return ""
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
     if isinstance(value, list):
         return ", ".join(part for part in (gui_display_text(item) for item in value) if part)
     if isinstance(value, dict):

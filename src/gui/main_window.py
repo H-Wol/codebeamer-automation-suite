@@ -83,6 +83,79 @@ class GuiSessionState:
     upload_result: dict[str, object] | None
 
 
+def _format_duration_text(seconds: float | None) -> str:
+    if seconds is None:
+        return "-"
+    if seconds < 1:
+        return f"{seconds:.2f}초"
+    if seconds < 60:
+        return f"{seconds:.1f}초"
+    minutes = int(seconds // 60)
+    remainder = seconds - (minutes * 60)
+    return f"{minutes}분 {remainder:.1f}초"
+
+
+def _format_clock_text(timestamp: float | None = None) -> str:
+    if timestamp is None:
+        timestamp = time.time()
+    return datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
+
+
+def _estimate_upload_remaining_seconds(
+    elapsed_seconds: float | None,
+    completed_count: int,
+    total_count: int,
+) -> float | None:
+    if elapsed_seconds is None or elapsed_seconds < 0:
+        return None
+
+    normalized_total = max(int(total_count), 0)
+    normalized_completed = max(int(completed_count), 0)
+    if normalized_total <= 0 or normalized_completed <= 0:
+        return None
+    if normalized_completed >= normalized_total:
+        return 0.0
+
+    average_seconds = elapsed_seconds / normalized_completed
+    remaining_count = normalized_total - normalized_completed
+    return max(average_seconds * remaining_count, 0.0)
+
+
+def _format_upload_progress_text(completed_count: int, total_count: int) -> str:
+    normalized_total = max(int(total_count), 0)
+    normalized_completed = max(int(completed_count), 0)
+    if normalized_total <= 0:
+        return "진행률 0.0% (0 / 0)"
+
+    clamped_completed = min(normalized_completed, normalized_total)
+    percent = (clamped_completed / normalized_total) * 100
+    return f"진행률 {percent:.1f}% ({clamped_completed} / {normalized_total})"
+
+
+def _format_upload_eta_text(
+    *,
+    now_timestamp: float,
+    elapsed_seconds: float | None,
+    completed_count: int,
+    total_count: int,
+) -> str:
+    remaining_seconds = _estimate_upload_remaining_seconds(
+        elapsed_seconds,
+        completed_count,
+        total_count,
+    )
+    if remaining_seconds is None:
+        return "예상 종료: -"
+    if remaining_seconds <= 0:
+        return f"예상 종료: 완료됨 ({_format_clock_text(now_timestamp)})"
+
+    finish_timestamp = now_timestamp + remaining_seconds
+    return (
+        f"예상 종료: {_format_clock_text(finish_timestamp)} "
+        f"(남은 약 {_format_duration_text(remaining_seconds)})"
+    )
+
+
 class MainWindow:
     """단계형 GUI 스켈레톤을 제공한다."""
 
@@ -114,6 +187,8 @@ class MainWindow:
                 self.upload_failed_count = 0
                 self.upload_retry_count = 0
                 self.upload_total_count = 0
+                self._upload_progress_current = 0
+                self._upload_progress_total = 0
                 self._upload_event_started_at = {}
                 self._upload_batch_started_at = None
                 self._current_page = None
@@ -908,6 +983,12 @@ class MainWindow:
                 self.session_state.upload_result = None
                 self.upload_success_count = 0
                 self.upload_failed_count = 0
+                self.upload_retry_count = 0
+                self.upload_total_count = 0
+                self._upload_progress_current = 0
+                self._upload_progress_total = 0
+                self._upload_event_started_at = {}
+                self._upload_batch_started_at = None
                 self._show_page(self.project_page)
 
             def _on_prepare_root_item_context(self) -> None:
@@ -1007,10 +1088,13 @@ class MainWindow:
                     self._show_error_dialog("테스트 모드 업로드 제한", message)
                     return
                 output_dir = str(Path(self.session_state.settings.output_dir))
+                self.upload_page.reset(0)
                 self.upload_success_count = 0
                 self.upload_failed_count = 0
                 self.upload_retry_count = 0
                 self.upload_total_count = 0
+                self._upload_progress_current = 0
+                self._upload_progress_total = 0
                 self._upload_event_started_at = {}
                 self._upload_batch_started_at = time.perf_counter()
                 self.upload_worker = UploadWorker(
@@ -1058,21 +1142,11 @@ class MainWindow:
 
             @staticmethod
             def _format_clock(timestamp: float | None = None) -> str:
-                if timestamp is None:
-                    timestamp = time.time()
-                return datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
+                return _format_clock_text(timestamp)
 
             @staticmethod
             def _format_duration(seconds: float | None) -> str:
-                if seconds is None:
-                    return "-"
-                if seconds < 1:
-                    return f"{seconds:.2f}초"
-                if seconds < 60:
-                    return f"{seconds:.1f}초"
-                minutes = int(seconds // 60)
-                remainder = seconds - (minutes * 60)
-                return f"{minutes}분 {remainder:.1f}초"
+                return _format_duration_text(seconds)
 
             @staticmethod
             def _upload_event_key(event: dict[str, object]) -> str:
@@ -1104,13 +1178,32 @@ class MainWindow:
                     f"총 대상 {self.upload_total_count}건 / 완료 {completed_count}건"
                 )
 
+            def _update_upload_progress_widgets(self) -> None:
+                total = max(int(self._upload_progress_total), 0)
+                completed = max(int(self._upload_progress_current), 0)
+                clamped_completed = min(completed, total) if total > 0 else 0
+                self.upload_page.progress_bar.setMaximum(max(total, 1))
+                self.upload_page.progress_bar.setValue(clamped_completed)
+                progress_text = _format_upload_progress_text(clamped_completed, total)
+                self.upload_page.progress_label.setText(progress_text)
+                self.upload_page.progress_bar.setFormat(progress_text.replace("진행률 ", ""))
+
             def _update_upload_time_label(self) -> None:
                 if self._upload_batch_started_at is None:
                     self.upload_page.time_label.setText("배치 시간: -")
+                    self.upload_page.eta_label.setText("예상 종료: -")
                     return
                 elapsed = time.perf_counter() - self._upload_batch_started_at
                 self.upload_page.time_label.setText(
                     f"배치 시간: {self._format_duration(elapsed)} 경과 (현재 시각 {self._format_clock()})"
+                )
+                self.upload_page.eta_label.setText(
+                    _format_upload_eta_text(
+                        now_timestamp=time.time(),
+                        elapsed_seconds=elapsed,
+                        completed_count=self._upload_progress_current,
+                        total_count=self._upload_progress_total,
+                    )
                 )
 
             def _on_upload_event(self, event: dict) -> None:
@@ -1129,6 +1222,8 @@ class MainWindow:
 
                 if event_type == "batch_total":
                     self.upload_total_count = int(event.get("total") or 0)
+                    self._upload_progress_total = self.upload_total_count
+                    self._update_upload_progress_widgets()
                     self._update_upload_counter()
                     self._append_timestamped_log(f"총 업로드 예정 건수: {self.upload_total_count}")
                     return
@@ -1178,8 +1273,9 @@ class MainWindow:
                 self._append_timestamped_log(f"{status_text} | {message}")
 
             def _on_upload_progress(self, current: int, total: int, upload_name: str) -> None:
-                self.upload_page.progress_bar.setMaximum(max(total, 1))
-                self.upload_page.progress_bar.setValue(current)
+                self._upload_progress_current = max(int(current), 0)
+                self._upload_progress_total = max(int(total), 0)
+                self._update_upload_progress_widgets()
                 self.upload_page.current_label.setText(f"현재 항목: {upload_name or '-'}")
                 self._update_upload_time_label()
 
@@ -1191,10 +1287,13 @@ class MainWindow:
                 unresolved_df = result.get("unresolved_df")
                 self.upload_success_count = 0 if success_df is None else len(success_df)
                 self.upload_failed_count = 0 if failed_df is None else len(failed_df)
+                self._upload_progress_current = self.upload_success_count + self.upload_failed_count
+                self._update_upload_progress_widgets()
                 self._update_upload_counter()
                 if failed_df is not None and not getattr(failed_df, "empty", True) and "error_response_json" in failed_df.columns:
                     self.upload_page.response_view.setPlainText(str(failed_df.iloc[0].get("error_response_json") or ""))
                 self._update_upload_time_label()
+                self.upload_page.eta_label.setText(f"예상 종료: 완료됨 ({self._format_clock()})")
                 self._append_timestamped_log("배치 업로드가 완료되었습니다.")
                 self.upload_page.status_label.setText("업로드 완료")
                 self.upload_page.start_button.setEnabled(True)
@@ -1213,6 +1312,7 @@ class MainWindow:
                 self.upload_worker = None
                 self.upload_page.status_label.setText(message)
                 self._update_upload_time_label()
+                self.upload_page.eta_label.setText(f"예상 종료: 중단됨 ({self._format_clock()})")
                 self._append_timestamped_log(message)
                 self.upload_page.start_button.setEnabled(True)
                 self.upload_page.pause_button.setEnabled(False)

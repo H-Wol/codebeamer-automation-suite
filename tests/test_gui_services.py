@@ -59,7 +59,7 @@ class FakeExcelReader:
                 record["_excel_row"] = excel_row
                 record["_summary_indent"] = 0 if normalized[summary_index] is not None else 0
                 records.append(record)
-            return pd.DataFrame(records)
+            return pd.DataFrame(records, dtype=object)
         finally:
             wb.close()
 

@@ -2087,7 +2087,11 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     layout.setSpacing(10)
 
     page.progress_bar = QProgressBar()
+    page.progress_bar.setTextVisible(True)
+    page.progress_bar.setFormat("0 / 0 (0.0%)")
     layout.addWidget(page.progress_bar)
+    page.progress_label = QLabel("진행률 0.0% (0 / 0)")
+    layout.addWidget(page.progress_label)
 
     page.current_label = QLabel("현재 항목: -")
     page.total_label = QLabel("총 대상 0건 / 완료 0건")
@@ -2102,6 +2106,9 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     page.time_label = QLabel("배치 시간: -")
     page.time_label.setObjectName("section_label")
     layout.addWidget(page.time_label)
+    page.eta_label = QLabel("예상 종료: -")
+    page.eta_label.setObjectName("section_label")
+    layout.addWidget(page.eta_label)
 
     page.dry_run_checkbox = QCheckBox("Dry Run")
     page.continue_checkbox = QCheckBox("Continue on error")
@@ -2217,11 +2224,14 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     def reset(total_count: int) -> None:
         page.progress_bar.setMaximum(max(total_count, 1))
         page.progress_bar.setValue(0)
+        page.progress_bar.setFormat("0 / 0 (0.0%)" if total_count <= 0 else f"0 / {total_count} (0.0%)")
+        page.progress_label.setText(f"진행률 0.0% (0 / {max(total_count, 0)})")
         page.current_label.setText("현재 항목: -")
         page.total_label.setText("총 대상 0건 / 완료 0건")
         page.counter_label.setText("성공 0 / 실패 0 / 재시도 0")
         page.status_label.setText("준비")
         page.time_label.setText("배치 시간: -")
+        page.eta_label.setText("예상 종료: -")
         page.activity_table.setRowCount(0)
         page._activity_row_map = {}
         page.log_view.clear()

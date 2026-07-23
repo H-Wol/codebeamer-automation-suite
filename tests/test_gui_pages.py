@@ -124,6 +124,8 @@ class GuiPagesUploadPageTest(unittest.TestCase):
         self.assertFalse(page.resume_button.isEnabled())
         self.assertFalse(page.cancel_button.isEnabled())
         self.assertFalse(page.result_button.isEnabled())
+        self.assertEqual(page.progress_label.text(), "진행률 0.0% (0 / 3)")
+        self.assertEqual(page.eta_label.text(), "예상 종료: -")
 
 
 if __name__ == "__main__":

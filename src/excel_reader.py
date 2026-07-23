@@ -67,8 +67,6 @@ class ExcelReader:
         if isinstance(value, float):
             if pd.isna(value):
                 return None
-            if value.is_integer():
-                return int(value)
         return value
 
     @classmethod
@@ -261,7 +259,7 @@ class ExcelReader:
                     record["_summary_indent"] = indent_level
                     records.append(record)
 
-                return self._normalize_dataframe_values(pd.DataFrame(records))
+                return self._normalize_dataframe_values(pd.DataFrame(records, dtype=object))
             finally:
                 workbook.close()
 
@@ -304,7 +302,7 @@ class ExcelReader:
                 record["_summary_indent"] = indent_level
                 records.append(record)
 
-            return self._normalize_dataframe_values(pd.DataFrame(records))
+            return self._normalize_dataframe_values(pd.DataFrame(records, dtype=object))
         finally:
             if workbook is not None:
                 try:

@@ -89,7 +89,7 @@ class HierarchyProcessorSplitTest(unittest.TestCase):
         raw_df = pd.DataFrame([
             {"요약": "REQ-001", "코드": 12, "_excel_row": 2, "_summary_indent": 0},
             {"요약": "REQ-002", "코드": None, "_excel_row": 3, "_summary_indent": 0},
-        ])
+        ], dtype=object)
 
         merged_df = processor.merge_multiline_records(raw_df, list_cols=[])
         hierarchy_df = processor.add_hierarchy_by_indent(merged_df)
@@ -198,7 +198,7 @@ class PayloadCacheWizardTest(unittest.TestCase):
         raw_df = pd.DataFrame([
             {"요약": "REQ-001", "코드": 12, "_excel_row": 2, "_summary_indent": 0},
             {"요약": "REQ-002", "코드": None, "_excel_row": 3, "_summary_indent": 0},
-        ])
+        ], dtype=object)
         wizard.load_raw_dataframe(raw_df, list_cols=[])
         wizard.load_schema_and_compare({"요약": "Summary", "코드": "코드"})
         wizard.process_option_mapping({"요약": "Summary", "코드": "코드"})
