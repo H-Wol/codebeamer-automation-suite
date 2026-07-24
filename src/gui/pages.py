@@ -1389,6 +1389,15 @@ def create_root_item_page(on_preview_requested):
             value_combo.setCurrentIndex(selected_index if selected_index >= 0 else 0)
         value_combo.blockSignals(False)
 
+    def _bind_editable_combo_commit(combo, callback) -> None:
+        line_edit = combo.lineEdit()
+        if line_edit is None:
+            return
+        if bool(line_edit.property("_codex_commit_bound")):
+            return
+        line_edit.setProperty("_codex_commit_bound", True)
+        line_edit.editingFinished.connect(callback)
+
     def _sync_row_enabled_state(enabled_widget, mode_combo, value_combo, *, candidate) -> None:
         row_enabled = bool(enabled_widget.isChecked()) and bool(candidate.supported)
         has_mode_choice = mode_combo.count() > 0 and str(mode_combo.itemData(0) or "").strip() != ""
@@ -1489,6 +1498,7 @@ def create_root_item_page(on_preview_requested):
                 str(mode_combo.currentData() or ""),
                 selected_value,
             )
+            _bind_editable_combo_commit(value_combo, _refresh_preview)
             field_table.setCellWidget(row_index, 5, value_combo)
             _sync_row_enabled_state(
                 enabled_widget,
@@ -1514,11 +1524,17 @@ def create_root_item_page(on_preview_requested):
                     str(mode_widget.currentData() or ""),
                     "",
                 )
+                _bind_editable_combo_commit(value_widget, _refresh_preview)
+                _refresh_preview()
+
+            def _on_value_changed(_text, *, value_widget=value_combo):
+                if bool(value_widget.isEditable()):
+                    return
                 _refresh_preview()
 
             enabled_widget.toggled.connect(_on_enabled_toggled)
             mode_combo.currentIndexChanged.connect(_on_mode_changed)
-            value_combo.currentTextChanged.connect(lambda _text: _refresh_preview())
+            value_combo.currentTextChanged.connect(_on_value_changed)
 
         _configure_table_columns(field_table, [80, 240, 180, 90, 160, 240])
         status_label.setText(str(preview_context.status_message or ""))
@@ -1840,6 +1856,15 @@ def create_mapping_page(on_validate_requested, on_error=None):
             combo.setCurrentIndex(target_index if target_index >= 0 else 0)
         combo.blockSignals(False)
 
+    def _bind_default_value_commit(combo) -> None:
+        line_edit = combo.lineEdit()
+        if line_edit is None:
+            return
+        if bool(line_edit.property("_codex_default_dirty_bound")):
+            return
+        line_edit.setProperty("_codex_default_dirty_bound", True)
+        line_edit.editingFinished.connect(_mark_dirty)
+
     def load_context(
         upload_columns: list[str],
         schema_df,
@@ -1901,7 +1926,8 @@ def create_mapping_page(on_validate_requested, on_error=None):
             combo = QComboBox()
             selected_default = str(selected_default_values.get(schema_field, "") or "")
             _configure_default_value_widget(combo, candidate, selected_default)
-            combo.currentTextChanged.connect(lambda _text: _mark_dirty())
+            _bind_default_value_commit(combo)
+            combo.currentTextChanged.connect(lambda _text, widget=combo: None if bool(widget.isEditable()) else _mark_dirty())
             default_table.setCellWidget(row_index, 2, combo)
 
             default_table.setItem(
