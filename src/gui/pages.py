@@ -1189,7 +1189,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     return page
 
 
-def create_root_item_page(on_preview_requested):
+def create_root_item_page(on_preview_requested, *, page_mode: str = "structure"):
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -1203,14 +1203,21 @@ def create_root_item_page(on_preview_requested):
     QTableWidget = qt["QTableWidget"]
     QTableWidgetItem = qt["QTableWidgetItem"]
 
+    is_structure_page = str(page_mode or "structure").strip() != "fields"
+    is_field_page = not is_structure_page
+
     page = QWidget()
     layout = QVBoxLayout(page)
     layout.setContentsMargins(6, 6, 6, 6)
     layout.setSpacing(10)
 
     description_label = QLabel(
-        "업로드 전에 생성할 상단 폴더 구조를 설정합니다. "
-        "파일별 루트 폴더와 파일 내부 특정 컬럼 값별 그룹 폴더를 각각 독립적으로 사용할 수 있습니다."
+        (
+            "업로드 전에 생성할 상단 폴더 구조를 설정합니다. "
+            "파일별 루트 폴더와 파일 내부 특정 컬럼 값별 그룹 폴더를 각각 독립적으로 사용할 수 있습니다."
+            if is_structure_page
+            else "앞 단계에서 정한 상단 폴더 구조에 어떤 필드 값을 넣을지 설정합니다."
+        )
     )
     description_label.setWordWrap(True)
     description_label.setObjectName("section_label")
@@ -1223,6 +1230,11 @@ def create_root_item_page(on_preview_requested):
     enable_group_folder = QCheckBox("엑셀 컬럼별 그룹 폴더 생성")
     enable_group_folder.setChecked(False)
     layout.addWidget(enable_group_folder)
+
+    structure_summary_label = QLabel("")
+    structure_summary_label.setWordWrap(True)
+    structure_summary_label.setObjectName("status_label")
+    layout.addWidget(structure_summary_label)
 
     form = QFormLayout()
     _configure_form_layout(form)
@@ -1239,9 +1251,11 @@ def create_root_item_page(on_preview_requested):
     form.addRow("그룹 컬럼", group_by_column)
     form.addRow("정규식 대상", regex_target)
     form.addRow("정규식", regex_pattern)
-    layout.addLayout(form)
+    form_container = QWidget()
+    form_container.setLayout(form)
+    layout.addWidget(form_container)
 
-    preview_label = QLabel("상단 데이터 소스 미리보기")
+    preview_label = QLabel("상단 데이터 소스 미리보기" if is_structure_page else "상단 폴더 미리보기")
     preview_label.setObjectName("section_label")
     layout.addWidget(preview_label)
 
@@ -1249,7 +1263,7 @@ def create_root_item_page(on_preview_requested):
     preview_table.setAlternatingRowColors(True)
     layout.addWidget(preview_table)
 
-    field_label = QLabel("파일 루트 필드 매핑")
+    field_label = QLabel("상단 폴더 필드 매핑")
     field_label.setObjectName("section_label")
     layout.addWidget(field_label)
 
@@ -1277,6 +1291,13 @@ def create_root_item_page(on_preview_requested):
     page._refreshing = False
     page._field_candidates = []
     page._current_preview_context = None
+
+    enable_root_item.setVisible(is_structure_page)
+    enable_group_folder.setVisible(is_structure_page)
+    form_container.setVisible(is_structure_page)
+    structure_summary_label.setVisible(is_field_page)
+    field_label.setVisible(is_field_page)
+    field_table.setVisible(is_field_page)
 
     def _sync_root_enabled_state(file_root_enabled: bool, group_enabled: bool) -> None:
         has_any_root = file_root_enabled or group_enabled
@@ -1329,6 +1350,12 @@ def create_root_item_page(on_preview_requested):
 
     def get_config() -> dict[str, object]:
         field_assignments = _current_field_assignments()
+        if not field_assignments and page._current_preview_context is not None:
+            field_assignments = {
+                str(schema_field): dict(assignment)
+                for schema_field, assignment in dict(getattr(page._current_preview_context, "field_assignments", {}) or {}).items()
+                if str(schema_field).strip() and isinstance(assignment, dict)
+            }
         group_enabled = bool(enable_group_folder.isChecked())
         return {
             "enabled": bool(enable_root_item.isChecked()),
@@ -1443,6 +1470,18 @@ def create_root_item_page(on_preview_requested):
             bool(getattr(preview_context, "enabled", True)),
             bool(getattr(preview_context, "group_enabled", False)),
         )
+        if is_field_page:
+            structure_parts: list[str] = []
+            if bool(getattr(preview_context, "enabled", False)):
+                structure_parts.append("파일별 최상단 폴더")
+            if bool(getattr(preview_context, "group_enabled", False)):
+                group_name = str(getattr(preview_context, "group_by_column", "") or "").strip()
+                structure_parts.append(
+                    f"그룹 폴더 ({group_name})" if group_name else "그룹 폴더"
+                )
+            structure_summary_label.setText(
+                "현재 구조: " + (", ".join(structure_parts) if structure_parts else "상단 폴더 생성 안 함")
+            )
 
         preview_headers = [
             _column_label(column_name, preview_context.source_options)
