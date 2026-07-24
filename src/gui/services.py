@@ -453,6 +453,8 @@ class RootItemUploadSpec:
     name: str
     field_values: dict[str, Any]
     row_ids: list[int]
+    parent_key: str | None = None
+    kind: str = "group_root"
 
 
 @dataclass
@@ -477,6 +479,7 @@ class RootSourceOption:
 @dataclass
 class RootItemPreviewContext:
     enabled: bool
+    group_enabled: bool
     root_mode: str
     group_by_column: str
     group_column_options: list[str]
@@ -1024,7 +1027,8 @@ class GuiUploadPipelineService:
         mapping_context: MappingContext,
         *,
         file_path: str,
-        root_mode: str,
+        file_root_enabled: bool,
+        group_enabled: bool,
         group_by_column: str,
         regex_pattern: str,
         regex_target: str,
@@ -1040,15 +1044,24 @@ class GuiUploadPipelineService:
         if top_level_df.empty and allowed_row_ids is not None:
             return [], [], regex_error
 
-        if root_mode != ROOT_ITEM_MODE_GROUP_BY_COLUMN or not str(group_by_column or "").strip():
-            return [
-                {
-                    "key": str(file_path).strip(),
-                    "sources": dict(file_sources),
-                    "row_ids": [int(row_id) for row_id in top_level_df["_row_id"].tolist()],
-                    "matched": matched,
-                }
-            ], [], regex_error
+        rows: list[dict[str, Any]] = []
+        file_key = str(file_path).strip()
+        top_level_row_ids = [int(row_id) for row_id in top_level_df["_row_id"].tolist()]
+
+        if file_root_enabled:
+            rows.append({
+                "key": file_key,
+                "sources": dict(file_sources),
+                "row_ids": [] if group_enabled and str(group_by_column or "").strip() else top_level_row_ids,
+                "matched": matched,
+                "kind": "file_root",
+                "parent_key": None,
+            })
+
+        if not group_enabled or not str(group_by_column or "").strip():
+            if rows:
+                return rows, [], regex_error
+            return [], [], regex_error
 
         missing_group_values: list[str] = []
         grouped_rows: dict[str, dict[str, Any]] = {}
@@ -1070,11 +1083,14 @@ class GuiUploadPipelineService:
                     },
                     "row_ids": [],
                     "matched": matched,
+                    "kind": "group_root",
+                    "parent_key": file_key if file_root_enabled else None,
                 },
             )
             group_entry["row_ids"].append(row_id)
 
-        return list(grouped_rows.values()), missing_group_values, regex_error
+        rows.extend(list(grouped_rows.values()))
+        return rows, missing_group_values, regex_error
 
     @staticmethod
     def _root_assignment(
@@ -1133,6 +1149,7 @@ class GuiUploadPipelineService:
             )
         return {
             "enabled": True,
+            "group_enabled": False,
             "root_mode": ROOT_ITEM_MODE_FILE,
             "group_by_column": "",
             "regex_pattern": "",
@@ -1155,9 +1172,16 @@ class GuiUploadPipelineService:
         explicit_root_config = dict(root_item_config or {})
         has_explicit_field_assignments = "field_assignments" in explicit_root_config
         explicit_field_sources = explicit_root_config.get("field_sources")
-        enabled = bool(config.get("enabled", True))
-        root_mode = cls._normalize_root_mode(config.get("root_mode"))
         group_by_column = str(config.get("group_by_column") or "").strip()
+        legacy_root_mode = cls._normalize_root_mode(config.get("root_mode"))
+        enabled = bool(config.get("enabled", True))
+        if "group_enabled" in explicit_root_config:
+            group_enabled = bool(explicit_root_config.get("group_enabled"))
+        else:
+            group_enabled = legacy_root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN and bool(group_by_column)
+            if group_enabled:
+                enabled = False
+        root_mode = ROOT_ITEM_MODE_GROUP_BY_COLUMN if group_enabled else ROOT_ITEM_MODE_FILE
 
         regex_pattern = str(config.get("regex_pattern") or "").strip()
         regex_target = str(config.get("regex_target") or ROOT_REGEX_TARGET_FILE_STEM).strip()
@@ -1223,6 +1247,7 @@ class GuiUploadPipelineService:
 
         return {
             "enabled": enabled,
+            "group_enabled": group_enabled,
             "root_mode": root_mode,
             "group_by_column": group_by_column,
             "regex_pattern": regex_pattern,
@@ -1366,7 +1391,8 @@ class GuiUploadPipelineService:
             root_item_config or mapping_context.root_item_config,
             default_config=default_config,
         )
-        enabled = bool(normalized.get("enabled", True))
+        file_root_enabled = bool(normalized.get("enabled", True))
+        group_enabled = bool(normalized.get("group_enabled", False))
         root_mode = self._normalize_root_mode(normalized.get("root_mode"))
         group_column_options = self._root_group_column_options(mapping_context)
         group_by_column = str(normalized.get("group_by_column") or "").strip()
@@ -1390,7 +1416,7 @@ class GuiUploadPipelineService:
             RootSourceOption(ROOT_SOURCE_FILE_STEM, self._root_source_label(ROOT_SOURCE_FILE_STEM)),
             RootSourceOption(ROOT_SOURCE_FILE_NAME, self._root_source_label(ROOT_SOURCE_FILE_NAME)),
         ]
-        if root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN and group_by_column:
+        if group_enabled and group_by_column:
             source_options.append(
                 RootSourceOption(ROOT_SOURCE_GROUP_VALUE, self._root_group_source_label(group_by_column))
             )
@@ -1399,7 +1425,7 @@ class GuiUploadPipelineService:
             for group_key in self._root_regex_group_keys(compiled_pattern):
                 source_options.append(RootSourceOption(group_key, self._root_source_label(group_key)))
 
-        if not enabled:
+        if not file_root_enabled and not group_enabled:
             preview_columns = ["file_name"]
             preview_rows = [
                 {"file_name": Path(file_path).name}
@@ -1407,6 +1433,7 @@ class GuiUploadPipelineService:
             ]
             return RootItemPreviewContext(
                 enabled=False,
+                group_enabled=False,
                 root_mode=root_mode,
                 group_by_column=group_by_column,
                 group_column_options=group_column_options,
@@ -1423,8 +1450,8 @@ class GuiUploadPipelineService:
                 has_blocking_issues=False,
             )
 
-        preview_columns = ["file_name", "parse_target", "matched"]
-        if root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN:
+        preview_columns = ["level", "file_name", "parse_target", "matched"]
+        if group_enabled:
             preview_columns.insert(1, ROOT_SOURCE_GROUP_VALUE)
         if compiled_pattern is not None:
             preview_columns.append(ROOT_SOURCE_REGEX_FULL)
@@ -1476,11 +1503,13 @@ class GuiUploadPipelineService:
         preview_rows: list[dict[str, str]] = []
         missing_sources: list[str] = []
         missing_group_values: list[str] = []
+        target_kind = "group_root" if group_enabled and group_by_column else "file_root"
         for file_path in mapping_context.file_paths:
             source_rows, current_missing_group_values, source_error = self._build_root_source_rows(
                 mapping_context,
                 file_path=file_path,
-                root_mode=root_mode,
+                file_root_enabled=file_root_enabled,
+                group_enabled=group_enabled,
                 group_by_column=group_by_column,
                 regex_pattern=regex_pattern,
                 regex_target=regex_target,
@@ -1491,16 +1520,19 @@ class GuiUploadPipelineService:
             for source_row in source_rows:
                 sources = dict(source_row.get("sources") or {})
                 preview_row = {
+                    "level": "파일 루트" if str(source_row.get("kind") or "") == "file_root" else "그룹 폴더",
                     "file_name": Path(file_path).name,
                     "parse_target": self._root_parse_target_text(file_path, regex_target),
                     "matched": "yes" if bool(source_row.get("matched")) else ("regex error" if regex_error else "no"),
                 }
                 for column_name in preview_columns:
-                    if column_name in {"file_name", "parse_target", "matched"}:
+                    if column_name in {"level", "file_name", "parse_target", "matched"}:
                         continue
                     preview_row[column_name] = str(sources.get(column_name) or "")
                 preview_rows.append(preview_row)
 
+                if str(source_row.get("kind") or "") != target_kind:
+                    continue
                 for schema_field, assignment in normalized_assignments.items():
                     if not bool(assignment.get("enabled")):
                         continue
@@ -1512,15 +1544,22 @@ class GuiUploadPipelineService:
                     if not str(sources.get(source_key) or "").strip():
                         missing_sources.append(f"{Path(file_path).name}:{schema_field}")
 
-        effective_group_mode = root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN and bool(group_by_column)
+        effective_group_mode = group_enabled and bool(group_by_column)
         has_blocking_issues = regex_error is not None
         status_message = (
-            "파일별 그룹값과 루트 필드 값을 확인하세요."
-            if effective_group_mode
-            else "파일명 파싱 결과와 루트 필드 값을 확인하세요."
+            "파일 루트와 그룹 폴더 구성을 확인하세요."
+            if file_root_enabled and effective_group_mode
+            else (
+                "파일별 그룹값과 루트 필드 값을 확인하세요."
+                if effective_group_mode
+                else "파일명 파싱 결과와 루트 필드 값을 확인하세요."
+            )
         )
         if regex_error is not None:
             status_message = f"정규식 오류: {regex_error}"
+        elif group_enabled and not group_by_column and not file_root_enabled:
+            has_blocking_issues = True
+            status_message = "그룹 폴더를 생성하려면 그룹 컬럼을 선택하세요."
         elif effective_group_mode and missing_group_values:
             has_blocking_issues = True
             status_message = "일부 최상위 데이터에 그룹 컬럼 값이 비어 있습니다."
@@ -1530,11 +1569,12 @@ class GuiUploadPipelineService:
         elif missing_sources:
             has_blocking_issues = True
             status_message = "일부 파일에서 선택한 루트 필드 소스를 만들 수 없습니다."
-        elif root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN and not group_by_column:
-            status_message = "그룹 컬럼을 선택하지 않아 파일별 상단 데이터 1건 방식으로 처리합니다."
+        elif group_enabled and not group_by_column and file_root_enabled:
+            status_message = "그룹 컬럼을 선택하지 않아 파일 루트만 생성합니다."
 
         return RootItemPreviewContext(
-            enabled=True,
+            enabled=file_root_enabled,
+            group_enabled=group_enabled,
             root_mode=root_mode,
             group_by_column=group_by_column,
             group_column_options=group_column_options,
@@ -2357,6 +2397,41 @@ class GuiUploadPipelineService:
             "item_name": str(context.get("item_name") or fallback_item_name or ""),
         }
 
+    @staticmethod
+    def _root_assignment_target_kind(preview_context: RootItemPreviewContext) -> str:
+        return "group_root" if bool(preview_context.group_enabled and preview_context.group_by_column) else "file_root"
+
+    @classmethod
+    def _root_field_values_for_source_row(
+        cls,
+        preview_context: RootItemPreviewContext,
+        source_row: dict[str, Any],
+    ) -> dict[str, Any]:
+        row_kind = str(source_row.get("kind") or "")
+        target_kind = cls._root_assignment_target_kind(preview_context)
+        if row_kind != target_kind:
+            return {}
+
+        sources = dict(source_row.get("sources") or {})
+        root_field_values: dict[str, Any] = {}
+        for schema_field, assignment in preview_context.field_assignments.items():
+            if not bool(assignment.get("enabled")):
+                continue
+
+            assignment_mode = str(assignment.get("mode") or "").strip()
+            assignment_value = str(assignment.get("value") or "").strip()
+            if assignment_mode == ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
+                raw_value = str(sources.get(assignment_value) or "").strip()
+            elif assignment_mode == ROOT_ASSIGNMENT_MODE_FIXED_VALUE:
+                raw_value = assignment_value
+            else:
+                raw_value = ""
+
+            if raw_value:
+                root_field_values[schema_field] = raw_value
+
+        return root_field_values
+
     def build_root_item_payload_specs(
         self,
         mapping_context: MappingContext,
@@ -2364,7 +2439,7 @@ class GuiUploadPipelineService:
         file_path: str,
     ) -> list[RootItemUploadSpec]:
         preview_context = self.build_root_item_preview_context(mapping_context, mapping_context.root_item_config)
-        if not bool(preview_context.enabled):
+        if not bool(preview_context.enabled) and not bool(preview_context.group_enabled):
             return []
         if bool(preview_context.has_blocking_issues):
             raise ValueError(str(preview_context.status_message or "루트 데이터 설정이 올바르지 않습니다."))
@@ -2386,7 +2461,8 @@ class GuiUploadPipelineService:
         source_rows, _, regex_error = self._build_root_source_rows(
             mapping_context,
             file_path=file_path,
-            root_mode=preview_context.root_mode,
+            file_root_enabled=bool(preview_context.enabled),
+            group_enabled=bool(preview_context.group_enabled),
             group_by_column=preview_context.group_by_column,
             regex_pattern=preview_context.regex_pattern,
             regex_target=preview_context.regex_target,
@@ -2399,26 +2475,11 @@ class GuiUploadPipelineService:
         root_item_specs: list[RootItemUploadSpec] = []
         for source_row in source_rows:
             sources = dict(source_row.get("sources") or {})
-            root_field_values: dict[str, Any] = {}
-            for schema_field, assignment in preview_context.field_assignments.items():
-                if not bool(assignment.get("enabled")):
-                    continue
-
-                assignment_mode = str(assignment.get("mode") or "").strip()
-                assignment_value = str(assignment.get("value") or "").strip()
-                if assignment_mode == ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
-                    raw_value = str(sources.get(assignment_value) or "").strip()
-                elif assignment_mode == ROOT_ASSIGNMENT_MODE_FIXED_VALUE:
-                    raw_value = assignment_value
-                else:
-                    raw_value = ""
-
-                if raw_value:
-                    root_field_values[schema_field] = raw_value
-
+            root_field_values = self._root_field_values_for_source_row(preview_context, source_row)
+            row_kind = str(source_row.get("kind") or "")
             root_item_name = (
                 str(sources.get(ROOT_SOURCE_GROUP_VALUE) or "").strip()
-                if preview_context.root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN
+                if row_kind == "group_root"
                 else (Path(file_path).stem.strip() or "")
             )
             if name_schema_field and str(root_field_values.get(name_schema_field) or "").strip():
@@ -2435,6 +2496,11 @@ class GuiUploadPipelineService:
                     for row_id in (source_row.get("row_ids") or [])
                     if str(row_id).strip()
                 ],
+                parent_key=(
+                    str(source_row.get("parent_key") or "").strip()
+                    or None
+                ),
+                kind=row_kind or "group_root",
             ))
 
         return root_item_specs
@@ -2445,7 +2511,7 @@ class GuiUploadPipelineService:
         file_path: str,
     ) -> tuple[str | None, dict[str, Any]]:
         preview_context = self.build_root_item_preview_context(mapping_context, mapping_context.root_item_config)
-        if not bool(preview_context.enabled):
+        if not bool(preview_context.enabled) and not bool(preview_context.group_enabled):
             return None, {}
         if bool(preview_context.has_blocking_issues):
             raise ValueError(str(preview_context.status_message or "루트 데이터 설정이 올바르지 않습니다."))
@@ -2453,7 +2519,8 @@ class GuiUploadPipelineService:
         source_rows, _, regex_error = self._build_root_source_rows(
             mapping_context,
             file_path=file_path,
-            root_mode=preview_context.root_mode,
+            file_root_enabled=bool(preview_context.enabled),
+            group_enabled=bool(preview_context.group_enabled),
             group_by_column=preview_context.group_by_column,
             regex_pattern=preview_context.regex_pattern,
             regex_target=preview_context.regex_target,
@@ -2466,24 +2533,11 @@ class GuiUploadPipelineService:
 
         first_row = source_rows[0]
         sources = dict(first_row.get("sources") or {})
-        root_field_values: dict[str, Any] = {}
-        for schema_field, assignment in preview_context.field_assignments.items():
-            if not bool(assignment.get("enabled")):
-                continue
-            assignment_mode = str(assignment.get("mode") or "").strip()
-            assignment_value = str(assignment.get("value") or "").strip()
-            if assignment_mode == ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
-                raw_value = str(sources.get(assignment_value) or "").strip()
-            elif assignment_mode == ROOT_ASSIGNMENT_MODE_FIXED_VALUE:
-                raw_value = assignment_value
-            else:
-                raw_value = ""
-            if raw_value:
-                root_field_values[schema_field] = raw_value
-
+        root_field_values = self._root_field_values_for_source_row(preview_context, first_row)
+        row_kind = str(first_row.get("kind") or "")
         root_item_name = (
             str(sources.get(ROOT_SOURCE_GROUP_VALUE) or "").strip()
-            if preview_context.root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN
+            if row_kind == "group_root"
             else (Path(file_path).stem.strip() or None)
         )
         name_schema_field = self._name_schema_field(mapping_context.schema_df)
@@ -2792,6 +2846,8 @@ class GuiUploadPipelineService:
                             "name": spec.name,
                             "field_values": dict(spec.field_values),
                             "row_ids": list(spec.row_ids),
+                            "parent_key": spec.parent_key,
+                            "kind": spec.kind,
                         }
                         for spec in job.root_item_specs
                     ],

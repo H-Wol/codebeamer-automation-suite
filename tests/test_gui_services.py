@@ -1771,7 +1771,9 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
 
             self.assertFalse(preview_context.has_blocking_issues)
             self.assertEqual(preview_context.group_by_column, "")
-            self.assertIn("파일별 상단 데이터 1건", preview_context.status_message)
+            self.assertTrue(preview_context.enabled)
+            self.assertFalse(preview_context.group_enabled)
+            self.assertIn("파일명 파싱 결과", preview_context.status_message)
 
     def test_build_root_item_payload_spec_uses_regex_mapped_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1960,6 +1962,89 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             self.assertEqual(root_item_specs[0].field_values["Summary"], "EMS")
             self.assertEqual(root_item_specs[0].field_values["Status"], "Open")
             self.assertEqual(root_item_specs[1].field_values["Summary"], "VCU")
+
+    def test_build_root_item_payload_specs_can_create_file_root_and_group_folders_together(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "ABC_REQ-001.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary", "Folder"])
+            sheet.append(["REQ-001", "EMS"])
+            sheet.append(["REQ-002", "EMS"])
+            sheet.append(["REQ-003", "VCU"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+            file_state = {
+                "file_path": str(path),
+                "file_paths": [str(path)],
+                "preview_file_path": str(path),
+                "sheet_name": "Main",
+                "header_row": 1,
+                "summary_column": "Summary",
+            }
+            mapping_context = service.prepare_mapping_context(settings, file_state)
+            mapping_context.root_item_config = {
+                "enabled": True,
+                "group_enabled": True,
+                "group_by_column": "Folder",
+                "regex_pattern": "",
+                "regex_target": "file_stem",
+                "field_assignments": {
+                    "Summary": {
+                        "enabled": True,
+                        "mode": "file_source",
+                        "value": ROOT_SOURCE_GROUP_VALUE,
+                    },
+                    "Status": {
+                        "enabled": True,
+                        "mode": "fixed_value",
+                        "value": "Open",
+                    },
+                },
+            }
+
+            wizard = service._prepare_wizard_for_file(
+                settings,
+                mapping_context,
+                file_path=str(path),
+                sheet_name="Main",
+                header_row=1,
+                summary_col="Summary",
+            )
+            root_item_specs = service.build_root_item_payload_specs(mapping_context, wizard, str(path))
+
+            self.assertEqual(
+                [
+                    (spec.name, spec.kind, spec.parent_key, spec.row_ids)
+                    for spec in root_item_specs
+                ],
+                [
+                    ("ABC_REQ-001", "file_root", None, []),
+                    ("EMS", "group_root", str(path), [0, 1]),
+                    ("VCU", "group_root", str(path), [2]),
+                ],
+            )
+            self.assertEqual(root_item_specs[0].field_values, {})
+            self.assertEqual(root_item_specs[1].field_values["Summary"], "EMS")
+            self.assertEqual(root_item_specs[1].field_values["Status"], "Open")
+            self.assertEqual(root_item_specs[2].field_values["Summary"], "VCU")
 
     def test_build_root_item_payload_specs_falls_back_to_file_mode_when_group_column_is_blank(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

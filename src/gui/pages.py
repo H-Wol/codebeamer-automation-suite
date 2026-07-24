@@ -1209,22 +1209,23 @@ def create_root_item_page(on_preview_requested):
     layout.setSpacing(10)
 
     description_label = QLabel(
-        "업로드 전에 생성할 최상위 부모 데이터 방식을 설정합니다. "
-        "파일별 1건으로 만들거나, 파일 내부 특정 컬럼 값별로 여러 건을 만들 수 있습니다."
+        "업로드 전에 생성할 상단 폴더 구조를 설정합니다. "
+        "파일별 루트 폴더와 파일 내부 특정 컬럼 값별 그룹 폴더를 각각 독립적으로 사용할 수 있습니다."
     )
     description_label.setWordWrap(True)
     description_label.setObjectName("section_label")
     layout.addWidget(description_label)
 
-    enable_root_item = QCheckBox("파일별 상단 데이터 생성")
+    enable_root_item = QCheckBox("파일별 최상단 폴더 생성")
     enable_root_item.setChecked(True)
     layout.addWidget(enable_root_item)
 
+    enable_group_folder = QCheckBox("엑셀 컬럼별 그룹 폴더 생성")
+    enable_group_folder.setChecked(False)
+    layout.addWidget(enable_group_folder)
+
     form = QFormLayout()
     _configure_form_layout(form)
-    root_mode = QComboBox()
-    root_mode.addItem("파일별 상단 데이터 1건", ROOT_ITEM_MODE_FILE)
-    root_mode.addItem("파일 내부 컬럼 값별 상단 데이터", ROOT_ITEM_MODE_GROUP_BY_COLUMN)
     group_by_column = QComboBox()
     group_by_column.addItem("사용 안 함", "")
     regex_target = QComboBox()
@@ -1232,12 +1233,10 @@ def create_root_item_page(on_preview_requested):
     regex_target.addItem("전체 파일명", "file_name")
     regex_pattern = QLineEdit()
     regex_pattern.setPlaceholderText(r"예: ^(?P<project>[A-Z]+)_(?P<title>.+)$")
-    _configure_form_field(root_mode)
     _configure_form_field(group_by_column)
     _configure_form_field(regex_target)
     _configure_form_field(regex_pattern, minimum_width=320)
-    form.addRow("생성 방식", root_mode)
-    form.addRow("그룹 컬럼(선택)", group_by_column)
+    form.addRow("그룹 컬럼", group_by_column)
     form.addRow("정규식 대상", regex_target)
     form.addRow("정규식", regex_pattern)
     layout.addLayout(form)
@@ -1250,7 +1249,7 @@ def create_root_item_page(on_preview_requested):
     preview_table.setAlternatingRowColors(True)
     layout.addWidget(preview_table)
 
-    field_label = QLabel("상단 데이터 필드 매핑")
+    field_label = QLabel("파일 루트 필드 매핑")
     field_label.setObjectName("section_label")
     layout.addWidget(field_label)
 
@@ -1279,17 +1278,21 @@ def create_root_item_page(on_preview_requested):
     page._field_candidates = []
     page._current_preview_context = None
 
-    def _sync_root_enabled_state(enabled: bool) -> None:
-        root_mode.setEnabled(enabled)
-        group_by_column.setEnabled(
-            enabled and str(root_mode.currentData() or ROOT_ITEM_MODE_FILE) == ROOT_ITEM_MODE_GROUP_BY_COLUMN
-        )
-        regex_target.setEnabled(enabled)
-        regex_pattern.setEnabled(enabled)
-        preview_table.setEnabled(enabled)
-        field_table.setEnabled(enabled)
-        preview_label.setEnabled(enabled)
-        field_label.setEnabled(enabled)
+    def _sync_root_enabled_state(file_root_enabled: bool, group_enabled: bool) -> None:
+        has_any_root = file_root_enabled or group_enabled
+        group_by_column.setEnabled(group_enabled)
+        regex_target.setEnabled(has_any_root)
+        regex_pattern.setEnabled(has_any_root)
+        preview_table.setEnabled(has_any_root)
+        field_table.setEnabled(has_any_root)
+        preview_label.setEnabled(has_any_root)
+        field_label.setEnabled(has_any_root)
+        if group_enabled:
+            field_label.setText("그룹 폴더 필드 매핑")
+        elif file_root_enabled:
+            field_label.setText("파일 루트 필드 매핑")
+        else:
+            field_label.setText("상단 데이터 필드 매핑")
 
     def _current_field_assignments() -> dict[str, dict[str, object]]:
         field_assignments: dict[str, dict[str, object]] = {}
@@ -1326,9 +1329,11 @@ def create_root_item_page(on_preview_requested):
 
     def get_config() -> dict[str, object]:
         field_assignments = _current_field_assignments()
+        group_enabled = bool(enable_group_folder.isChecked())
         return {
             "enabled": bool(enable_root_item.isChecked()),
-            "root_mode": str(root_mode.currentData() or ROOT_ITEM_MODE_FILE),
+            "group_enabled": group_enabled,
+            "root_mode": ROOT_ITEM_MODE_GROUP_BY_COLUMN if group_enabled else ROOT_ITEM_MODE_FILE,
             "group_by_column": str(group_by_column.currentData() or "").strip(),
             "regex_pattern": regex_pattern.text().strip(),
             "regex_target": str(regex_target.currentData() or "file_stem"),
@@ -1406,12 +1411,11 @@ def create_root_item_page(on_preview_requested):
 
         regex_pattern.blockSignals(True)
         regex_target.blockSignals(True)
-        root_mode.blockSignals(True)
         group_by_column.blockSignals(True)
         enable_root_item.blockSignals(True)
+        enable_group_folder.blockSignals(True)
         enable_root_item.setChecked(bool(getattr(preview_context, "enabled", True)))
-        root_mode_index = root_mode.findData(str(getattr(preview_context, "root_mode", ROOT_ITEM_MODE_FILE)))
-        root_mode.setCurrentIndex(root_mode_index if root_mode_index >= 0 else 0)
+        enable_group_folder.setChecked(bool(getattr(preview_context, "group_enabled", False)))
         group_by_column.clear()
         group_by_column.addItem("사용 안 함", "")
         for column_name in getattr(preview_context, "group_column_options", []):
@@ -1423,10 +1427,13 @@ def create_root_item_page(on_preview_requested):
         regex_target.setCurrentIndex(target_index if target_index >= 0 else 0)
         regex_pattern.blockSignals(False)
         regex_target.blockSignals(False)
-        root_mode.blockSignals(False)
         group_by_column.blockSignals(False)
         enable_root_item.blockSignals(False)
-        _sync_root_enabled_state(bool(getattr(preview_context, "enabled", True)))
+        enable_group_folder.blockSignals(False)
+        _sync_root_enabled_state(
+            bool(getattr(preview_context, "enabled", True)),
+            bool(getattr(preview_context, "group_enabled", False)),
+        )
 
         preview_headers = [
             _column_label(column_name, preview_context.source_options)
@@ -1522,9 +1529,19 @@ def create_root_item_page(on_preview_requested):
     next_button.clicked.connect(lambda: page.request_next())
     regex_pattern.textChanged.connect(lambda _text: _refresh_preview())
     regex_target.currentIndexChanged.connect(lambda _index: _refresh_preview())
-    root_mode.currentIndexChanged.connect(lambda _index: (_sync_root_enabled_state(bool(enable_root_item.isChecked())), _refresh_preview()))
     group_by_column.currentIndexChanged.connect(lambda _index: _refresh_preview())
-    enable_root_item.toggled.connect(lambda checked: (_sync_root_enabled_state(bool(checked)), _refresh_preview()))
+    enable_root_item.toggled.connect(
+        lambda checked: (
+            _sync_root_enabled_state(bool(checked), bool(enable_group_folder.isChecked())),
+            _refresh_preview(),
+        )
+    )
+    enable_group_folder.toggled.connect(
+        lambda checked: (
+            _sync_root_enabled_state(bool(enable_root_item.isChecked()), bool(checked)),
+            _refresh_preview(),
+        )
+    )
 
     page.get_config = get_config
     page.load_context = load_context

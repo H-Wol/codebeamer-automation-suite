@@ -2249,14 +2249,14 @@ class CodebeamerUploadWizard:
                     normalized_row_ids.append(int(raw_row_id))
                 except Exception:
                     continue
-            if not normalized_row_ids:
-                continue
 
             normalized_spec = {
                 "key": str(raw_spec.get("key") or parent_name).strip() or parent_name,
                 "name": parent_name,
                 "field_values": dict(raw_spec.get("field_values") or {}),
                 "row_ids": normalized_row_ids,
+                "parent_key": str(raw_spec.get("parent_key") or "").strip() or None,
+                "kind": str(raw_spec.get("kind") or "group_root").strip() or "group_root",
             }
             normalized_specs.append(normalized_spec)
             for row_id in normalized_row_ids:
@@ -2500,80 +2500,123 @@ class CodebeamerUploadWizard:
                 return _finalize(_build_unresolved_df(ready_df))
 
         if normalized_parent_specs:
-            for parent_index, parent_spec in enumerate(normalized_parent_specs, start=1):
-                while pause_requested is not None and pause_requested():
-                    time.sleep(0.1)
-                if cancel_requested is not None and cancel_requested():
-                    return _finalize(_build_unresolved_df(ready_df[ready_df["_row_id"].isin(sorted(pending))].copy()))
+            created_parent_item_ids_by_key: dict[str, Any] = {}
+            pending_parent_specs = list(normalized_parent_specs)
+            parent_attempt_index = 0
 
-                parent_name = parent_spec["name"]
-                if event_callback is not None:
-                    event_callback({
-                        "type": "row_started",
-                        "row_id": None,
-                        "upload_name": parent_name,
-                    })
+            while pending_parent_specs:
+                progress = False
+                deferred_parent_specs: list[dict[str, Any]] = []
 
-                try:
-                    root_payload = self._build_root_item_payload(
-                        parent_name,
-                        root_field_values=parent_spec["field_values"],
-                    )
-                    if dry_run:
-                        result = {"id": f"DRYRUN-ROOT-{parent_index}"}
-                    else:
-                        result = self.client.create_item(
-                            tracker_id=self.state.tracker_id,
-                            payload=root_payload,
-                            parent_item_id=None,
-                        )
+                for parent_spec in pending_parent_specs:
+                    parent_key = str(parent_spec.get("parent_key") or "").strip() or None
+                    if parent_key is not None and parent_key not in created_parent_item_ids_by_key:
+                        deferred_parent_specs.append(parent_spec)
+                        continue
 
-                    parent_item_id = result["id"]
-                    for row_id in parent_spec["row_ids"]:
-                        top_level_parent_item_ids[int(row_id)] = parent_item_id
-                    success_logs.append({
-                        "_row_id": None,
-                        "parent_row_id": None,
-                        "upload_name": parent_name,
-                        "created_item_id": parent_item_id,
-                        "status": UploadStatus.SUCCESS.value,
-                    })
-                    message = f"Row {parent_name} uploaded successfully: item_id={parent_item_id}"
-                    print(message)
+                    parent_attempt_index += 1
+                    parent_item_parent_id = created_parent_item_ids_by_key.get(parent_key)
+
+                    while pause_requested is not None and pause_requested():
+                        time.sleep(0.1)
+                    if cancel_requested is not None and cancel_requested():
+                        return _finalize(_build_unresolved_df(ready_df[ready_df["_row_id"].isin(sorted(pending))].copy()))
+
+                    parent_name = parent_spec["name"]
                     if event_callback is not None:
                         event_callback({
-                            "type": "row_success",
+                            "type": "row_started",
                             "row_id": None,
                             "upload_name": parent_name,
-                            "item_id": parent_item_id,
-                            "message": message,
                         })
-                except Exception as exc:
-                    error_status_code = self._http_status_code(exc)
-                    error_response_json = self._response_json(exc)
-                    error_message = str(error_response_json) if error_response_json is not None else str(exc)
 
+                    try:
+                        root_payload = self._build_root_item_payload(
+                            parent_name,
+                            root_field_values=parent_spec["field_values"],
+                        )
+                        if dry_run:
+                            result = {"id": f"DRYRUN-ROOT-{parent_attempt_index}"}
+                        else:
+                            result = self.client.create_item(
+                                tracker_id=self.state.tracker_id,
+                                payload=root_payload,
+                                parent_item_id=parent_item_parent_id,
+                            )
+
+                        parent_item_id = result["id"]
+                        created_parent_item_ids_by_key[parent_spec["key"]] = parent_item_id
+                        for row_id in parent_spec["row_ids"]:
+                            top_level_parent_item_ids[int(row_id)] = parent_item_id
+                        success_logs.append({
+                            "_row_id": None,
+                            "parent_row_id": None,
+                            "upload_name": parent_name,
+                            "created_item_id": parent_item_id,
+                            "status": UploadStatus.SUCCESS.value,
+                        })
+                        message = f"Row {parent_name} uploaded successfully: item_id={parent_item_id}"
+                        print(message)
+                        if event_callback is not None:
+                            event_callback({
+                                "type": "row_success",
+                                "row_id": None,
+                                "upload_name": parent_name,
+                                "item_id": parent_item_id,
+                                "message": message,
+                            })
+                        progress = True
+                    except Exception as exc:
+                        error_status_code = self._http_status_code(exc)
+                        error_response_json = self._response_json(exc)
+                        error_message = str(error_response_json) if error_response_json is not None else str(exc)
+
+                        failed_logs.append({
+                            "_row_id": None,
+                            "parent_row_id": None,
+                            "upload_name": parent_name,
+                            "error_status_code": error_status_code,
+                            "error_response_json": error_response_json,
+                            "error": error_message,
+                            "status": UploadStatus.FAILED.value,
+                        })
+                        if event_callback is not None:
+                            event_callback({
+                                "type": "row_failed",
+                                "row_id": None,
+                                "upload_name": parent_name,
+                                "message": error_message,
+                                "status_code": error_status_code,
+                                "response_json": error_response_json,
+                            })
+
+                        if not continue_on_error:
+                            return _finalize(_build_unresolved_df(ready_df[ready_df["_row_id"].isin(sorted(pending))].copy()))
+
+                if progress:
+                    pending_parent_specs = deferred_parent_specs
+                    continue
+
+                for parent_spec in deferred_parent_specs:
+                    missing_parent_key = str(parent_spec.get("parent_key") or "").strip()
+                    error_message = (
+                        f"Top-level parent {parent_spec['name']!r} requires unavailable parent {missing_parent_key!r}."
+                    )
                     failed_logs.append({
                         "_row_id": None,
                         "parent_row_id": None,
-                        "upload_name": parent_name,
-                        "error_status_code": error_status_code,
-                        "error_response_json": error_response_json,
+                        "upload_name": parent_spec["name"],
                         "error": error_message,
-                        "status": UploadStatus.FAILED.value,
+                        "status": UploadStatus.UNRESOLVED_PARENT.value,
                     })
                     if event_callback is not None:
                         event_callback({
                             "type": "row_failed",
                             "row_id": None,
-                            "upload_name": parent_name,
+                            "upload_name": parent_spec["name"],
                             "message": error_message,
-                            "status_code": error_status_code,
-                            "response_json": error_response_json,
                         })
-
-                    if not continue_on_error:
-                        return _finalize(_build_unresolved_df(ready_df[ready_df["_row_id"].isin(sorted(pending))].copy()))
+                break
 
         while pending:
             progress = False

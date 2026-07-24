@@ -329,6 +329,55 @@ class PayloadCacheWizardTest(unittest.TestCase):
         )
         self.assertEqual(len(upload_result["success_df"]), 5)
 
+    def test_upload_can_create_nested_top_level_parent_specs_before_rows(self) -> None:
+        processor = HierarchyProcessor(summary_col="요약")
+        wizard = CountingWizard(
+            client=self.client,
+            processor=processor,
+            mapper=self.mapper,
+        )
+        wizard.select_project(1)
+        wizard.select_tracker(2)
+        raw_df = pd.DataFrame([
+            {"요약": "Parent A", "_excel_row": 2, "_summary_indent": 0},
+            {"요약": "Child A", "_excel_row": 3, "_summary_indent": 1},
+            {"요약": "Parent B", "_excel_row": 4, "_summary_indent": 0},
+        ])
+        wizard.load_raw_dataframe(raw_df, list_cols=[])
+        wizard.load_schema_and_compare({"요약": "Summary"})
+        wizard.process_option_mapping({"요약": "Summary"})
+
+        upload_result = wizard.upload(
+            dry_run=False,
+            top_level_parent_specs=[
+                {"key": "file-root", "name": "ABC_REQ-001", "field_values": {}, "row_ids": []},
+                {
+                    "key": "ems",
+                    "name": "EMS",
+                    "field_values": {},
+                    "row_ids": [0],
+                    "parent_key": "file-root",
+                },
+                {
+                    "key": "vcu",
+                    "name": "VCU",
+                    "field_values": {},
+                    "row_ids": [2],
+                    "parent_key": "file-root",
+                },
+            ],
+        )
+
+        self.assertEqual(
+            [call["payload"]["name"] for call in self.client.create_item_calls],
+            ["ABC_REQ-001", "EMS", "VCU", "Parent A", "Child A", "Parent B"],
+        )
+        self.assertEqual(
+            [call["parent_item_id"] for call in self.client.create_item_calls],
+            [None, 1001, 1001, 1002, 1004, 1003],
+        )
+        self.assertEqual(len(upload_result["success_df"]), 6)
+
     def test_upload_failure_persists_response_json(self) -> None:
         wizard = CountingWizard(
             client=FailingSchemaClient(self.schema),
