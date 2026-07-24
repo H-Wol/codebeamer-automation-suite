@@ -2085,9 +2085,74 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
                 ],
             )
             self.assertEqual(root_item_specs[0].field_values, {})
-            self.assertEqual(root_item_specs[1].field_values["Summary"], "EMS")
             self.assertEqual(root_item_specs[1].field_values["Status"], "Open")
-            self.assertEqual(root_item_specs[2].field_values["Summary"], "VCU")
+            self.assertNotIn("Summary", root_item_specs[1].field_values)
+            self.assertNotIn("Summary", root_item_specs[2].field_values)
+
+    def test_build_root_item_payload_specs_can_customize_file_root_name_when_group_folders_are_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "ABC_REQ-001.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary", "Folder"])
+            sheet.append(["REQ-001", "EMS"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+            file_state = {
+                "file_path": str(path),
+                "file_paths": [str(path)],
+                "preview_file_path": str(path),
+                "sheet_name": "Main",
+                "header_row": 1,
+                "summary_column": "Summary",
+            }
+            mapping_context = service.prepare_mapping_context(settings, file_state)
+            mapping_context.root_item_config = {
+                "enabled": True,
+                "group_enabled": True,
+                "group_by_column": "Folder",
+                "regex_pattern": r"^(?P<project>[A-Z]+)_(?P<title>.+)$",
+                "regex_target": "file_stem",
+                "field_assignments": {
+                    "Summary": {
+                        "enabled": True,
+                        "mode": "file_source",
+                        "value": "title",
+                    },
+                },
+            }
+
+            wizard = service._prepare_wizard_for_file(
+                settings,
+                mapping_context,
+                file_path=str(path),
+                sheet_name="Main",
+                header_row=1,
+                summary_col="Summary",
+            )
+            root_item_specs = service.build_root_item_payload_specs(mapping_context, wizard, str(path))
+
+            self.assertEqual(root_item_specs[0].kind, "file_root")
+            self.assertEqual(root_item_specs[0].name, "REQ-001")
+            self.assertEqual(root_item_specs[0].field_values["Summary"], "REQ-001")
+            self.assertEqual(root_item_specs[1].name, "EMS")
 
     def test_build_root_item_payload_specs_falls_back_to_file_mode_when_group_column_is_blank(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -2404,15 +2404,31 @@ class GuiUploadPipelineService:
         cls,
         preview_context: RootItemPreviewContext,
         source_row: dict[str, Any],
+        *,
+        name_schema_field: str | None = None,
     ) -> dict[str, Any]:
         row_kind = str(source_row.get("kind") or "")
         target_kind = cls._root_assignment_target_kind(preview_context)
-        if row_kind != target_kind:
+        allows_file_root_name_override = (
+            row_kind == "file_root"
+            and row_kind != target_kind
+            and bool(name_schema_field)
+        )
+        if row_kind != target_kind and not allows_file_root_name_override:
             return {}
 
         sources = dict(source_row.get("sources") or {})
         root_field_values: dict[str, Any] = {}
         for schema_field, assignment in preview_context.field_assignments.items():
+            if row_kind != target_kind and schema_field != name_schema_field:
+                continue
+            if (
+                row_kind == "group_root"
+                and bool(preview_context.enabled)
+                and bool(preview_context.group_enabled and preview_context.group_by_column)
+                and schema_field == name_schema_field
+            ):
+                continue
             if not bool(assignment.get("enabled")):
                 continue
 
@@ -2473,7 +2489,11 @@ class GuiUploadPipelineService:
         root_item_specs: list[RootItemUploadSpec] = []
         for source_row in source_rows:
             sources = dict(source_row.get("sources") or {})
-            root_field_values = self._root_field_values_for_source_row(preview_context, source_row)
+            root_field_values = self._root_field_values_for_source_row(
+                preview_context,
+                source_row,
+                name_schema_field=name_schema_field,
+            )
             row_kind = str(source_row.get("kind") or "")
             root_item_name = (
                 str(sources.get(ROOT_SOURCE_GROUP_VALUE) or "").strip()
@@ -2531,14 +2551,18 @@ class GuiUploadPipelineService:
 
         first_row = source_rows[0]
         sources = dict(first_row.get("sources") or {})
-        root_field_values = self._root_field_values_for_source_row(preview_context, first_row)
+        name_schema_field = self._name_schema_field(mapping_context.schema_df)
+        root_field_values = self._root_field_values_for_source_row(
+            preview_context,
+            first_row,
+            name_schema_field=name_schema_field,
+        )
         row_kind = str(first_row.get("kind") or "")
         root_item_name = (
             str(sources.get(ROOT_SOURCE_GROUP_VALUE) or "").strip()
             if row_kind == "group_root"
             else (Path(file_path).stem.strip() or None)
         )
-        name_schema_field = self._name_schema_field(mapping_context.schema_df)
         if name_schema_field and str(root_field_values.get(name_schema_field) or "").strip():
             root_item_name = str(root_field_values[name_schema_field]).strip()
         return root_item_name, root_field_values
