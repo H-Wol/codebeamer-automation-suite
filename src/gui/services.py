@@ -2408,32 +2408,26 @@ class GuiUploadPipelineService:
         name_schema_field: str | None = None,
     ) -> dict[str, Any]:
         row_kind = str(source_row.get("kind") or "")
-        target_kind = cls._root_assignment_target_kind(preview_context)
-        allows_file_root_name_override = (
-            row_kind == "file_root"
-            and row_kind != target_kind
-            and bool(name_schema_field)
-        )
-        if row_kind != target_kind and not allows_file_root_name_override:
-            return {}
-
         sources = dict(source_row.get("sources") or {})
         root_field_values: dict[str, Any] = {}
         for schema_field, assignment in preview_context.field_assignments.items():
-            if row_kind != target_kind and schema_field != name_schema_field:
-                continue
-            if (
-                row_kind == "group_root"
-                and bool(preview_context.enabled)
-                and bool(preview_context.group_enabled and preview_context.group_by_column)
-                and schema_field == name_schema_field
-            ):
-                continue
             if not bool(assignment.get("enabled")):
                 continue
 
             assignment_mode = str(assignment.get("mode") or "").strip()
             assignment_value = str(assignment.get("value") or "").strip()
+            if bool(preview_context.group_enabled and preview_context.group_by_column):
+                if row_kind == "file_root" and assignment_value == ROOT_SOURCE_GROUP_VALUE:
+                    continue
+                if (
+                    row_kind == "group_root"
+                    and bool(preview_context.enabled)
+                    and schema_field == name_schema_field
+                ):
+                    continue
+            elif row_kind != "file_root":
+                continue
+
             if assignment_mode == ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
                 raw_value = str(sources.get(assignment_value) or "").strip()
             elif assignment_mode == ROOT_ASSIGNMENT_MODE_FIXED_VALUE:

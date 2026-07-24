@@ -2084,7 +2084,7 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
                     ("VCU", "group_root", str(path), [2]),
                 ],
             )
-            self.assertEqual(root_item_specs[0].field_values, {})
+            self.assertEqual(root_item_specs[0].field_values["Status"], "Open")
             self.assertEqual(root_item_specs[1].field_values["Status"], "Open")
             self.assertNotIn("Summary", root_item_specs[1].field_values)
             self.assertNotIn("Summary", root_item_specs[2].field_values)
