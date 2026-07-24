@@ -513,6 +513,10 @@ def create_settings_page(
         return type(initial_settings)(
             theme_name=normalize_gui_theme_name(theme_combo.currentData()),
             upload_mode=normalize_gui_upload_mode(upload_mode_combo.currentData()),
+            window_width=int(getattr(current_settings, "window_width", 1160) or 1160),
+            window_height=int(getattr(current_settings, "window_height", 780) or 780),
+            window_is_maximized=bool(getattr(current_settings, "window_is_maximized", False)),
+            window_is_fullscreen=bool(getattr(current_settings, "window_is_fullscreen", False)),
             base_url=base_url.text().strip(),
             username=username.text().strip(),
             password=password.text(),
@@ -2146,7 +2150,7 @@ def create_validation_page():
         if file_count > 1:
             summary_parts.append(f"선택 파일 {file_count}개")
             summary_parts.append(f"전체 예상 항목 {batch_total_rows}행")
-            summary_parts.append(f"대표 파일 검증 {total_rows}행")
+            summary_parts.append(f"전체 검증 {total_rows}행")
         else:
             summary_parts.append(f"전체 {total_rows}행")
 

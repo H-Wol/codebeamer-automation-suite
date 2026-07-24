@@ -30,6 +30,10 @@ def normalize_gui_upload_mode(upload_mode: str | None) -> str:
 class GuiSettings:
     theme_name: str = DEFAULT_GUI_THEME
     upload_mode: str = GUI_UPLOAD_MODE_CREATE
+    window_width: int = 1160
+    window_height: int = 780
+    window_is_maximized: bool = False
+    window_is_fullscreen: bool = False
     base_url: str = ""
     username: str = ""
     password: str = ""

@@ -2542,6 +2542,62 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             )
             self.assertEqual(len(success_df), 6)
 
+    def test_validate_mapping_aggregates_batch_file_issues_beyond_representative_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            first_path = Path(tmp_dir) / "first.xlsx"
+            second_path = Path(tmp_dir) / "second.xlsx"
+
+            for path, status in (
+                (first_path, "Open"),
+                (second_path, "Unknown"),
+            ):
+                workbook = Workbook()
+                sheet = workbook.active
+                sheet.title = "Main"
+                sheet.append(["Summary", "Status"])
+                sheet.append([f"REQ-{path.stem}", status])
+                workbook.save(path)
+                workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=GuiExcelService(reader_cls=FakeExcelReader),
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+            file_state = {
+                "file_path": str(first_path),
+                "file_paths": [str(first_path), str(second_path)],
+                "preview_file_path": str(first_path),
+                "sheet_name": "Main",
+                "header_row": 1,
+                "summary_column": "Summary",
+            }
+
+            mapping_context = service.prepare_mapping_context(settings, file_state)
+            validation_context = service.validate_mapping(
+                mapping_context,
+                mapping_context.selected_mapping,
+            )
+
+            self.assertTrue(validation_context.has_blocking_issues)
+            self.assertEqual(validation_context.summary_stats["file_count"], 2)
+            self.assertEqual(validation_context.summary_stats["total_rows"], 2)
+            self.assertEqual(validation_context.summary_stats["error_rows"], 1)
+            self.assertIn("second.xlsx", validation_context.issue_df["source_file"].tolist())
+            self.assertTrue(
+                validation_context.issue_df["message"].str.contains("옵션 목록에 없습니다").any()
+            )
+
     def test_run_batch_upload_reuses_preloaded_raw_data_for_all_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             first_path = Path(tmp_dir) / "ABC_REQ-001.xlsx"

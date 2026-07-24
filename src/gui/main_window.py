@@ -156,6 +156,55 @@ def _format_upload_eta_text(
     )
 
 
+def _clamp_window_dimension(value: object, *, fallback: int, minimum: int) -> int:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(normalized, minimum)
+
+
+def _window_size_from_settings(settings: GuiSettings) -> tuple[int, int]:
+    return (
+        _clamp_window_dimension(
+            getattr(settings, "window_width", 1160),
+            fallback=1160,
+            minimum=860,
+        ),
+        _clamp_window_dimension(
+            getattr(settings, "window_height", 780),
+            fallback=780,
+            minimum=620,
+        ),
+    )
+
+
+def _merge_window_preferences(current_settings: GuiSettings, incoming_settings: GuiSettings) -> GuiSettings:
+    width, height = _window_size_from_settings(current_settings)
+    return replace(
+        incoming_settings,
+        window_width=width,
+        window_height=height,
+        window_is_maximized=bool(getattr(current_settings, "window_is_maximized", False)),
+        window_is_fullscreen=bool(getattr(current_settings, "window_is_fullscreen", False)),
+    )
+
+
+def _merge_root_item_page_configs(
+    base_config: dict[str, object] | None,
+    *,
+    structure_config: dict[str, object] | None = None,
+    field_config: dict[str, object] | None = None,
+) -> dict[str, object]:
+    merged = dict(base_config or {})
+    if structure_config:
+        merged.update(dict(structure_config))
+    if field_config:
+        merged["field_assignments"] = dict(field_config.get("field_assignments") or {})
+        merged["field_sources"] = dict(field_config.get("field_sources") or {})
+    return merged
+
+
 class MainWindow:
     """단계형 GUI 스켈레톤을 제공한다."""
 
@@ -193,8 +242,12 @@ class MainWindow:
                 self._upload_batch_started_at = None
                 self._current_page = None
                 self.page_scroll_areas = {}
+                self._initial_window_state_applied = False
+                initial_width, initial_height = _window_size_from_settings(self.session_state.settings)
+                self._last_normal_window_width = initial_width
+                self._last_normal_window_height = initial_height
                 self.setWindowTitle("Codebeamer Upload GUI")
-                self.resize(qt["QSize"](1160, 780))
+                self.resize(qt["QSize"](initial_width, initial_height))
                 self.setMinimumSize(qt["QSize"](860, 620))
                 self._build_shell()
                 self.setStatusBar(qt["QStatusBar"]())
@@ -361,6 +414,8 @@ class MainWindow:
                 page = self._current_page if hasattr(self, "_current_page") else None
                 if page is None:
                     return
+                if self.isFullScreen() or self.isMaximized():
+                    return
 
                 target_height = min(
                     max(self.minimumHeight(), self._content_height_for_page(page)),
@@ -380,7 +435,39 @@ class MainWindow:
 
             def resizeEvent(self, event) -> None:
                 super().resizeEvent(event)
+                if not self.isFullScreen() and not self.isMaximized():
+                    self._last_normal_window_width = max(int(self.width()), self.minimumWidth())
+                    self._last_normal_window_height = max(int(self.height()), self.minimumHeight())
                 self._update_busy_overlay_geometry()
+
+            def showEvent(self, event) -> None:
+                super().showEvent(event)
+                if self._initial_window_state_applied:
+                    return
+                self._initial_window_state_applied = True
+                if bool(getattr(self.session_state.settings, "window_is_fullscreen", False)):
+                    self.showFullScreen()
+                elif bool(getattr(self.session_state.settings, "window_is_maximized", False)):
+                    self.showMaximized()
+
+            def closeEvent(self, event) -> None:
+                self._persist_window_preferences()
+                super().closeEvent(event)
+
+            def _persist_window_preferences(self) -> None:
+                current_settings = replace(self.session_state.settings)
+                updated_settings = replace(
+                    current_settings,
+                    window_width=max(int(self._last_normal_window_width), self.minimumWidth()),
+                    window_height=max(int(self._last_normal_window_height), self.minimumHeight()),
+                    window_is_maximized=bool(self.isMaximized()),
+                    window_is_fullscreen=bool(self.isFullScreen()),
+                )
+                self.session_state.settings = updated_settings
+                try:
+                    self.settings_store.save(updated_settings)
+                except Exception:
+                    return
 
             def _set_busy(self, busy: bool, message: str = "") -> None:
                 QApplication = self.qt["QApplication"]
@@ -741,7 +828,10 @@ class MainWindow:
                 if settings is None:
                     return self.session_state.settings
                 normalized_theme = self._apply_theme(settings.theme_name)
-                self.session_state.settings = replace(settings, theme_name=normalized_theme)
+                self.session_state.settings = replace(
+                    settings,
+                    theme_name=normalized_theme,
+                )
                 self.statusBar().showMessage("설정 상태를 갱신했습니다.")
                 return self.session_state.settings
 
@@ -855,8 +945,21 @@ class MainWindow:
                     root_item_config = dict(getattr(mapping_context, "root_item_config", {}) or {})
                 current_page = getattr(self, "_current_page", None)
                 if current_page in {getattr(self, "root_item_structure_page", None), getattr(self, "root_item_field_page", None)} and mapping_context is not None:
-                    active_root_page = current_page
-                    root_item_config = dict(active_root_page.get_config() or root_item_config)
+                    structure_config = (
+                        self.root_item_structure_page.get_config()
+                        if callable(getattr(self.root_item_structure_page, "get_config", None))
+                        else None
+                    )
+                    field_config = (
+                        self.root_item_field_page.get_config()
+                        if callable(getattr(self.root_item_field_page, "get_config", None))
+                        else None
+                    )
+                    root_item_config = _merge_root_item_page_configs(
+                        root_item_config,
+                        structure_config=structure_config,
+                        field_config=field_config,
+                    )
 
                 selected_mapping: dict[str, str] = {}
                 selected_default_values: dict[str, str] = {}
@@ -887,7 +990,10 @@ class MainWindow:
             def _apply_workflow_preset(self, preset: GuiWorkflowPreset, *, startup: bool = False) -> None:
                 self.session_state.workflow_preset = preset
                 normalized_theme = self._apply_theme(preset.settings.theme_name)
-                self.session_state.settings = replace(preset.settings, theme_name=normalized_theme)
+                self.session_state.settings = _merge_window_preferences(
+                    self.session_state.settings,
+                    replace(preset.settings, theme_name=normalized_theme),
+                )
 
                 set_settings = getattr(self.settings_page, "set_settings", None)
                 if callable(set_settings):
@@ -922,7 +1028,11 @@ class MainWindow:
                     )
                     self.session_state.validation_context = None
                     self.session_state.upload_result = None
-                    if self.stack.currentWidget() in {self.validation_page, self.upload_page, self.result_page}:
+                    if getattr(self, "_current_page", None) in {
+                        self.validation_page,
+                        self.upload_page,
+                        self.result_page,
+                    }:
                         self._show_page(self.mapping_page)
 
                 message = (
@@ -1062,11 +1172,19 @@ class MainWindow:
             def _on_confirm_root_item_structure_config(self) -> None:
                 if self.session_state.mapping_context is None:
                     raise ValueError("매핑 컨텍스트가 준비되지 않았습니다.")
-                root_item_config = dict(self.root_item_structure_page.get_config() or {})
-                if callable(getattr(self.root_item_field_page, "get_config", None)):
-                    preserved_field_config = dict(self.root_item_field_page.get_config() or {})
-                    root_item_config["field_assignments"] = dict(preserved_field_config.get("field_assignments") or {})
-                    root_item_config["field_sources"] = dict(preserved_field_config.get("field_sources") or {})
+                root_item_config = _merge_root_item_page_configs(
+                    self.session_state.mapping_context.root_item_config,
+                    structure_config=(
+                        self.root_item_structure_page.get_config()
+                        if callable(getattr(self.root_item_structure_page, "get_config", None))
+                        else None
+                    ),
+                    field_config=(
+                        self.root_item_field_page.get_config()
+                        if callable(getattr(self.root_item_field_page, "get_config", None))
+                        else None
+                    ),
+                )
                 self.session_state.mapping_context.root_item_config = root_item_config
                 root_preview_context = self.pipeline_service.build_root_item_preview_context(
                     self.session_state.mapping_context,

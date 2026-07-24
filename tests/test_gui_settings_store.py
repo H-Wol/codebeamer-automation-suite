@@ -51,6 +51,10 @@ class GuiSettingsStoreTest(unittest.TestCase):
             store = GuiSettingsStore(Path(tmp_dir))
             settings = GuiSettings(
                 theme_name="kepico",
+                window_width=1600,
+                window_height=920,
+                window_is_maximized=True,
+                window_is_fullscreen=False,
                 base_url="https://example.com/cb",
                 username="user",
                 password="secret",
@@ -71,6 +75,10 @@ class GuiSettingsStoreTest(unittest.TestCase):
             self.assertEqual(loaded.summary_column, "Summary")
             self.assertEqual(loaded.theme_name, DEFAULT_GUI_THEME)
             self.assertEqual(loaded.upload_mode, GUI_UPLOAD_MODE_UPDATE)
+            self.assertEqual(loaded.window_width, 1600)
+            self.assertEqual(loaded.window_height, 920)
+            self.assertTrue(loaded.window_is_maximized)
+            self.assertFalse(loaded.window_is_fullscreen)
 
     def test_save_and_load_workflow_preset_preserves_nested_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
