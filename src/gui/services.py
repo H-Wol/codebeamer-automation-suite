@@ -1040,7 +1040,7 @@ class GuiUploadPipelineService:
         if top_level_df.empty and allowed_row_ids is not None:
             return [], [], regex_error
 
-        if root_mode != ROOT_ITEM_MODE_GROUP_BY_COLUMN:
+        if root_mode != ROOT_ITEM_MODE_GROUP_BY_COLUMN or not str(group_by_column or "").strip():
             return [
                 {
                     "key": str(file_path).strip(),
@@ -1211,6 +1211,7 @@ class GuiUploadPipelineService:
 
         if (
             root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN
+            and group_by_column
             and name_schema_field
             and not explicit_name_assignment
         ):
@@ -1511,18 +1512,16 @@ class GuiUploadPipelineService:
                     if not str(sources.get(source_key) or "").strip():
                         missing_sources.append(f"{Path(file_path).name}:{schema_field}")
 
+        effective_group_mode = root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN and bool(group_by_column)
         has_blocking_issues = regex_error is not None
         status_message = (
             "파일별 그룹값과 루트 필드 값을 확인하세요."
-            if root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN
+            if effective_group_mode
             else "파일명 파싱 결과와 루트 필드 값을 확인하세요."
         )
         if regex_error is not None:
             status_message = f"정규식 오류: {regex_error}"
-        elif root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN and not group_by_column:
-            has_blocking_issues = True
-            status_message = "파일 내부에서 상단 데이터를 묶을 업로드 컬럼을 선택하세요."
-        elif missing_group_values:
+        elif effective_group_mode and missing_group_values:
             has_blocking_issues = True
             status_message = "일부 최상위 데이터에 그룹 컬럼 값이 비어 있습니다."
         elif invalid_assignments:
@@ -1531,6 +1530,8 @@ class GuiUploadPipelineService:
         elif missing_sources:
             has_blocking_issues = True
             status_message = "일부 파일에서 선택한 루트 필드 소스를 만들 수 없습니다."
+        elif root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN and not group_by_column:
+            status_message = "그룹 컬럼을 선택하지 않아 파일별 상단 데이터 1건 방식으로 처리합니다."
 
         return RootItemPreviewContext(
             enabled=True,
