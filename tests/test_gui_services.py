@@ -1462,6 +1462,49 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             self.assertIn("상위 요구사항", default_candidates)
             self.assertTrue(default_candidates["상위 요구사항"].allows_custom_value)
 
+    def test_prepare_mapping_context_includes_multi_tracker_item_field_in_default_value_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary", "연관 요구사항"])
+            sheet.append(["REQ-001", "REQ-100"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=TrackerItemQueryFakeClient,
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+
+            mapping_context = service.prepare_mapping_context(
+                settings,
+                {
+                    "file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                },
+            )
+
+            default_candidates = {
+                candidate.schema_field: candidate
+                for candidate in mapping_context.default_value_candidates
+            }
+            self.assertIn("연관 요구사항", default_candidates)
+            self.assertTrue(default_candidates["연관 요구사항"].allows_custom_value)
+
     def test_prime_tracker_item_lookup_cache_deduplicates_values_across_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             TrackerItemQueryFakeClient.all_search_calls = []

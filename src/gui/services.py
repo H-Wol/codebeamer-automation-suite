@@ -593,8 +593,6 @@ class GuiUploadPipelineService:
                 continue
             if bool(row.get("is_table_field", False)):
                 continue
-            if bool(row.get("multiple_values", False)):
-                continue
             if not bool(row.get("is_supported", True)):
                 continue
 
