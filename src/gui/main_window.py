@@ -528,7 +528,7 @@ class MainWindow:
                     self.settings_page: ("설정", "연결 정보와 기본 실행 옵션을 입력합니다.", 0),
                     self.project_page: ("프로젝트 선택", "업로드 대상 프로젝트와 트래커를 선택합니다.", 1),
                     self.file_page: ("파일 선택", "Excel 파일과 시트, 헤더 정보를 확인합니다.", 2),
-                    self.root_item_page: ("상단 데이터", "파일명 기반 부모 데이터의 필드와 정규식 파싱 규칙을 설정합니다.", 3),
+                    self.root_item_page: ("상단 데이터", "파일 또는 파일 내부 데이터 기준으로 부모 데이터를 만드는 규칙을 설정합니다.", 3),
                     self.mapping_page: ("컬럼 매핑", "업로드할 컬럼만 선택하고 Codebeamer 필드와 연결합니다.", 4),
                     self.validation_page: ("검증", "문제가 있는 항목만 먼저 확인하고 수정 여부를 판단합니다.", 5),
                     self.upload_page: ("업로드", "진행 상황을 확인하면서 업로드를 제어합니다.", 6),

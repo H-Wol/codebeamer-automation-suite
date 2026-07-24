@@ -367,8 +367,11 @@ GUI_HIDDEN_USER_COLUMNS = GUI_EXCLUDED_MAPPING_COLUMNS | {
 ROOT_SOURCE_FILE_NAME = "__file_name__"
 ROOT_SOURCE_FILE_STEM = "__file_stem__"
 ROOT_SOURCE_REGEX_FULL = "__regex_full__"
+ROOT_SOURCE_GROUP_VALUE = "__group_value__"
 ROOT_REGEX_TARGET_FILE_NAME = "file_name"
 ROOT_REGEX_TARGET_FILE_STEM = "file_stem"
+ROOT_ITEM_MODE_FILE = "file"
+ROOT_ITEM_MODE_GROUP_BY_COLUMN = "group_by_column"
 ROOT_ASSIGNMENT_MODE_FILE_SOURCE = "file_source"
 ROOT_ASSIGNMENT_MODE_FIXED_VALUE = "fixed_value"
 DEFAULT_TRACKER_ITEM_ID_REGEX = r"\[(?:[^:\]]+:)?(\d+)[^\]]*\]|^(\d+)(?:\.0)?$"
@@ -438,11 +441,18 @@ class ValidationContext:
 class BatchUploadJob:
     file_path: str
     file_label: str
-    root_item_name: str | None
-    root_field_values: dict[str, Any]
+    root_item_specs: list["RootItemUploadSpec"]
     ready_count: int
     output_dir: str
     wizard: CodebeamerUploadWizard
+
+
+@dataclass
+class RootItemUploadSpec:
+    key: str
+    name: str
+    field_values: dict[str, Any]
+    row_ids: list[int]
 
 
 @dataclass
@@ -467,6 +477,9 @@ class RootSourceOption:
 @dataclass
 class RootItemPreviewContext:
     enabled: bool
+    root_mode: str
+    group_by_column: str
+    group_column_options: list[str]
     regex_pattern: str
     regex_target: str
     field_assignments: dict[str, dict[str, Any]]
@@ -916,11 +929,35 @@ class GuiUploadPipelineService:
         ]
 
     @staticmethod
+    def _normalize_root_mode(value: Any) -> str:
+        normalized = str(value or ROOT_ITEM_MODE_FILE).strip()
+        if normalized in {ROOT_ITEM_MODE_FILE, ROOT_ITEM_MODE_GROUP_BY_COLUMN}:
+            return normalized
+        return ROOT_ITEM_MODE_FILE
+
+    @staticmethod
+    def _root_group_column_options(mapping_context: MappingContext) -> list[str]:
+        return [
+            str(column).strip()
+            for column in mapping_context.upload_columns
+            if str(column).strip()
+        ]
+
+    @classmethod
+    def _root_group_source_label(cls, group_by_column: str) -> str:
+        normalized = str(group_by_column or "").strip()
+        if not normalized:
+            return cls._root_source_label(ROOT_SOURCE_GROUP_VALUE)
+        return f"그룹값 ({normalized})"
+
+    @staticmethod
     def _root_source_label(source_key: str) -> str:
         if source_key == ROOT_SOURCE_FILE_STEM:
             return "파일명(확장자 제외)"
         if source_key == ROOT_SOURCE_FILE_NAME:
             return "전체 파일명"
+        if source_key == ROOT_SOURCE_GROUP_VALUE:
+            return "그룹값"
         if source_key == ROOT_SOURCE_REGEX_FULL:
             return "정규식 전체 일치"
         if source_key.startswith("group"):
@@ -932,6 +969,112 @@ class GuiUploadPipelineService:
         if regex_target == ROOT_REGEX_TARGET_FILE_NAME:
             return Path(file_path).name
         return Path(file_path).stem
+
+    def _root_upload_df_for_file(
+        self,
+        mapping_context: MappingContext,
+        file_path: str,
+    ) -> pd.DataFrame:
+        representative = str(mapping_context.representative_file_path or "").strip()
+        if (
+            representative
+            and representative == str(file_path).strip()
+            and mapping_context.wizard.state.upload_df is not None
+        ):
+            return mapping_context.wizard.state.upload_df.copy()
+
+        raw_df = self._cached_raw_df_for_file(mapping_context.preview_data, file_path)
+        if raw_df is None:
+            reader = self.reader_cls(
+                header_row=mapping_context.header_row,
+                summary_col=mapping_context.summary_column,
+                logger=self.logger,
+            )
+            raw_df = reader.read_excel(
+                file_path=file_path,
+                sheet_name=mapping_context.sheet_name,
+            )
+
+        processor = HierarchyProcessor(
+            header_row=mapping_context.header_row,
+            summary_col=mapping_context.summary_column,
+            logger=self.logger,
+        )
+        merged_df = processor.merge_multiline_records(raw_df.copy(), list_cols=list(mapping_context.list_cols))
+        hierarchy_df = processor.add_hierarchy_by_indent(merged_df)
+        return processor.build_upload_df(hierarchy_df, list_cols=list(mapping_context.list_cols))
+
+    @staticmethod
+    def _top_level_upload_df(
+        upload_df: pd.DataFrame,
+        *,
+        allowed_row_ids: set[int] | None = None,
+    ) -> pd.DataFrame:
+        if upload_df is None or upload_df.empty:
+            return pd.DataFrame()
+
+        top_level_mask = upload_df["parent_row_id"].apply(lambda value: value is None or pd.isna(value))
+        top_level_df = upload_df[top_level_mask].copy()
+        if allowed_row_ids is not None:
+            top_level_df = top_level_df[top_level_df["_row_id"].isin(sorted(allowed_row_ids))].copy()
+        return top_level_df.reset_index(drop=True)
+
+    def _build_root_source_rows(
+        self,
+        mapping_context: MappingContext,
+        *,
+        file_path: str,
+        root_mode: str,
+        group_by_column: str,
+        regex_pattern: str,
+        regex_target: str,
+        allowed_row_ids: set[int] | None = None,
+    ) -> tuple[list[dict[str, Any]], list[str], str | None]:
+        file_sources, matched, regex_error = self._root_sources_for_file(
+            file_path,
+            regex_pattern=regex_pattern,
+            regex_target=regex_target,
+        )
+        upload_df = self._root_upload_df_for_file(mapping_context, file_path)
+        top_level_df = self._top_level_upload_df(upload_df, allowed_row_ids=allowed_row_ids)
+        if top_level_df.empty and allowed_row_ids is not None:
+            return [], [], regex_error
+
+        if root_mode != ROOT_ITEM_MODE_GROUP_BY_COLUMN:
+            return [
+                {
+                    "key": str(file_path).strip(),
+                    "sources": dict(file_sources),
+                    "row_ids": [int(row_id) for row_id in top_level_df["_row_id"].tolist()],
+                    "matched": matched,
+                }
+            ], [], regex_error
+
+        missing_group_values: list[str] = []
+        grouped_rows: dict[str, dict[str, Any]] = {}
+        for _, row in top_level_df.iterrows():
+            row_id = int(row["_row_id"])
+            group_value = gui_display_text(row.get(group_by_column))
+            if not group_value:
+                row_label = gui_display_text(row.get("upload_name")) or f"row {row_id}"
+                missing_group_values.append(f"{Path(file_path).name}:{row_label}")
+                continue
+
+            group_entry = grouped_rows.setdefault(
+                group_value,
+                {
+                    "key": f"{str(file_path).strip()}::{group_value}",
+                    "sources": {
+                        **file_sources,
+                        ROOT_SOURCE_GROUP_VALUE: group_value,
+                    },
+                    "row_ids": [],
+                    "matched": matched,
+                },
+            )
+            group_entry["row_ids"].append(row_id)
+
+        return list(grouped_rows.values()), missing_group_values, regex_error
 
     @staticmethod
     def _root_assignment(
@@ -990,6 +1133,8 @@ class GuiUploadPipelineService:
             )
         return {
             "enabled": True,
+            "root_mode": ROOT_ITEM_MODE_FILE,
+            "group_by_column": "",
             "regex_pattern": "",
             "regex_target": ROOT_REGEX_TARGET_FILE_STEM,
             "field_assignments": field_assignments,
@@ -1009,7 +1154,10 @@ class GuiUploadPipelineService:
             config.update(root_item_config)
         explicit_root_config = dict(root_item_config or {})
         has_explicit_field_assignments = "field_assignments" in explicit_root_config
+        explicit_field_sources = explicit_root_config.get("field_sources")
         enabled = bool(config.get("enabled", True))
+        root_mode = cls._normalize_root_mode(config.get("root_mode"))
+        group_by_column = str(config.get("group_by_column") or "").strip()
 
         regex_pattern = str(config.get("regex_pattern") or "").strip()
         regex_target = str(config.get("regex_target") or ROOT_REGEX_TARGET_FILE_STEM).strip()
@@ -1052,8 +1200,30 @@ class GuiUploadPipelineService:
                     value=source_name,
                 )
 
+        name_schema_field = cls._name_schema_field(schema_df)
+        explicit_name_assignment = False
+        if name_schema_field:
+            raw_explicit_assignments = explicit_root_config.get("field_assignments")
+            if isinstance(raw_explicit_assignments, dict) and name_schema_field in raw_explicit_assignments:
+                explicit_name_assignment = True
+            elif isinstance(explicit_field_sources, dict) and name_schema_field in explicit_field_sources:
+                explicit_name_assignment = True
+
+        if (
+            root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN
+            and name_schema_field
+            and not explicit_name_assignment
+        ):
+            field_assignments[name_schema_field] = cls._root_assignment(
+                enabled=True,
+                mode=ROOT_ASSIGNMENT_MODE_FILE_SOURCE,
+                value=ROOT_SOURCE_GROUP_VALUE,
+            )
+
         return {
             "enabled": enabled,
+            "root_mode": root_mode,
+            "group_by_column": group_by_column,
             "regex_pattern": regex_pattern,
             "regex_target": regex_target,
             "field_assignments": field_assignments,
@@ -1196,6 +1366,11 @@ class GuiUploadPipelineService:
             default_config=default_config,
         )
         enabled = bool(normalized.get("enabled", True))
+        root_mode = self._normalize_root_mode(normalized.get("root_mode"))
+        group_column_options = self._root_group_column_options(mapping_context)
+        group_by_column = str(normalized.get("group_by_column") or "").strip()
+        if group_by_column and group_by_column not in group_column_options:
+            group_by_column = ""
         regex_pattern = normalized["regex_pattern"]
         regex_target = normalized["regex_target"]
         field_assignments = {
@@ -1209,6 +1384,20 @@ class GuiUploadPipelineService:
             for candidate in field_candidates
         }
 
+        compiled_pattern, regex_error = self._compiled_root_regex(regex_pattern)
+        source_options = [
+            RootSourceOption(ROOT_SOURCE_FILE_STEM, self._root_source_label(ROOT_SOURCE_FILE_STEM)),
+            RootSourceOption(ROOT_SOURCE_FILE_NAME, self._root_source_label(ROOT_SOURCE_FILE_NAME)),
+        ]
+        if root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN and group_by_column:
+            source_options.append(
+                RootSourceOption(ROOT_SOURCE_GROUP_VALUE, self._root_group_source_label(group_by_column))
+            )
+        if compiled_pattern is not None:
+            source_options.append(RootSourceOption(ROOT_SOURCE_REGEX_FULL, self._root_source_label(ROOT_SOURCE_REGEX_FULL)))
+            for group_key in self._root_regex_group_keys(compiled_pattern):
+                source_options.append(RootSourceOption(group_key, self._root_source_label(group_key)))
+
         if not enabled:
             preview_columns = ["file_name"]
             preview_rows = [
@@ -1217,15 +1406,15 @@ class GuiUploadPipelineService:
             ]
             return RootItemPreviewContext(
                 enabled=False,
+                root_mode=root_mode,
+                group_by_column=group_by_column,
+                group_column_options=group_column_options,
                 regex_pattern=regex_pattern,
                 regex_target=regex_target,
                 field_assignments=field_assignments,
                 field_sources=self._root_file_source_assignments(field_assignments),
                 field_candidates=field_candidates,
-                source_options=[
-                    RootSourceOption(ROOT_SOURCE_FILE_STEM, self._root_source_label(ROOT_SOURCE_FILE_STEM)),
-                    RootSourceOption(ROOT_SOURCE_FILE_NAME, self._root_source_label(ROOT_SOURCE_FILE_NAME)),
-                ],
+                source_options=source_options,
                 preview_columns=preview_columns,
                 preview_rows=preview_rows,
                 regex_error=None,
@@ -1233,17 +1422,9 @@ class GuiUploadPipelineService:
                 has_blocking_issues=False,
             )
 
-        compiled_pattern, regex_error = self._compiled_root_regex(regex_pattern)
-        source_options = [
-            RootSourceOption(ROOT_SOURCE_FILE_STEM, self._root_source_label(ROOT_SOURCE_FILE_STEM)),
-            RootSourceOption(ROOT_SOURCE_FILE_NAME, self._root_source_label(ROOT_SOURCE_FILE_NAME)),
-        ]
-        if compiled_pattern is not None:
-            source_options.append(RootSourceOption(ROOT_SOURCE_REGEX_FULL, self._root_source_label(ROOT_SOURCE_REGEX_FULL)))
-            for group_key in self._root_regex_group_keys(compiled_pattern):
-                source_options.append(RootSourceOption(group_key, self._root_source_label(group_key)))
-
         preview_columns = ["file_name", "parse_target", "matched"]
+        if root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN:
+            preview_columns.insert(1, ROOT_SOURCE_GROUP_VALUE)
         if compiled_pattern is not None:
             preview_columns.append(ROOT_SOURCE_REGEX_FULL)
             preview_columns.extend(self._root_regex_group_keys(compiled_pattern))
@@ -1293,40 +1474,57 @@ class GuiUploadPipelineService:
 
         preview_rows: list[dict[str, str]] = []
         missing_sources: list[str] = []
+        missing_group_values: list[str] = []
         for file_path in mapping_context.file_paths:
-            sources, matched, source_error = self._root_sources_for_file(
-                file_path,
+            source_rows, current_missing_group_values, source_error = self._build_root_source_rows(
+                mapping_context,
+                file_path=file_path,
+                root_mode=root_mode,
+                group_by_column=group_by_column,
                 regex_pattern=regex_pattern,
                 regex_target=regex_target,
             )
             if source_error is not None and regex_error is None:
                 regex_error = source_error
-            preview_row = {
-                "file_name": Path(file_path).name,
-                "parse_target": self._root_parse_target_text(file_path, regex_target),
-                "matched": "yes" if matched else ("regex error" if regex_error else "no"),
-            }
-            for column_name in preview_columns:
-                if column_name in {"file_name", "parse_target", "matched"}:
-                    continue
-                preview_row[column_name] = str(sources.get(column_name) or "")
-            preview_rows.append(preview_row)
+            missing_group_values.extend(current_missing_group_values)
+            for source_row in source_rows:
+                sources = dict(source_row.get("sources") or {})
+                preview_row = {
+                    "file_name": Path(file_path).name,
+                    "parse_target": self._root_parse_target_text(file_path, regex_target),
+                    "matched": "yes" if bool(source_row.get("matched")) else ("regex error" if regex_error else "no"),
+                }
+                for column_name in preview_columns:
+                    if column_name in {"file_name", "parse_target", "matched"}:
+                        continue
+                    preview_row[column_name] = str(sources.get(column_name) or "")
+                preview_rows.append(preview_row)
 
-            for schema_field, assignment in normalized_assignments.items():
-                if not bool(assignment.get("enabled")):
-                    continue
-                if str(assignment.get("mode") or "") != ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
-                    continue
-                source_key = str(assignment.get("value") or "").strip()
-                if not source_key:
-                    continue
-                if not str(sources.get(source_key) or "").strip():
-                    missing_sources.append(f"{Path(file_path).name}:{schema_field}")
+                for schema_field, assignment in normalized_assignments.items():
+                    if not bool(assignment.get("enabled")):
+                        continue
+                    if str(assignment.get("mode") or "") != ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
+                        continue
+                    source_key = str(assignment.get("value") or "").strip()
+                    if not source_key:
+                        continue
+                    if not str(sources.get(source_key) or "").strip():
+                        missing_sources.append(f"{Path(file_path).name}:{schema_field}")
 
         has_blocking_issues = regex_error is not None
-        status_message = "파일명 파싱 결과와 루트 필드 값을 확인하세요."
+        status_message = (
+            "파일별 그룹값과 루트 필드 값을 확인하세요."
+            if root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN
+            else "파일명 파싱 결과와 루트 필드 값을 확인하세요."
+        )
         if regex_error is not None:
             status_message = f"정규식 오류: {regex_error}"
+        elif root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN and not group_by_column:
+            has_blocking_issues = True
+            status_message = "파일 내부에서 상단 데이터를 묶을 업로드 컬럼을 선택하세요."
+        elif missing_group_values:
+            has_blocking_issues = True
+            status_message = "일부 최상위 데이터에 그룹 컬럼 값이 비어 있습니다."
         elif invalid_assignments:
             has_blocking_issues = True
             status_message = "선택한 루트 필드의 값 방식 또는 값이 현재 스키마와 맞지 않습니다."
@@ -1336,6 +1534,9 @@ class GuiUploadPipelineService:
 
         return RootItemPreviewContext(
             enabled=True,
+            root_mode=root_mode,
+            group_by_column=group_by_column,
+            group_column_options=group_column_options,
             regex_pattern=regex_pattern,
             regex_target=regex_target,
             field_assignments=normalized_assignments,
@@ -2155,6 +2356,88 @@ class GuiUploadPipelineService:
             "item_name": str(context.get("item_name") or fallback_item_name or ""),
         }
 
+    def build_root_item_payload_specs(
+        self,
+        mapping_context: MappingContext,
+        wizard: CodebeamerUploadWizard,
+        file_path: str,
+    ) -> list[RootItemUploadSpec]:
+        preview_context = self.build_root_item_preview_context(mapping_context, mapping_context.root_item_config)
+        if not bool(preview_context.enabled):
+            return []
+        if bool(preview_context.has_blocking_issues):
+            raise ValueError(str(preview_context.status_message or "루트 데이터 설정이 올바르지 않습니다."))
+
+        payload_df = wizard.state.payload_df if wizard.state.payload_df is not None else wizard.build_payloads()
+        if payload_df is None or payload_df.empty:
+            return []
+
+        ready_top_level_row_ids = {
+            int(row_id)
+            for row_id in payload_df[
+                payload_df["payload_status"].eq(PayloadStatus.READY.value)
+                & payload_df["parent_row_id"].apply(lambda value: value is None or pd.isna(value))
+            ]["_row_id"].tolist()
+        }
+        if not ready_top_level_row_ids:
+            return []
+
+        source_rows, _, regex_error = self._build_root_source_rows(
+            mapping_context,
+            file_path=file_path,
+            root_mode=preview_context.root_mode,
+            group_by_column=preview_context.group_by_column,
+            regex_pattern=preview_context.regex_pattern,
+            regex_target=preview_context.regex_target,
+            allowed_row_ids=ready_top_level_row_ids,
+        )
+        if regex_error is not None:
+            raise ValueError(f"루트 데이터 정규식 오류: {regex_error}")
+
+        name_schema_field = self._name_schema_field(mapping_context.schema_df)
+        root_item_specs: list[RootItemUploadSpec] = []
+        for source_row in source_rows:
+            sources = dict(source_row.get("sources") or {})
+            root_field_values: dict[str, Any] = {}
+            for schema_field, assignment in preview_context.field_assignments.items():
+                if not bool(assignment.get("enabled")):
+                    continue
+
+                assignment_mode = str(assignment.get("mode") or "").strip()
+                assignment_value = str(assignment.get("value") or "").strip()
+                if assignment_mode == ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
+                    raw_value = str(sources.get(assignment_value) or "").strip()
+                elif assignment_mode == ROOT_ASSIGNMENT_MODE_FIXED_VALUE:
+                    raw_value = assignment_value
+                else:
+                    raw_value = ""
+
+                if raw_value:
+                    root_field_values[schema_field] = raw_value
+
+            root_item_name = (
+                str(sources.get(ROOT_SOURCE_GROUP_VALUE) or "").strip()
+                if preview_context.root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN
+                else (Path(file_path).stem.strip() or "")
+            )
+            if name_schema_field and str(root_field_values.get(name_schema_field) or "").strip():
+                root_item_name = str(root_field_values[name_schema_field]).strip()
+            if not root_item_name:
+                continue
+
+            root_item_specs.append(RootItemUploadSpec(
+                key=str(source_row.get("key") or root_item_name),
+                name=root_item_name,
+                field_values=root_field_values,
+                row_ids=[
+                    int(row_id)
+                    for row_id in (source_row.get("row_ids") or [])
+                    if str(row_id).strip()
+                ],
+            ))
+
+        return root_item_specs
+
     def build_root_item_payload_spec(
         self,
         mapping_context: MappingContext,
@@ -2163,19 +2446,29 @@ class GuiUploadPipelineService:
         preview_context = self.build_root_item_preview_context(mapping_context, mapping_context.root_item_config)
         if not bool(preview_context.enabled):
             return None, {}
-        sources, _, regex_error = self._root_sources_for_file(
-            file_path,
+        if bool(preview_context.has_blocking_issues):
+            raise ValueError(str(preview_context.status_message or "루트 데이터 설정이 올바르지 않습니다."))
+
+        source_rows, _, regex_error = self._build_root_source_rows(
+            mapping_context,
+            file_path=file_path,
+            root_mode=preview_context.root_mode,
+            group_by_column=preview_context.group_by_column,
             regex_pattern=preview_context.regex_pattern,
             regex_target=preview_context.regex_target,
+            allowed_row_ids=None,
         )
         if regex_error is not None:
             raise ValueError(f"루트 데이터 정규식 오류: {regex_error}")
+        if not source_rows:
+            return None, {}
 
+        first_row = source_rows[0]
+        sources = dict(first_row.get("sources") or {})
         root_field_values: dict[str, Any] = {}
         for schema_field, assignment in preview_context.field_assignments.items():
             if not bool(assignment.get("enabled")):
                 continue
-
             assignment_mode = str(assignment.get("mode") or "").strip()
             assignment_value = str(assignment.get("value") or "").strip()
             if assignment_mode == ROOT_ASSIGNMENT_MODE_FILE_SOURCE:
@@ -2184,15 +2477,17 @@ class GuiUploadPipelineService:
                 raw_value = assignment_value
             else:
                 raw_value = ""
-
             if raw_value:
                 root_field_values[schema_field] = raw_value
 
-        root_item_name = Path(file_path).stem.strip() or None
+        root_item_name = (
+            str(sources.get(ROOT_SOURCE_GROUP_VALUE) or "").strip()
+            if preview_context.root_mode == ROOT_ITEM_MODE_GROUP_BY_COLUMN
+            else (Path(file_path).stem.strip() or None)
+        )
         name_schema_field = self._name_schema_field(mapping_context.schema_df)
         if name_schema_field and str(root_field_values.get(name_schema_field) or "").strip():
             root_item_name = str(root_field_values[name_schema_field]).strip()
-
         return root_item_name, root_field_values
 
     @staticmethod
@@ -2259,7 +2554,10 @@ class GuiUploadPipelineService:
         return str(Path(output_dir) / f"{index:03d}_{safe_name}")
 
     @staticmethod
-    def _ready_upload_count(wizard: CodebeamerUploadWizard, root_item_name: str | None) -> int:
+    def _ready_upload_count(
+        wizard: CodebeamerUploadWizard,
+        root_item_specs: list[RootItemUploadSpec] | None = None,
+    ) -> int:
         payload_df = wizard.state.payload_df if wizard.state.payload_df is not None else wizard.build_payloads()
         if payload_df is None or payload_df.empty:
             return 0
@@ -2267,10 +2565,10 @@ class GuiUploadPipelineService:
         ready_count = int((payload_df["payload_status"] == PayloadStatus.READY.value).sum())
         if (
             ready_count > 0
-            and root_item_name
+            and root_item_specs
             and str(getattr(wizard.state, "upload_mode", GUI_UPLOAD_MODE_CREATE)) == GUI_UPLOAD_MODE_CREATE
         ):
-            ready_count += 1
+            ready_count += len(root_item_specs)
         return ready_count
 
     @staticmethod
@@ -2414,16 +2712,15 @@ class GuiUploadPipelineService:
                     summary_col=summary_col,
                 )
                 if upload_mode == GUI_UPLOAD_MODE_CREATE:
-                    root_item_name, root_field_values = self.build_root_item_payload_spec(mapping_context, file_path)
+                    root_item_specs = self.build_root_item_payload_specs(mapping_context, wizard, file_path)
                 else:
-                    root_item_name, root_field_values = None, {}
-                ready_count = self._ready_upload_count(wizard, root_item_name)
+                    root_item_specs = []
+                ready_count = self._ready_upload_count(wizard, root_item_specs)
                 total_count += ready_count
                 prepared_jobs.append(BatchUploadJob(
                     file_path=file_path,
                     file_label=file_label,
-                    root_item_name=root_item_name,
-                    root_field_values=root_field_values,
+                    root_item_specs=root_item_specs,
                     ready_count=ready_count,
                     output_dir=self._batch_output_dir(output_dir, file_path, index),
                     wizard=wizard,
@@ -2488,8 +2785,15 @@ class GuiUploadPipelineService:
                 result = job.wizard.upload(
                     dry_run=dry_run,
                     continue_on_error=continue_on_error,
-                    root_item_name=job.root_item_name,
-                    root_field_values=job.root_field_values,
+                    top_level_parent_specs=[
+                        {
+                            "key": spec.key,
+                            "name": spec.name,
+                            "field_values": dict(spec.field_values),
+                            "row_ids": list(spec.row_ids),
+                        }
+                        for spec in job.root_item_specs
+                    ],
                     event_callback=_forward_event,
                     cancel_requested=cancel_requested,
                     pause_requested=pause_requested,

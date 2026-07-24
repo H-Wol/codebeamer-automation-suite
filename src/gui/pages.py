@@ -7,6 +7,8 @@ from src.mapping_service import MappingService
 from .services import DEFAULT_TRACKER_ITEM_ID_REGEX
 from .services import ROOT_ASSIGNMENT_MODE_FILE_SOURCE
 from .services import ROOT_ASSIGNMENT_MODE_FIXED_VALUE
+from .services import ROOT_ITEM_MODE_FILE
+from .services import ROOT_ITEM_MODE_GROUP_BY_COLUMN
 from .services import gui_display_text
 from .settings_store import GUI_UPLOAD_MODE_CREATE
 from .settings_store import GUI_UPLOAD_MODE_UPDATE
@@ -1207,8 +1209,8 @@ def create_root_item_page(on_preview_requested):
     layout.setSpacing(10)
 
     description_label = QLabel(
-        "파일명 기반으로 생성할 최상위 부모 데이터의 이름과 필드 값을 설정합니다. "
-        "필드별로 파일명/정규식 값을 쓰거나 스키마 선택값을 고를 수 있습니다."
+        "업로드 전에 생성할 최상위 부모 데이터 방식을 설정합니다. "
+        "파일별 1건으로 만들거나, 파일 내부 특정 컬럼 값별로 여러 건을 만들 수 있습니다."
     )
     description_label.setWordWrap(True)
     description_label.setObjectName("section_label")
@@ -1220,18 +1222,27 @@ def create_root_item_page(on_preview_requested):
 
     form = QFormLayout()
     _configure_form_layout(form)
+    root_mode = QComboBox()
+    root_mode.addItem("파일별 상단 데이터 1건", ROOT_ITEM_MODE_FILE)
+    root_mode.addItem("파일 내부 컬럼 값별 상단 데이터", ROOT_ITEM_MODE_GROUP_BY_COLUMN)
+    group_by_column = QComboBox()
+    group_by_column.addItem("", "")
     regex_target = QComboBox()
     regex_target.addItem("파일명(확장자 제외)", "file_stem")
     regex_target.addItem("전체 파일명", "file_name")
     regex_pattern = QLineEdit()
     regex_pattern.setPlaceholderText(r"예: ^(?P<project>[A-Z]+)_(?P<title>.+)$")
+    _configure_form_field(root_mode)
+    _configure_form_field(group_by_column)
     _configure_form_field(regex_target)
     _configure_form_field(regex_pattern, minimum_width=320)
+    form.addRow("생성 방식", root_mode)
+    form.addRow("그룹 컬럼", group_by_column)
     form.addRow("정규식 대상", regex_target)
     form.addRow("정규식", regex_pattern)
     layout.addLayout(form)
 
-    preview_label = QLabel("파일명 파싱 미리보기")
+    preview_label = QLabel("상단 데이터 소스 미리보기")
     preview_label.setObjectName("section_label")
     layout.addWidget(preview_label)
 
@@ -1269,6 +1280,10 @@ def create_root_item_page(on_preview_requested):
     page._current_preview_context = None
 
     def _sync_root_enabled_state(enabled: bool) -> None:
+        root_mode.setEnabled(enabled)
+        group_by_column.setEnabled(
+            enabled and str(root_mode.currentData() or ROOT_ITEM_MODE_FILE) == ROOT_ITEM_MODE_GROUP_BY_COLUMN
+        )
         regex_target.setEnabled(enabled)
         regex_pattern.setEnabled(enabled)
         preview_table.setEnabled(enabled)
@@ -1313,6 +1328,8 @@ def create_root_item_page(on_preview_requested):
         field_assignments = _current_field_assignments()
         return {
             "enabled": bool(enable_root_item.isChecked()),
+            "root_mode": str(root_mode.currentData() or ROOT_ITEM_MODE_FILE),
+            "group_by_column": str(group_by_column.currentData() or "").strip(),
             "regex_pattern": regex_pattern.text().strip(),
             "regex_target": str(regex_target.currentData() or "file_stem"),
             "field_assignments": field_assignments,
@@ -1332,7 +1349,7 @@ def create_root_item_page(on_preview_requested):
     def _mode_options(candidate) -> list[tuple[str, str]]:
         options: list[tuple[str, str]] = []
         if bool(candidate.allows_file_source):
-            options.append(("파일명/정규식", ROOT_ASSIGNMENT_MODE_FILE_SOURCE))
+            options.append(("소스 값", ROOT_ASSIGNMENT_MODE_FILE_SOURCE))
         if bool(candidate.allows_fixed_value):
             options.append((
                 "직접 입력" if bool(getattr(candidate, "allows_custom_value", False)) else "고정값",
@@ -1389,13 +1406,25 @@ def create_root_item_page(on_preview_requested):
 
         regex_pattern.blockSignals(True)
         regex_target.blockSignals(True)
+        root_mode.blockSignals(True)
+        group_by_column.blockSignals(True)
         enable_root_item.blockSignals(True)
         enable_root_item.setChecked(bool(getattr(preview_context, "enabled", True)))
+        root_mode_index = root_mode.findData(str(getattr(preview_context, "root_mode", ROOT_ITEM_MODE_FILE)))
+        root_mode.setCurrentIndex(root_mode_index if root_mode_index >= 0 else 0)
+        group_by_column.clear()
+        group_by_column.addItem("", "")
+        for column_name in getattr(preview_context, "group_column_options", []):
+            group_by_column.addItem(str(column_name), str(column_name))
+        group_index = group_by_column.findData(str(getattr(preview_context, "group_by_column", "") or ""))
+        group_by_column.setCurrentIndex(group_index if group_index >= 0 else 0)
         regex_pattern.setText(str(preview_context.regex_pattern or ""))
         target_index = regex_target.findData(str(preview_context.regex_target or "file_stem"))
         regex_target.setCurrentIndex(target_index if target_index >= 0 else 0)
         regex_pattern.blockSignals(False)
         regex_target.blockSignals(False)
+        root_mode.blockSignals(False)
+        group_by_column.blockSignals(False)
         enable_root_item.blockSignals(False)
         _sync_root_enabled_state(bool(getattr(preview_context, "enabled", True)))
 
@@ -1493,6 +1522,8 @@ def create_root_item_page(on_preview_requested):
     next_button.clicked.connect(lambda: page.request_next())
     regex_pattern.textChanged.connect(lambda _text: _refresh_preview())
     regex_target.currentIndexChanged.connect(lambda _index: _refresh_preview())
+    root_mode.currentIndexChanged.connect(lambda _index: (_sync_root_enabled_state(bool(enable_root_item.isChecked())), _refresh_preview()))
+    group_by_column.currentIndexChanged.connect(lambda _index: _refresh_preview())
     enable_root_item.toggled.connect(lambda checked: (_sync_root_enabled_state(bool(checked)), _refresh_preview()))
 
     page.get_config = get_config
