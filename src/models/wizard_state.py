@@ -11,6 +11,7 @@ import pandas as pd
 class WizardState:
     project_id: int | None = None
     tracker_id: int | None = None
+    upload_mode: str = "create"
 
     raw_df: pd.DataFrame | None = None
     merged_df: pd.DataFrame | None = None
@@ -38,5 +39,6 @@ class WizardState:
     group_lookup_cache: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     tracker_role_cache: dict[tuple[int, int, int], dict[str, list[dict[str, Any]]]] = field(default_factory=dict)
     tracker_item_lookup_cache: dict[tuple[str, str], tuple[Any, str | None, str | None]] = field(default_factory=dict)
+    existing_item_cache: dict[int, dict[str, Any]] = field(default_factory=dict)
 
     upload_result: dict[str, Any] | None = None

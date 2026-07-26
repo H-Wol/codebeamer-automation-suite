@@ -32,6 +32,19 @@ class HierarchyProcessor:
         return value
 
     @classmethod
+    def _normalize_dataframe_values(cls, dataframe: pd.DataFrame) -> pd.DataFrame:
+        if dataframe.empty:
+            return dataframe
+
+        work = dataframe.copy().astype(object)
+        for column in work.columns:
+            work[column] = pd.Series(
+                [cls.normalize_scalar(value) for value in work[column].tolist()],
+                dtype=object,
+            )
+        return work
+
+    @classmethod
     def collect_values(cls, values: list[Any], single_to_scalar: bool = False):
         cleaned = [cls.normalize_scalar(value) for value in values if not cls.is_blank(value)]
         if not cleaned:
@@ -106,7 +119,7 @@ class HierarchyProcessor:
 
             merged_rows.append(row_out)
 
-        merged_df = pd.DataFrame(merged_rows).reset_index(drop=True)
+        merged_df = self._normalize_dataframe_values(pd.DataFrame(merged_rows, dtype=object).reset_index(drop=True))
         merged_df["_row_id"] = merged_df.index
         return merged_df
 
@@ -136,12 +149,12 @@ class HierarchyProcessor:
             stack.append({"row_id": index, "indent": current_indent})
             prev_indent = current_indent
 
-        work["depth"] = depths
-        work["parent_row_id"] = parent_row_ids
-        return work
+        work["depth"] = pd.Series(depths, dtype=object)
+        work["parent_row_id"] = pd.Series(parent_row_ids, dtype=object)
+        return self._normalize_dataframe_values(work)
 
     def build_upload_df(self, hierarchy_df: pd.DataFrame, list_cols: list[str] | None = None) -> pd.DataFrame:
         work = hierarchy_df.copy()
         del list_cols
         work["upload_name"] = work[self.summary_col].apply(self.normalize_scalar)
-        return work
+        return self._normalize_dataframe_values(work)

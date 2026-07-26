@@ -60,6 +60,14 @@ class CodebeamerClient:
             resp.raise_for_status()
             return resp.json()
 
+    def _put(self, path: str, json_body: dict | None = None, params: dict | None = None) -> Any:
+        """PUT 요청을 보내고 JSON 응답을 돌려준다."""
+        url = f"{self.base_url}{path}"
+        with self._session() as s:
+            resp = s.put(url, json=json_body, params=params)
+            resp.raise_for_status()
+            return resp.json()
+
     @staticmethod
     def _extract_user_payloads(data: Any) -> list[dict[str, Any]]:
         """사용자 검색 응답에서 실제 사용자 목록만 골라낸다."""
@@ -316,12 +324,26 @@ class CodebeamerClient:
         params = {}
         if parent_item_id is not None:
             params["parentItemId"] = parent_item_id
+        return self._run_rate_limited_request(
+            "create_item",
+            lambda: self._post(f"/v3/trackers/{tracker_id}/items", json_body=payload, params=params),
+        )
+
+    def update_item(self, item_id: int, payload: dict) -> dict:
+        """기존 아이템을 갱신하고 서버 응답을 돌려준다."""
+        return self._run_rate_limited_request(
+            "update_item",
+            lambda: self._put(f"/v3/items/{int(item_id)}", json_body=payload),
+        )
+
+    def _run_rate_limited_request(self, request_name: str, request_func) -> dict:
+        """rate limit 재시도를 포함해 쓰기 요청을 실행한다."""
         attempts = self.rate_limit_max_retries + 1
         last_exc: Exception | None = None
 
         for attempt in range(1, attempts + 1):
             try:
-                return self._post(f"/v3/trackers/{tracker_id}/items", json_body=payload, params=params)
+                return request_func()
             except Exception as exc:
                 last_exc = exc
                 if not self._is_rate_limited(exc) or attempt >= attempts:
@@ -330,7 +352,8 @@ class CodebeamerClient:
                 delay_seconds = self.rate_limit_retry_delay_seconds * attempt
                 if self.logger is not None:
                     self.logger.warning(
-                        "create_item rate limited; retrying in %.2fs (attempt %s/%s)",
+                        "%s rate limited; retrying in %.2fs (attempt %s/%s)",
+                        request_name,
                         delay_seconds,
                         attempt,
                         attempts,
@@ -339,4 +362,4 @@ class CodebeamerClient:
 
         if last_exc is not None:
             raise last_exc
-        raise RuntimeError("create_item retry loop exited unexpectedly")
+        raise RuntimeError(f"{request_name} retry loop exited unexpectedly")

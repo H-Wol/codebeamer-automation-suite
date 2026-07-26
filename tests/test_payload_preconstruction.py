@@ -98,6 +98,24 @@ class TrackerItemPreconstructionTest(unittest.TestCase):
 
         self.assertEqual(item.name, "REQ-001")
 
+    def test_set_field_value_preserves_original_float_for_builtin_text(self) -> None:
+        """builtin 문자열 필드는 입력된 float 표현을 임의로 바꾸지 않아야 한다."""
+        item = TrackerItemBase()
+
+        item.set_field_value(
+            "name",
+            12.0,
+            {
+                "field_name": "Summary",
+                "field_type": "TextField",
+                "is_supported": True,
+                "payload_target_kind": PayloadTargetKind.BUILTIN_FIELD.value,
+                "preconstruction_kind": PreconstructionKind.BUILTIN_DIRECT.value,
+            },
+        )
+
+        self.assertEqual(item.name, "12.0")
+
     def test_set_field_value_builds_custom_field_value(self) -> None:
         """custom field는 알맞은 FieldValue 객체로 감싸져야 한다."""
         item = TrackerItemBase()
@@ -422,6 +440,39 @@ class WizardPayloadResolutionTest(unittest.TestCase):
         self.assertEqual(payload["name"], "REQ-1")
         self.assertEqual(payload["status"]["name"], "Open")
 
+    def test_preview_payload_prefers_row_value_over_default_status(self) -> None:
+        """행 값이 있으면 공통 기본값보다 행 값을 우선해야 한다."""
+        self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
+            {
+                "id": 1,
+                "name": "Summary",
+                "type": "TextField",
+                "trackerItemField": "name",
+                "valueModel": "TextFieldValue",
+            },
+            {
+                "id": 2,
+                "name": "Status",
+                "type": "OptionChoiceField",
+                "trackerItemField": "status",
+                "options": [{"id": 11, "name": "Open"}, {"id": 12, "name": "Review"}],
+                "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+            },
+        ])
+        self.wizard.state.selected_mapping = {"summary": "Summary", "status": "Status"}
+        self.wizard.state.upload_df = pd.DataFrame([
+            {"_row_id": 1, "upload_name": "REQ-1", "summary": "REQ-1", "status": "Review"}
+        ])
+        self.wizard.process_option_mapping(
+            self.wizard.state.selected_mapping,
+            selected_default_values={"Status": "Open"},
+        )
+
+        payload = self.wizard.preview_payload(1)
+
+        self.assertEqual(payload["name"], "REQ-1")
+        self.assertEqual(payload["status"]["name"], "Review")
+
     def test_preview_payload_applies_default_text_field_when_row_value_is_missing(self) -> None:
         """행 값이 없으면 선택한 공통 기본값으로 텍스트 custom field를 채워야 한다."""
         self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
@@ -506,6 +557,142 @@ class WizardPayloadResolutionTest(unittest.TestCase):
         self.assertEqual(payload["customFields"][0]["values"][0]["id"], 101)
         self.assertEqual(payload["customFields"][0]["values"][0]["type"], "UserReference")
 
+    def test_preview_payload_applies_default_member_field_when_row_value_is_missing(self) -> None:
+        """행 값이 없으면 선택한 공통 기본값으로 MemberField custom field를 채워야 한다."""
+
+        class NotFoundError(Exception):
+            def __init__(self) -> None:
+                self.response = type("Response", (), {"status_code": 404})()
+                super().__init__("not found")
+
+        class FakeMemberClient:
+            def get_user_by_name(self, name: str) -> UserInfo:
+                raise NotFoundError()
+
+            def get_user(self, user_id: int) -> UserInfo:
+                return UserInfo(id=user_id, name=f"User {user_id}")
+
+            def get_user_groups(self):
+                return [
+                    {"id": 301, "name": "QA Group", "type": "GroupReference"},
+                ]
+
+            def get_tracker_field_permissions(self, tracker_id: int, field_id: int):
+                return [
+                    {
+                        "status": {"id": 0, "name": "Unset", "type": "ChoiceOptionReference"},
+                        "permissions": [
+                            {
+                                "role": {"id": 201, "name": "Developer", "type": "RoleReference"},
+                            }
+                        ],
+                    }
+                ]
+
+        wizard = CodebeamerUploadWizard(
+            client=FakeMemberClient(),
+            processor=None,
+            mapper=self.mapper,
+        )
+        wizard.select_project(1)
+        wizard.select_tracker(1)
+        wizard.state.schema_df = self.mapper.flatten_schema_fields([
+            {
+                "id": 1,
+                "name": "Summary",
+                "type": "TextField",
+                "trackerItemField": "name",
+                "valueModel": "TextFieldValue",
+            },
+            {
+                "id": 9,
+                "name": "시험 담당자",
+                "type": "MemberField",
+                "valueModel": "ChoiceFieldValue",
+                "multipleValues": False,
+                "memberTypes": ["USER", "ROLE", "GROUP"],
+            },
+        ])
+        wizard.state.selected_mapping = {"summary": "Summary"}
+        wizard.state.upload_df = pd.DataFrame([
+            {"_row_id": 1, "upload_name": "REQ-1", "summary": "REQ-1"}
+        ])
+        wizard.process_option_mapping(
+            wizard.state.selected_mapping,
+            selected_default_values={"시험 담당자": "Developer"},
+        )
+
+        payload = wizard.preview_payload(1)
+
+        self.assertEqual(payload["name"], "REQ-1")
+        self.assertEqual(payload["customFields"][0]["name"], "시험 담당자")
+        self.assertEqual(payload["customFields"][0]["type"], "ChoiceFieldValue")
+        self.assertEqual(payload["customFields"][0]["values"][0]["id"], 201)
+        self.assertEqual(payload["customFields"][0]["values"][0]["type"], "RoleReference")
+
+    def test_preview_payload_applies_default_multi_tracker_item_field_when_row_value_is_missing(self) -> None:
+        """다중 TrackerItemChoiceField도 행 값이 없으면 기본값 1건을 사용해야 한다."""
+        self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
+            {
+                "id": 15,
+                "name": "연관 요구사항",
+                "type": "TrackerItemChoiceField",
+                "multipleValues": True,
+                "valueModel": "ChoiceFieldValue<TrackerItemReference>",
+            }
+        ])
+        self.wizard.state.selected_mapping = {}
+        self.wizard.state.upload_df = pd.DataFrame([
+            {"_row_id": 1, "upload_name": "REQ-1"}
+        ])
+        self.wizard.process_option_mapping(
+            self.wizard.state.selected_mapping,
+            selected_default_values={"연관 요구사항": "Candidate [REQ:20263672] extra"},
+        )
+
+        payload = self.wizard.preview_payload(1)
+        custom_field = payload["customFields"][0]
+
+        self.assertEqual(custom_field["name"], "연관 요구사항")
+        self.assertEqual(custom_field["type"], "ChoiceFieldValue")
+        self.assertEqual([value["id"] for value in custom_field["values"]], [20263672])
+        self.assertEqual([value["type"] for value in custom_field["values"]], ["TrackerItemReference"])
+
+    def test_build_root_item_payload_wraps_single_fixed_value_for_multi_choice_field(self) -> None:
+        """상단 데이터의 다중 선택형 필드는 단일 입력도 한 건짜리 목록으로 직렬화해야 한다."""
+        self.wizard.select_project(1)
+        self.wizard.select_tracker(1)
+        self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
+            {
+                "id": 1,
+                "name": "Summary",
+                "type": "TextField",
+                "trackerItemField": "name",
+                "valueModel": "TextFieldValue",
+            },
+            {
+                "id": 2,
+                "name": "태그",
+                "type": "OptionChoiceField",
+                "multipleValues": True,
+                "options": [{"id": 11, "name": "Open"}],
+                "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+            },
+        ])
+        self.wizard.state.option_maps = self.mapper.build_option_maps_from_schema(self.wizard.state.schema_df)
+
+        payload = self.wizard._build_root_item_payload(
+            "ROOT-REQ",
+            root_field_values={"태그": "Open"},
+        )
+
+        self.assertEqual(payload["name"], "ROOT-REQ")
+        self.assertEqual(payload["customFields"][0]["name"], "태그")
+        self.assertEqual(payload["customFields"][0]["type"], "ChoiceFieldValue")
+        self.assertEqual(len(payload["customFields"][0]["values"]), 1)
+        self.assertEqual(payload["customFields"][0]["values"][0]["id"], 11)
+        self.assertEqual(payload["customFields"][0]["values"][0]["name"], "Open")
+
     def test_process_option_mapping_reports_invalid_default_status_value(self) -> None:
         """잘못된 기본값은 option 검증 단계에서 바로 드러나야 한다."""
         self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
@@ -576,6 +763,39 @@ class WizardPayloadResolutionTest(unittest.TestCase):
             [value["type"] for value in custom_field["values"]],
             ["TrackerItemReference", "TrackerItemReference"],
         )
+
+    def test_preview_payload_builds_tracker_item_choice_field_from_multiline_bracket_text(self) -> None:
+        """다중 TrackerItemChoiceField는 한 셀의 여러 줄 텍스트도 각각 reference로 풀어야 한다."""
+        self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
+            {
+                "id": 15,
+                "name": "연관 요구사항",
+                "type": "TrackerItemChoiceField",
+                "multipleValues": True,
+                "valueModel": "ChoiceFieldValue<TrackerItemReference>",
+            }
+        ])
+        self.wizard.state.selected_mapping = {"related_items": "연관 요구사항"}
+        self.wizard.state.selected_option_mapping = {"related_items": "연관 요구사항"}
+        self.wizard.state.option_maps = self.mapper.build_option_maps_from_schema(self.wizard.state.schema_df)
+        self.wizard.state.upload_df = pd.DataFrame([
+            {
+                "_row_id": 1,
+                "upload_name": "REQ-1",
+                "related_items": "Candidate [REQ:20263671]\nCandidate [REQ:20263672]",
+            }
+        ])
+        self.wizard.state.converted_upload_df = self.mapper.apply_option_resolution(
+            self.wizard.state.upload_df,
+            self.wizard.state.selected_option_mapping,
+            self.wizard.state.option_maps,
+        )
+
+        payload = self.wizard.preview_payload(1)
+        custom_field = payload["customFields"][0]
+
+        self.assertEqual(custom_field["name"], "연관 요구사항")
+        self.assertEqual([value["id"] for value in custom_field["values"]], [20263671, 20263672])
 
 
 if __name__ == "__main__":

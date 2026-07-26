@@ -10,7 +10,7 @@
 4. [Codebeamer 프로젝트 시작 패키지](./codebeamer-project-start-kit.md)
 5. [CLI 사용 가이드](./cli-guide.md)
 6. [필드 지원 추가 가이드](./field-support-guide.md)
-7. [GUI 설계 초안](./gui-plan.md)
+7. [GUI 사용 가이드](./gui-plan.md)
 8. [트러블슈팅](./troubleshooting.md)
 9. [v2 변경 사항](./v2-changes.md)
 
@@ -34,8 +34,8 @@
 - [필드 지원 추가 가이드](./field-support-guide.md)
   새로운 schema field type 또는 reference field를 지원할 때 수정해야 하는 코드 경로와 구현 순서를 설명합니다.
 
-- [GUI 설계 초안](./gui-plan.md)
-  사용자용 GUI 의 단계형 화면 구성, 설정 항목, 매핑 UX, 진행률과 일시정지 요구사항, 현재 구현 상태를 정리합니다.
+- [GUI 사용 가이드](./gui-plan.md)
+  사용자용 GUI 의 실제 단계별 사용 흐름, 테스트 모드, 다중 파일 업로드, 상단 데이터 설정, 현재 구현 범위를 정리합니다.
 
 - [트러블슈팅](./troubleshooting.md)
   자주 발생하는 에러와 대응 방법을 정리합니다.

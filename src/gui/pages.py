@@ -1,10 +1,21 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
+from src.mapping_service import MappingService
 from .services import DEFAULT_TRACKER_ITEM_ID_REGEX
 from .services import ROOT_ASSIGNMENT_MODE_FILE_SOURCE
 from .services import ROOT_ASSIGNMENT_MODE_FIXED_VALUE
+from .services import ROOT_ITEM_MODE_FILE
+from .services import ROOT_ITEM_MODE_GROUP_BY_COLUMN
+from .services import gui_display_text
+from .settings_store import GUI_UPLOAD_MODE_CREATE
+from .settings_store import GUI_UPLOAD_MODE_UPDATE
+from .settings_store import normalize_gui_upload_mode
+from .styles import GUI_THEME_CHOICES
+from .styles import normalize_gui_theme_name
+from src.models import TrackerItemQueryMatchStrategy
 from src.models import TrackerItemResolutionMode
 
 
@@ -35,6 +46,136 @@ def _is_hidden_user_table_column(column_name: object) -> bool:
     if "__" in text:
         return True
     return False
+
+
+def _settings_mode_toggle_text(is_offline: bool) -> str:
+    return "테스트"
+
+
+def _settings_upload_mode_choices() -> list[tuple[str, str]]:
+    return [
+        (GUI_UPLOAD_MODE_CREATE, "업로드"),
+        (GUI_UPLOAD_MODE_UPDATE, "업데이트"),
+    ]
+
+
+def _settings_mode_description(is_offline: bool) -> str:
+    if bool(is_offline):
+        return "테스트 모드에서는 저장된 schema/config snapshot으로만 검증합니다."
+    return "기본 모드에서는 Codebeamer 서버 연결과 로그인 정보를 사용합니다."
+
+
+def _project_selection_status_text(is_offline: bool) -> str:
+    if bool(is_offline):
+        return "테스트 모드에서는 schema snapshot 기준 가상 프로젝트/트래커를 자동으로 불러옵니다."
+    return "프로젝트 불러오기를 실행하면 프로젝트 목록을 조회합니다."
+
+
+def _project_selection_refresh_button_text(is_offline: bool) -> str:
+    return "스냅샷 불러오기" if bool(is_offline) else "프로젝트 불러오기"
+
+
+def _project_selection_source_signature(settings: Any) -> tuple[str, str, str, str, str]:
+    return (
+        "offline" if bool(getattr(settings, "offline_mode", False)) else "online",
+        str(getattr(settings, "offline_schema_path", "") or "").strip(),
+        str(getattr(settings, "offline_tracker_configuration_path", "") or "").strip(),
+        str(getattr(settings, "base_url", "") or "").strip(),
+        str(getattr(settings, "username", "") or "").strip(),
+    )
+
+
+def _tracker_item_sample_values(upload_preview_df: Any, column_name: str, limit: int = 3) -> list[Any]:
+    if upload_preview_df is None or not hasattr(upload_preview_df, "columns"):
+        return []
+    normalized_column = str(column_name).strip()
+    if normalized_column not in upload_preview_df.columns:
+        return []
+
+    samples: list[Any] = []
+    seen_keys: set[str] = set()
+    for raw_value in upload_preview_df[normalized_column].tolist():
+        if raw_value is None:
+            continue
+        if isinstance(raw_value, str) and not raw_value.strip():
+            continue
+        if isinstance(raw_value, list):
+            flattened = [str(item).strip() for item in raw_value if item is not None and str(item).strip()]
+            if not flattened:
+                continue
+            sample_key = repr(flattened)
+        else:
+            sample_key = str(raw_value).strip()
+            if not sample_key:
+                continue
+        if sample_key in seen_keys:
+            continue
+        seen_keys.add(sample_key)
+        samples.append(raw_value)
+        if len(samples) >= max(int(limit), 1):
+            break
+    return samples
+
+
+def _format_tracker_item_example_value(raw_value: Any) -> str:
+    if isinstance(raw_value, list):
+        parts = [str(item).strip() for item in raw_value if item is not None and str(item).strip()]
+        if not parts:
+            return "(빈 값)"
+        return ", ".join(parts[:3]) + (" ..." if len(parts) > 3 else "")
+    text = str(raw_value or "").strip()
+    return text or "(빈 값)"
+
+
+def _format_tracker_item_example_resolution(resolved_value: Any) -> str:
+    if isinstance(resolved_value, list):
+        ids = [str(item.get("id")) for item in resolved_value if isinstance(item, dict) and item.get("id") is not None]
+        return ", ".join(ids) if ids else "(해석 실패)"
+    if isinstance(resolved_value, dict) and resolved_value.get("id") is not None:
+        return str(resolved_value["id"])
+    return "(해석 실패)"
+
+
+def _normalize_tracker_item_regex_preview_error(exc: Exception) -> str:
+    message = str(exc).strip()
+    lowered = message.lower()
+    if "regex pattern is empty" in lowered:
+        return "정규식 비어 있음"
+    if "did not match value" in lowered:
+        return "불일치"
+    if "did not produce numeric id" in lowered:
+        return "숫자 ID 아님"
+    if "produced empty match" in lowered:
+        return "빈 결과"
+    return message or "해석 실패"
+
+
+def _build_tracker_item_regex_preview_text(
+    sample_values: list[Any],
+    *,
+    pattern: str,
+    multiple_values: bool,
+) -> str:
+    regex_pattern = str(pattern or "").strip()
+    if not regex_pattern:
+        return "정규식 없음"
+    if not sample_values:
+        return "샘플 값 없음"
+
+    examples: list[str] = []
+    for raw_value in sample_values[:3]:
+        source_text = _format_tracker_item_example_value(raw_value)
+        try:
+            resolved_value = MappingService.resolve_tracker_item_reference_value_with_regex(
+                raw_value,
+                multiple_values=multiple_values,
+                pattern=regex_pattern,
+            )
+            result_text = _format_tracker_item_example_resolution(resolved_value)
+        except Exception as exc:
+            result_text = _normalize_tracker_item_regex_preview_error(exc)
+        examples.append(f"{source_text} -> {result_text}")
+    return " | ".join(examples)
 
 def _require_qt():
     try:
@@ -137,6 +278,7 @@ def create_settings_page(
     settings_store,
     initial_settings,
     on_settings_changed,
+    on_theme_changed=None,
 ):
     qt = _require_qt()
     QWidget = qt["QWidget"]
@@ -147,6 +289,7 @@ def create_settings_page(
     QLineEdit = qt["QLineEdit"]
     QFrame = qt["QFrame"]
     QCheckBox = qt["QCheckBox"]
+    QComboBox = qt["QComboBox"]
     QFileDialog = qt["QFileDialog"]
     QSpinBox = qt["QSpinBox"]
     QDoubleSpinBox = qt["QDoubleSpinBox"]
@@ -169,14 +312,29 @@ def create_settings_page(
     password.setEchoMode(QLineEdit.EchoMode.Password)
     save_password = QCheckBox("비밀번호 저장")
     save_password.setChecked(initial_settings.save_password)
-    offline_mode = QCheckBox("오프라인 테스트 모드")
-    offline_mode.setChecked(bool(getattr(initial_settings, "offline_mode", False)))
+    mode_toggle = QPushButton()
+    mode_toggle.setObjectName("mode_toggle")
+    mode_toggle.setCheckable(True)
+    mode_toggle.setChecked(bool(getattr(initial_settings, "offline_mode", False)))
+    mode_toggle.setToolTip("저장된 schema/config snapshot으로 검증하는 테스트 모드입니다.")
+    mode_badge = QLabel("테스트 모드")
+    mode_badge.setObjectName("mode_badge")
+    mode_badge.hide()
+    mode_row_widget = QWidget()
+    mode_row = QHBoxLayout(mode_row_widget)
+    mode_row.setContentsMargins(0, 0, 0, 0)
+    mode_row.setSpacing(8)
+    mode_row.addStretch(1)
+    mode_row.addWidget(mode_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+    mode_row.addWidget(mode_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
     offline_schema_path = QLineEdit(str(getattr(initial_settings, "offline_schema_path", "") or ""))
     offline_schema_button = QPushButton("스키마 선택")
     offline_config_path = QLineEdit(
         str(getattr(initial_settings, "offline_tracker_configuration_path", "") or "")
     )
     offline_config_button = QPushButton("설정 선택")
+    theme_combo = QComboBox()
+    upload_mode_combo = QComboBox()
     header_row = QSpinBox()
     header_row.setMinimum(1)
     header_row.setValue(initial_settings.excel_header_row)
@@ -199,6 +357,8 @@ def create_settings_page(
         password,
         offline_schema_path,
         offline_config_path,
+        theme_combo,
+        upload_mode_combo,
     ):
         _configure_form_field(field_widget)
 
@@ -220,10 +380,26 @@ def create_settings_page(
     form.addRow("Username", username)
     form.addRow("Password", password)
     form.addRow("", save_password)
-    form.addRow("", offline_mode)
-    form.addRow("Schema Snapshot", offline_schema_row_widget)
-    form.addRow("Config Snapshot", offline_config_row_widget)
+    form.addRow("작업 모드", upload_mode_combo)
+    form.addRow("테마", theme_combo)
+    form.addRow("", mode_row_widget)
     layout.addLayout(form)
+
+    offline_card = QFrame()
+    offline_card.setObjectName("advanced_card")
+    offline_layout = QVBoxLayout(offline_card)
+    offline_layout.setContentsMargins(14, 12, 14, 12)
+    offline_layout.setSpacing(8)
+    offline_description = QLabel("테스트 모드에서만 사용하는 snapshot 경로입니다.")
+    offline_description.setObjectName("section_label")
+    offline_layout.addWidget(offline_description)
+    offline_form = QFormLayout()
+    _configure_form_layout(offline_form)
+    offline_form.setContentsMargins(0, 0, 0, 0)
+    offline_form.addRow("Schema Snapshot", offline_schema_row_widget)
+    offline_form.addRow("Config Snapshot", offline_config_row_widget)
+    offline_layout.addLayout(offline_form)
+    layout.addWidget(offline_card)
 
     advanced_toggle = QToolButton()
     advanced_toggle.setObjectName("section_toggle")
@@ -284,6 +460,7 @@ def create_settings_page(
         bool(
             getattr(initial_settings, "offline_mode", False)
             and str(getattr(initial_settings, "offline_schema_path", "") or "").strip()
+            and normalize_gui_upload_mode(getattr(initial_settings, "upload_mode", None)) != GUI_UPLOAD_MODE_UPDATE
         ) or bool(initial_settings.base_url and initial_settings.username and initial_settings.password)
     )
     buttons.addWidget(load_button)
@@ -294,31 +471,57 @@ def create_settings_page(
     layout.addStretch(1)
 
     def _update_next_button_state() -> None:
-        if offline_mode.isChecked():
-            next_button.setEnabled(bool(Path(offline_schema_path.text().strip()).is_file()))
+        is_update_mode = normalize_gui_upload_mode(upload_mode_combo.currentData()) == GUI_UPLOAD_MODE_UPDATE
+        if mode_toggle.isChecked():
+            next_button.setEnabled(
+                bool(Path(offline_schema_path.text().strip()).is_file()) and not is_update_mode
+            )
             return
         next_button.setEnabled(bool(base_url.text().strip() and username.text().strip() and password.text()))
 
+    def _request_settings_reflow() -> None:
+        request_content_reflow = getattr(page, "request_content_reflow", None)
+        if callable(request_content_reflow):
+            request_content_reflow(
+                allow_grow=bool(
+                    mode_toggle.isChecked()
+                    or advanced_toggle.isChecked()
+                    or status_label.isVisible()
+                )
+            )
+
     def _sync_offline_mode_state() -> None:
-        is_offline = bool(offline_mode.isChecked())
+        is_offline = bool(mode_toggle.isChecked())
+        mode_toggle.setText(_settings_mode_toggle_text(is_offline))
+        mode_badge.setVisible(is_offline)
+        mode_badge.setToolTip(_settings_mode_description(is_offline))
+        mode_toggle.setToolTip(_settings_mode_description(is_offline))
         base_url.setEnabled(not is_offline)
         username.setEnabled(not is_offline)
         password.setEnabled(not is_offline)
         save_password.setEnabled(not is_offline)
+        offline_card.setVisible(is_offline)
         offline_schema_path.setEnabled(is_offline)
         offline_schema_button.setEnabled(is_offline)
         offline_config_path.setEnabled(is_offline)
         offline_config_button.setEnabled(is_offline)
         _update_next_button_state()
+        _request_settings_reflow()
 
     def _collect_settings():
         current_settings = getattr(page, "_current_settings", initial_settings)
         return type(initial_settings)(
+            theme_name=normalize_gui_theme_name(theme_combo.currentData()),
+            upload_mode=normalize_gui_upload_mode(upload_mode_combo.currentData()),
+            window_width=int(getattr(current_settings, "window_width", 1160) or 1160),
+            window_height=int(getattr(current_settings, "window_height", 780) or 780),
+            window_is_maximized=bool(getattr(current_settings, "window_is_maximized", False)),
+            window_is_fullscreen=bool(getattr(current_settings, "window_is_fullscreen", False)),
             base_url=base_url.text().strip(),
             username=username.text().strip(),
             password=password.text(),
             save_password=save_password.isChecked(),
-            offline_mode=offline_mode.isChecked(),
+            offline_mode=mode_toggle.isChecked(),
             offline_schema_path=offline_schema_path.text().strip(),
             offline_tracker_configuration_path=offline_config_path.text().strip(),
             default_project_id=str(getattr(current_settings, "default_project_id", "") or ""),
@@ -335,9 +538,7 @@ def create_settings_page(
     def _set_status(message: str) -> None:
         status_label.setVisible(bool(message))
         status_label.setText(message)
-        request_content_reflow = getattr(page, "request_content_reflow", None)
-        if callable(request_content_reflow):
-            request_content_reflow(allow_grow=bool(message))
+        _request_settings_reflow()
 
     def _apply_settings(loaded) -> None:
         page._current_settings = loaded
@@ -345,7 +546,9 @@ def create_settings_page(
         username.setText(loaded.username)
         password.setText(loaded.password)
         save_password.setChecked(loaded.save_password)
-        offline_mode.setChecked(bool(getattr(loaded, "offline_mode", False)))
+        _select_theme(normalize_gui_theme_name(getattr(loaded, "theme_name", None)))
+        _select_upload_mode(normalize_gui_upload_mode(getattr(loaded, "upload_mode", None)))
+        mode_toggle.setChecked(bool(getattr(loaded, "offline_mode", False)))
         offline_schema_path.setText(str(getattr(loaded, "offline_schema_path", "") or ""))
         offline_config_path.setText(str(getattr(loaded, "offline_tracker_configuration_path", "") or ""))
         header_row.setValue(loaded.excel_header_row)
@@ -355,6 +558,24 @@ def create_settings_page(
         retry_count.setValue(loaded.rate_limit_max_retries)
         output_dir.setText(loaded.output_dir)
         _sync_offline_mode_state()
+
+    def _select_theme(theme_name: str) -> None:
+        normalized_theme = normalize_gui_theme_name(theme_name)
+        index = theme_combo.findData(normalized_theme)
+        if index < 0:
+            index = 0
+        theme_combo.setCurrentIndex(index)
+
+    def _select_upload_mode(upload_mode: str) -> None:
+        normalized_mode = normalize_gui_upload_mode(upload_mode)
+        index = upload_mode_combo.findData(normalized_mode)
+        if index < 0:
+            index = 0
+        upload_mode_combo.setCurrentIndex(index)
+
+    def _preview_theme() -> None:
+        if callable(on_theme_changed):
+            on_theme_changed(normalize_gui_theme_name(theme_combo.currentData()))
 
     def _choose_snapshot_path(target_widget, *, title: str) -> None:
         start_path = target_widget.text().strip() or str(getattr(page, "_current_settings", initial_settings).last_file_path or "")
@@ -383,8 +604,11 @@ def create_settings_page(
     def _go_next():
         current = _collect_settings()
         if current.offline_mode:
+            if current.upload_mode == GUI_UPLOAD_MODE_UPDATE:
+                _set_status("테스트 모드에서는 업데이트 작업을 지원하지 않습니다.")
+                return
             if not current.offline_schema_path:
-                _set_status("오프라인 모드에서는 schema snapshot JSON 경로가 필요합니다.")
+                _set_status("테스트 모드에서는 schema snapshot JSON 경로가 필요합니다.")
                 return
             if not Path(current.offline_schema_path).is_file():
                 _set_status("선택한 schema snapshot JSON 파일을 찾을 수 없습니다.")
@@ -404,24 +628,32 @@ def create_settings_page(
     base_url.textChanged.connect(lambda _: _update_next_button_state())
     username.textChanged.connect(lambda _: _update_next_button_state())
     password.textChanged.connect(lambda _: _update_next_button_state())
-    offline_mode.toggled.connect(lambda _: _sync_offline_mode_state())
+    mode_toggle.toggled.connect(lambda _: _sync_offline_mode_state())
     offline_schema_button.clicked.connect(
-        lambda: _choose_snapshot_path(offline_schema_path, title="오프라인 schema snapshot 선택")
+        lambda: _choose_snapshot_path(offline_schema_path, title="테스트 schema snapshot 선택")
     )
     offline_config_button.clicked.connect(
-        lambda: _choose_snapshot_path(offline_config_path, title="오프라인 tracker configuration 선택")
+        lambda: _choose_snapshot_path(offline_config_path, title="테스트 tracker configuration 선택")
     )
     offline_schema_path.textChanged.connect(lambda _: _update_next_button_state())
+    upload_mode_combo.currentIndexChanged.connect(lambda _: _update_next_button_state())
+    theme_combo.currentIndexChanged.connect(lambda _: _preview_theme())
     advanced_toggle.toggled.connect(
         lambda checked: (
             advanced_card.setVisible(checked),
             advanced_toggle.setArrowType(
                 Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
             ),
-            getattr(page, "request_content_reflow", lambda **_: None)(allow_grow=checked),
+            _request_settings_reflow(),
         )
     )
 
+    for theme_key, theme_label in GUI_THEME_CHOICES:
+        theme_combo.addItem(theme_label, theme_key)
+    for upload_mode, upload_mode_label in _settings_upload_mode_choices():
+        upload_mode_combo.addItem(upload_mode_label, upload_mode)
+    _select_theme(normalize_gui_theme_name(getattr(initial_settings, "theme_name", None)))
+    _select_upload_mode(normalize_gui_upload_mode(getattr(initial_settings, "upload_mode", None)))
     _sync_offline_mode_state()
     page.get_settings = _collect_settings
     page.set_settings = _apply_settings
@@ -466,17 +698,15 @@ def create_project_selection_page(
     form.addRow("트래커", tracker_combo)
     layout.addLayout(form)
 
-    status_label = QLabel(
-        "오프라인 모드에서는 schema snapshot 기준 가상 프로젝트/트래커를 불러옵니다."
-        if bool(getattr(initial_settings, "offline_mode", False))
-        else "연결 테스트를 실행하면 프로젝트 목록을 불러옵니다."
-    )
+    status_label = QLabel(_project_selection_status_text(bool(getattr(initial_settings, "offline_mode", False))))
     status_label.setObjectName("status_label")
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
     previous_button = QPushButton("이전")
-    refresh_button = QPushButton("프로젝트 불러오기")
+    refresh_button = QPushButton(
+        _project_selection_refresh_button_text(bool(getattr(initial_settings, "offline_mode", False)))
+    )
     next_button = QPushButton("다음")
     refresh_button.setObjectName("primary_button")
     next_button.setObjectName("primary_button")
@@ -490,6 +720,17 @@ def create_project_selection_page(
 
     def _update_next_button_state() -> None:
         next_button.setEnabled(bool(page.selected_project_id and page.selected_tracker_id))
+
+    def _clear_combo_items() -> None:
+        project_combo.blockSignals(True)
+        tracker_combo.blockSignals(True)
+        project_combo.clear()
+        tracker_combo.clear()
+        project_combo.setEnabled(False)
+        tracker_combo.setEnabled(False)
+        project_combo.blockSignals(False)
+        tracker_combo.blockSignals(False)
+        _update_next_button_state()
 
     def _set_items(combo, items: list[dict], selected_id: str) -> None:
         combo.blockSignals(True)
@@ -507,6 +748,24 @@ def create_project_selection_page(
         settings = on_settings_changed(None)
         return settings
 
+    def _sync_from_settings(*, auto_load: bool = False) -> None:
+        settings = _current_settings()
+        is_offline = bool(getattr(settings, "offline_mode", False))
+        refresh_button.setText(_project_selection_refresh_button_text(is_offline))
+        source_signature = _project_selection_source_signature(settings)
+        source_changed = source_signature != getattr(page, "_source_signature", None)
+        if source_changed:
+            page._source_signature = source_signature
+            page.selected_project_id = str(getattr(settings, "default_project_id", "") or "")
+            page.selected_tracker_id = str(getattr(settings, "default_tracker_id", "") or "")
+            _clear_combo_items()
+            status_label.setText(_project_selection_status_text(is_offline))
+        elif not str(status_label.text() or "").strip():
+            status_label.setText(_project_selection_status_text(is_offline))
+
+        if auto_load and is_offline and project_combo.count() == 0:
+            _refresh_projects()
+
     def _refresh_projects() -> None:
         settings = _current_settings()
         try:
@@ -516,17 +775,14 @@ def create_project_selection_page(
             status_label.setText(message)
             if callable(on_error):
                 on_error("프로젝트 조회 실패", message)
-            project_combo.clear()
-            tracker_combo.clear()
-            project_combo.setEnabled(False)
-            tracker_combo.setEnabled(False)
+            _clear_combo_items()
             page.selected_project_id = ""
             page.selected_tracker_id = ""
             _update_next_button_state()
             return
         _set_items(project_combo, projects, page.selected_project_id)
         status_label.setText(
-            "오프라인 프로젝트 목록을 불러왔습니다."
+            "테스트 프로젝트 목록을 불러왔습니다."
             if bool(getattr(settings, "offline_mode", False))
             else "프로젝트 목록을 불러왔습니다."
         )
@@ -536,6 +792,10 @@ def create_project_selection_page(
                 selected_index = 0
                 project_combo.setCurrentIndex(0)
             _handle_project_changed(selected_index)
+
+    def _refresh_projects_for_current_settings() -> None:
+        _sync_from_settings(auto_load=False)
+        _refresh_projects()
 
     def _handle_project_changed(index: int) -> None:
         project_id = project_combo.itemData(index)
@@ -567,7 +827,7 @@ def create_project_selection_page(
             page.selected_tracker_id = str(tracker_combo.currentData())
         _update_next_button_state()
         if bool(getattr(settings, "offline_mode", False)):
-            status_label.setText("오프라인 tracker snapshot 정보를 불러왔습니다.")
+            status_label.setText("테스트 tracker snapshot 정보를 불러왔습니다.")
         else:
             status_label.setText(f"프로젝트 {project_combo.currentText()}의 트래커를 불러왔습니다.")
 
@@ -590,7 +850,7 @@ def create_project_selection_page(
         page.request_next()
 
     previous_button.clicked.connect(lambda: page.request_previous())
-    refresh_button.clicked.connect(_refresh_projects)
+    refresh_button.clicked.connect(_refresh_projects_for_current_settings)
     next_button.clicked.connect(_go_next)
     project_combo.currentIndexChanged.connect(_handle_project_changed)
     tracker_combo.currentIndexChanged.connect(_handle_tracker_changed)
@@ -616,6 +876,8 @@ def create_project_selection_page(
 
     page.load_selection = _load_selection
     page.get_selection = _get_selection
+    page.on_page_shown = lambda: _sync_from_settings(auto_load=True)
+    _sync_from_settings(auto_load=False)
     return page
 
 
@@ -931,7 +1193,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     return page
 
 
-def create_root_item_page(on_preview_requested):
+def create_root_item_page(on_preview_requested, *, page_mode: str = "structure"):
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -945,37 +1207,59 @@ def create_root_item_page(on_preview_requested):
     QTableWidget = qt["QTableWidget"]
     QTableWidgetItem = qt["QTableWidgetItem"]
 
+    is_structure_page = str(page_mode or "structure").strip() != "fields"
+    is_field_page = not is_structure_page
+
     page = QWidget()
     layout = QVBoxLayout(page)
     layout.setContentsMargins(6, 6, 6, 6)
     layout.setSpacing(10)
 
     description_label = QLabel(
-        "파일명 기반으로 생성할 최상위 부모 데이터의 이름과 필드 값을 설정합니다. "
-        "필드별로 파일명/정규식 값을 쓰거나 스키마 선택값을 고를 수 있습니다."
+        (
+            "업로드 전에 생성할 상단 폴더 구조를 설정합니다. "
+            "파일별 루트 폴더와 파일 내부 특정 컬럼 값별 그룹 폴더를 각각 독립적으로 사용할 수 있습니다."
+            if is_structure_page
+            else "앞 단계에서 정한 상단 폴더 구조에 어떤 필드 값을 넣을지 설정합니다."
+        )
     )
     description_label.setWordWrap(True)
     description_label.setObjectName("section_label")
     layout.addWidget(description_label)
 
-    enable_root_item = QCheckBox("파일별 상단 데이터 생성")
+    enable_root_item = QCheckBox("파일별 최상단 폴더 생성")
     enable_root_item.setChecked(True)
     layout.addWidget(enable_root_item)
 
+    enable_group_folder = QCheckBox("엑셀 컬럼별 그룹 폴더 생성")
+    enable_group_folder.setChecked(False)
+    layout.addWidget(enable_group_folder)
+
+    structure_summary_label = QLabel("")
+    structure_summary_label.setWordWrap(True)
+    structure_summary_label.setObjectName("status_label")
+    layout.addWidget(structure_summary_label)
+
     form = QFormLayout()
     _configure_form_layout(form)
+    group_by_column = QComboBox()
+    group_by_column.addItem("사용 안 함", "")
     regex_target = QComboBox()
     regex_target.addItem("파일명(확장자 제외)", "file_stem")
     regex_target.addItem("전체 파일명", "file_name")
     regex_pattern = QLineEdit()
     regex_pattern.setPlaceholderText(r"예: ^(?P<project>[A-Z]+)_(?P<title>.+)$")
+    _configure_form_field(group_by_column)
     _configure_form_field(regex_target)
     _configure_form_field(regex_pattern, minimum_width=320)
+    form.addRow("그룹 컬럼", group_by_column)
     form.addRow("정규식 대상", regex_target)
     form.addRow("정규식", regex_pattern)
-    layout.addLayout(form)
+    form_container = QWidget()
+    form_container.setLayout(form)
+    layout.addWidget(form_container)
 
-    preview_label = QLabel("파일명 파싱 미리보기")
+    preview_label = QLabel("상단 데이터 소스 미리보기" if is_structure_page else "상단 폴더 미리보기")
     preview_label.setObjectName("section_label")
     layout.addWidget(preview_label)
 
@@ -983,7 +1267,7 @@ def create_root_item_page(on_preview_requested):
     preview_table.setAlternatingRowColors(True)
     layout.addWidget(preview_table)
 
-    field_label = QLabel("상단 데이터 필드 매핑")
+    field_label = QLabel("상단 폴더 필드 매핑")
     field_label.setObjectName("section_label")
     layout.addWidget(field_label)
 
@@ -1012,13 +1296,28 @@ def create_root_item_page(on_preview_requested):
     page._field_candidates = []
     page._current_preview_context = None
 
-    def _sync_root_enabled_state(enabled: bool) -> None:
-        regex_target.setEnabled(enabled)
-        regex_pattern.setEnabled(enabled)
-        preview_table.setEnabled(enabled)
-        field_table.setEnabled(enabled)
-        preview_label.setEnabled(enabled)
-        field_label.setEnabled(enabled)
+    enable_root_item.setVisible(is_structure_page)
+    enable_group_folder.setVisible(is_structure_page)
+    form_container.setVisible(is_structure_page)
+    structure_summary_label.setVisible(is_field_page)
+    field_label.setVisible(is_field_page)
+    field_table.setVisible(is_field_page)
+
+    def _sync_root_enabled_state(file_root_enabled: bool, group_enabled: bool) -> None:
+        has_any_root = file_root_enabled or group_enabled
+        group_by_column.setEnabled(group_enabled)
+        regex_target.setEnabled(has_any_root)
+        regex_pattern.setEnabled(has_any_root)
+        preview_table.setEnabled(has_any_root)
+        field_table.setEnabled(has_any_root)
+        preview_label.setEnabled(has_any_root)
+        field_label.setEnabled(has_any_root)
+        if group_enabled:
+            field_label.setText("그룹 폴더 필드 매핑")
+        elif file_root_enabled:
+            field_label.setText("파일 루트 필드 매핑")
+        else:
+            field_label.setText("상단 데이터 필드 매핑")
 
     def _current_field_assignments() -> dict[str, dict[str, object]]:
         field_assignments: dict[str, dict[str, object]] = {}
@@ -1055,8 +1354,18 @@ def create_root_item_page(on_preview_requested):
 
     def get_config() -> dict[str, object]:
         field_assignments = _current_field_assignments()
+        if not field_assignments and page._current_preview_context is not None:
+            field_assignments = {
+                str(schema_field): dict(assignment)
+                for schema_field, assignment in dict(getattr(page._current_preview_context, "field_assignments", {}) or {}).items()
+                if str(schema_field).strip() and isinstance(assignment, dict)
+            }
+        group_enabled = bool(enable_group_folder.isChecked())
         return {
             "enabled": bool(enable_root_item.isChecked()),
+            "group_enabled": group_enabled,
+            "root_mode": ROOT_ITEM_MODE_GROUP_BY_COLUMN if group_enabled else ROOT_ITEM_MODE_FILE,
+            "group_by_column": str(group_by_column.currentData() or "").strip(),
             "regex_pattern": regex_pattern.text().strip(),
             "regex_target": str(regex_target.currentData() or "file_stem"),
             "field_assignments": field_assignments,
@@ -1076,7 +1385,7 @@ def create_root_item_page(on_preview_requested):
     def _mode_options(candidate) -> list[tuple[str, str]]:
         options: list[tuple[str, str]] = []
         if bool(candidate.allows_file_source):
-            options.append(("파일명/정규식", ROOT_ASSIGNMENT_MODE_FILE_SOURCE))
+            options.append(("소스 값", ROOT_ASSIGNMENT_MODE_FILE_SOURCE))
         if bool(candidate.allows_fixed_value):
             options.append((
                 "직접 입력" if bool(getattr(candidate, "allows_custom_value", False)) else "고정값",
@@ -1111,6 +1420,15 @@ def create_root_item_page(on_preview_requested):
             value_combo.setCurrentIndex(selected_index if selected_index >= 0 else 0)
         value_combo.blockSignals(False)
 
+    def _bind_editable_combo_commit(combo, callback) -> None:
+        line_edit = combo.lineEdit()
+        if line_edit is None:
+            return
+        if bool(line_edit.property("_codex_commit_bound")):
+            return
+        line_edit.setProperty("_codex_commit_bound", True)
+        line_edit.editingFinished.connect(callback)
+
     def _sync_row_enabled_state(enabled_widget, mode_combo, value_combo, *, candidate) -> None:
         row_enabled = bool(enabled_widget.isChecked()) and bool(candidate.supported)
         has_mode_choice = mode_combo.count() > 0 and str(mode_combo.itemData(0) or "").strip() != ""
@@ -1133,15 +1451,41 @@ def create_root_item_page(on_preview_requested):
 
         regex_pattern.blockSignals(True)
         regex_target.blockSignals(True)
+        group_by_column.blockSignals(True)
         enable_root_item.blockSignals(True)
+        enable_group_folder.blockSignals(True)
         enable_root_item.setChecked(bool(getattr(preview_context, "enabled", True)))
+        enable_group_folder.setChecked(bool(getattr(preview_context, "group_enabled", False)))
+        group_by_column.clear()
+        group_by_column.addItem("사용 안 함", "")
+        for column_name in getattr(preview_context, "group_column_options", []):
+            group_by_column.addItem(str(column_name), str(column_name))
+        group_index = group_by_column.findData(str(getattr(preview_context, "group_by_column", "") or ""))
+        group_by_column.setCurrentIndex(group_index if group_index >= 0 else 0)
         regex_pattern.setText(str(preview_context.regex_pattern or ""))
         target_index = regex_target.findData(str(preview_context.regex_target or "file_stem"))
         regex_target.setCurrentIndex(target_index if target_index >= 0 else 0)
         regex_pattern.blockSignals(False)
         regex_target.blockSignals(False)
+        group_by_column.blockSignals(False)
         enable_root_item.blockSignals(False)
-        _sync_root_enabled_state(bool(getattr(preview_context, "enabled", True)))
+        enable_group_folder.blockSignals(False)
+        _sync_root_enabled_state(
+            bool(getattr(preview_context, "enabled", True)),
+            bool(getattr(preview_context, "group_enabled", False)),
+        )
+        if is_field_page:
+            structure_parts: list[str] = []
+            if bool(getattr(preview_context, "enabled", False)):
+                structure_parts.append("파일별 최상단 폴더")
+            if bool(getattr(preview_context, "group_enabled", False)):
+                group_name = str(getattr(preview_context, "group_by_column", "") or "").strip()
+                structure_parts.append(
+                    f"그룹 폴더 ({group_name})" if group_name else "그룹 폴더"
+                )
+            structure_summary_label.setText(
+                "현재 구조: " + (", ".join(structure_parts) if structure_parts else "상단 폴더 생성 안 함")
+            )
 
         preview_headers = [
             _column_label(column_name, preview_context.source_options)
@@ -1197,6 +1541,7 @@ def create_root_item_page(on_preview_requested):
                 str(mode_combo.currentData() or ""),
                 selected_value,
             )
+            _bind_editable_combo_commit(value_combo, _refresh_preview)
             field_table.setCellWidget(row_index, 5, value_combo)
             _sync_row_enabled_state(
                 enabled_widget,
@@ -1222,11 +1567,17 @@ def create_root_item_page(on_preview_requested):
                     str(mode_widget.currentData() or ""),
                     "",
                 )
+                _bind_editable_combo_commit(value_widget, _refresh_preview)
+                _refresh_preview()
+
+            def _on_value_changed(_text, *, value_widget=value_combo):
+                if bool(value_widget.isEditable()):
+                    return
                 _refresh_preview()
 
             enabled_widget.toggled.connect(_on_enabled_toggled)
             mode_combo.currentIndexChanged.connect(_on_mode_changed)
-            value_combo.currentTextChanged.connect(lambda _text: _refresh_preview())
+            value_combo.currentTextChanged.connect(_on_value_changed)
 
         _configure_table_columns(field_table, [80, 240, 180, 90, 160, 240])
         status_label.setText(str(preview_context.status_message or ""))
@@ -1237,7 +1588,19 @@ def create_root_item_page(on_preview_requested):
     next_button.clicked.connect(lambda: page.request_next())
     regex_pattern.textChanged.connect(lambda _text: _refresh_preview())
     regex_target.currentIndexChanged.connect(lambda _index: _refresh_preview())
-    enable_root_item.toggled.connect(lambda checked: (_sync_root_enabled_state(bool(checked)), _refresh_preview()))
+    group_by_column.currentIndexChanged.connect(lambda _index: _refresh_preview())
+    enable_root_item.toggled.connect(
+        lambda checked: (
+            _sync_root_enabled_state(bool(checked), bool(enable_group_folder.isChecked())),
+            _refresh_preview(),
+        )
+    )
+    enable_group_folder.toggled.connect(
+        lambda checked: (
+            _sync_root_enabled_state(bool(enable_root_item.isChecked()), bool(checked)),
+            _refresh_preview(),
+        )
+    )
 
     page.get_config = get_config
     page.load_context = load_context
@@ -1328,10 +1691,10 @@ def create_mapping_page(on_validate_requested, on_error=None):
     tracker_item_help_label.setWordWrap(True)
     layout.addWidget(tracker_item_help_label)
 
-    tracker_item_table = QTableWidget(0, 5)
-    tracker_item_table.setHorizontalHeaderLabels(["Excel 컬럼", "Codebeamer 필드", "방식", "정규식", "조회 소스"])
+    tracker_item_table = QTableWidget(0, 7)
+    tracker_item_table.setHorizontalHeaderLabels(["Excel 컬럼", "Codebeamer 필드", "방식", "다건 결과", "정규식", "예시", "조회 소스"])
     tracker_item_table.setAlternatingRowColors(True)
-    _configure_table_columns(tracker_item_table, [220, 220, 140, 280, 200])
+    _configure_table_columns(tracker_item_table, [220, 220, 140, 160, 260, 320, 200])
     layout.addWidget(tracker_item_table)
 
     status_label = QLabel("")
@@ -1354,6 +1717,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
     page._mapping_validated = False
     page._schema_rows_by_name = {}
     page._tracker_item_settings = {}
+    page._upload_preview_df = None
 
     def _mark_dirty() -> None:
         page._mapping_validated = False
@@ -1379,13 +1743,47 @@ def create_mapping_page(on_validate_requested, on_error=None):
             })
         return candidates
 
-    def _sync_tracker_item_regex_state(mode_combo, regex_edit) -> None:
+    def _tracker_item_query_strategy_options() -> list[tuple[str, str]]:
+        return [
+            ("가장 비슷한 값", TrackerItemQueryMatchStrategy.BEST.value),
+            ("첫 번째 결과", TrackerItemQueryMatchStrategy.FIRST.value),
+            ("마지막 결과", TrackerItemQueryMatchStrategy.LAST.value),
+            ("오류로 처리", TrackerItemQueryMatchStrategy.ERROR.value),
+        ]
+
+    def _sync_tracker_item_controls(mode_combo, regex_edit, strategy_combo) -> None:
         is_regex = mode_combo.currentData() == TrackerItemResolutionMode.REGEX.value
         regex_edit.setEnabled(is_regex)
+        strategy_combo.setEnabled(not is_regex)
         regex_edit.setPlaceholderText(
             "ID를 추출할 정규식"
             if is_regex
             else "query 모드에서는 선택 파일 전체 값을 중복 제거 후 사전 조회합니다."
+        )
+
+    def _tracker_item_example_text(df_column: str, schema_field: str, mode: str, regex_pattern: str) -> str:
+        if mode != TrackerItemResolutionMode.REGEX.value:
+            return "query 모드에서는 미사용"
+        schema_row = page._schema_rows_by_name.get(schema_field, {})
+        sample_values = _tracker_item_sample_values(page._upload_preview_df, df_column)
+        return _build_tracker_item_regex_preview_text(
+            sample_values,
+            pattern=regex_pattern,
+            multiple_values=bool(schema_row.get("multiple_values", False)),
+        )
+
+    def _refresh_tracker_item_example(row_index: int, df_column: str, schema_field: str, mode_combo, regex_edit) -> None:
+        example_item = tracker_item_table.item(row_index, 5)
+        if example_item is None:
+            example_item = QTableWidgetItem("")
+            tracker_item_table.setItem(row_index, 5, example_item)
+        example_item.setText(
+            _tracker_item_example_text(
+                df_column,
+                schema_field,
+                str(mode_combo.currentData() or TrackerItemResolutionMode.REGEX.value),
+                regex_edit.text().strip(),
+            )
         )
 
     def _populate_tracker_item_table(mapping: dict[str, str], tracker_item_settings: dict[str, dict[str, object]]) -> None:
@@ -1412,6 +1810,10 @@ def create_mapping_page(on_validate_requested, on_error=None):
             selected_mode = str(selected_setting.get("mode") or default_mode).strip()
             if selected_mode == TrackerItemResolutionMode.QUERY.value and not supports_query:
                 selected_mode = TrackerItemResolutionMode.REGEX.value
+            selected_query_strategy = str(
+                selected_setting.get("query_match_strategy")
+                or TrackerItemQueryMatchStrategy.BEST.value
+            ).strip()
             selected_regex = str(selected_setting.get("regex_pattern") or DEFAULT_TRACKER_ITEM_ID_REGEX).strip()
 
             column_item = QTableWidgetItem(df_column)
@@ -1430,9 +1832,17 @@ def create_mapping_page(on_validate_requested, on_error=None):
             mode_combo.setCurrentIndex(mode_index if mode_index >= 0 else 0)
             tracker_item_table.setCellWidget(row_index, 2, mode_combo)
 
+            strategy_combo = QComboBox()
+            for label, value in _tracker_item_query_strategy_options():
+                strategy_combo.addItem(label, value)
+            strategy_index = strategy_combo.findData(selected_query_strategy)
+            strategy_combo.setCurrentIndex(strategy_index if strategy_index >= 0 else 0)
+            tracker_item_table.setCellWidget(row_index, 3, strategy_combo)
+
             regex_edit = QLineEdit(selected_regex)
-            tracker_item_table.setCellWidget(row_index, 3, regex_edit)
-            _sync_tracker_item_regex_state(mode_combo, regex_edit)
+            tracker_item_table.setCellWidget(row_index, 4, regex_edit)
+            _sync_tracker_item_controls(mode_combo, regex_edit, strategy_combo)
+            tracker_item_table.setItem(row_index, 5, QTableWidgetItem(""))
 
             source_text = (
                 ", ".join(f"tracker {tracker_id}" for tracker_id in source_tracker_ids)
@@ -1443,17 +1853,28 @@ def create_mapping_page(on_validate_requested, on_error=None):
                     else "configuration source 없음"
                 )
             )
-            tracker_item_table.setItem(row_index, 4, QTableWidgetItem(source_text))
+            tracker_item_table.setItem(row_index, 6, QTableWidgetItem(source_text))
+            _refresh_tracker_item_example(row_index, df_column, schema_field, mode_combo, regex_edit)
 
             mode_combo.currentIndexChanged.connect(
-                lambda _index, combo=mode_combo, edit=regex_edit: (_sync_tracker_item_regex_state(combo, edit), _mark_dirty())
+                lambda _index, row=row_index, column=df_column, field=schema_field, combo=mode_combo, edit=regex_edit, strategy=strategy_combo: (
+                    _sync_tracker_item_controls(combo, edit, strategy),
+                    _refresh_tracker_item_example(row, column, field, combo, edit),
+                    _mark_dirty(),
+                )
             )
-            regex_edit.textChanged.connect(lambda _text: _mark_dirty())
+            regex_edit.textChanged.connect(
+                lambda _text, row=row_index, column=df_column, field=schema_field, combo=mode_combo, edit=regex_edit: (
+                    _refresh_tracker_item_example(row, column, field, combo, edit),
+                    _mark_dirty(),
+                )
+            )
+            strategy_combo.currentTextChanged.connect(lambda _text: _mark_dirty())
 
-        _configure_table_columns(tracker_item_table, [220, 220, 140, 280, 200])
+        _configure_table_columns(tracker_item_table, [220, 220, 140, 160, 260, 320, 200])
         if candidates:
             tracker_item_help_label.setText(
-                "TrackerItemChoiceField 는 정규식 ID 추출 또는 source tracker 사전 조회 중 하나를 선택하세요."
+                "TrackerItemChoiceField 는 정규식 ID 추출 또는 source tracker 사전 조회를 선택하고, query 다건 결과 처리 방식도 지정하세요."
             )
         else:
             tracker_item_help_label.setText("현재 매핑에는 별도 Tracker Item 처리 설정이 필요한 필드가 없습니다.")
@@ -1478,6 +1899,15 @@ def create_mapping_page(on_validate_requested, on_error=None):
             combo.setCurrentIndex(target_index if target_index >= 0 else 0)
         combo.blockSignals(False)
 
+    def _bind_default_value_commit(combo) -> None:
+        line_edit = combo.lineEdit()
+        if line_edit is None:
+            return
+        if bool(line_edit.property("_codex_default_dirty_bound")):
+            return
+        line_edit.setProperty("_codex_default_dirty_bound", True)
+        line_edit.editingFinished.connect(_mark_dirty)
+
     def load_context(
         upload_columns: list[str],
         schema_df,
@@ -1485,9 +1915,11 @@ def create_mapping_page(on_validate_requested, on_error=None):
         default_value_candidates: list,
         selected_default_values: dict[str, str],
         selected_tracker_item_settings: dict[str, dict[str, object]],
+        upload_preview_df=None,
     ) -> None:
         page._mapping_validated = False
         next_button.setEnabled(False)
+        page._upload_preview_df = upload_preview_df
         page._schema_rows_by_name = {
             str(row["field_name"]): row
             for _, row in schema_df.iterrows()
@@ -1537,7 +1969,8 @@ def create_mapping_page(on_validate_requested, on_error=None):
             combo = QComboBox()
             selected_default = str(selected_default_values.get(schema_field, "") or "")
             _configure_default_value_widget(combo, candidate, selected_default)
-            combo.currentTextChanged.connect(lambda _text: _mark_dirty())
+            _bind_default_value_commit(combo)
+            combo.currentTextChanged.connect(lambda _text, widget=combo: None if bool(widget.isEditable()) else _mark_dirty())
             default_table.setCellWidget(row_index, 2, combo)
 
             default_table.setItem(
@@ -1592,8 +2025,9 @@ def create_mapping_page(on_validate_requested, on_error=None):
         for row_index in range(tracker_item_table.rowCount()):
             source_item = tracker_item_table.item(row_index, 0)
             mode_combo = tracker_item_table.cellWidget(row_index, 2)
-            regex_edit = tracker_item_table.cellWidget(row_index, 3)
-            if source_item is None or mode_combo is None or regex_edit is None:
+            strategy_combo = tracker_item_table.cellWidget(row_index, 3)
+            regex_edit = tracker_item_table.cellWidget(row_index, 4)
+            if source_item is None or mode_combo is None or strategy_combo is None or regex_edit is None:
                 continue
             metadata = source_item.data(Qt.ItemDataRole.UserRole) or {}
             schema_field = str(metadata.get("schema_field") or "").strip()
@@ -1601,6 +2035,9 @@ def create_mapping_page(on_validate_requested, on_error=None):
                 continue
             settings[schema_field] = {
                 "mode": str(mode_combo.currentData() or TrackerItemResolutionMode.REGEX.value),
+                "query_match_strategy": str(
+                    strategy_combo.currentData() or TrackerItemQueryMatchStrategy.BEST.value
+                ),
                 "regex_pattern": regex_edit.text().strip(),
                 "source_tracker_ids": list(metadata.get("source_tracker_ids") or []),
             }
@@ -1685,13 +2122,13 @@ def create_validation_page():
         if issue_df is not None and not issue_df.empty:
             for _, row in issue_df.iterrows():
                 rows.append([
-                    str(row.get("severity") or ""),
-                    str(row.get("row_label") or ""),
-                    str(row.get("item_name") or ""),
-                    str(row.get("column") or ""),
-                    str(row.get("raw_value") or ""),
-                    str(row.get("message") or ""),
-                    str(row.get("action") or ""),
+                    gui_display_text(row.get("severity")),
+                    gui_display_text(row.get("row_label")),
+                    gui_display_text(row.get("item_name")),
+                    gui_display_text(row.get("column")),
+                    gui_display_text(row.get("raw_value")),
+                    gui_display_text(row.get("message")),
+                    gui_display_text(row.get("action")),
                 ])
         table.setRowCount(len(rows))
         for row_index, values in enumerate(rows):
@@ -1713,7 +2150,7 @@ def create_validation_page():
         if file_count > 1:
             summary_parts.append(f"선택 파일 {file_count}개")
             summary_parts.append(f"전체 예상 항목 {batch_total_rows}행")
-            summary_parts.append(f"대표 파일 검증 {total_rows}행")
+            summary_parts.append(f"전체 검증 {total_rows}행")
         else:
             summary_parts.append(f"전체 {total_rows}행")
 
@@ -1767,7 +2204,11 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     layout.setSpacing(10)
 
     page.progress_bar = QProgressBar()
+    page.progress_bar.setTextVisible(True)
+    page.progress_bar.setFormat("0 / 0 (0.0%)")
     layout.addWidget(page.progress_bar)
+    page.progress_label = QLabel("진행률 0.0% (0 / 0)")
+    layout.addWidget(page.progress_label)
 
     page.current_label = QLabel("현재 항목: -")
     page.total_label = QLabel("총 대상 0건 / 완료 0건")
@@ -1782,6 +2223,9 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     page.time_label = QLabel("배치 시간: -")
     page.time_label.setObjectName("section_label")
     layout.addWidget(page.time_label)
+    page.eta_label = QLabel("예상 종료: -")
+    page.eta_label.setObjectName("section_label")
+    layout.addWidget(page.eta_label)
 
     page.dry_run_checkbox = QCheckBox("Dry Run")
     page.continue_checkbox = QCheckBox("Continue on error")
@@ -1897,15 +2341,22 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     def reset(total_count: int) -> None:
         page.progress_bar.setMaximum(max(total_count, 1))
         page.progress_bar.setValue(0)
+        page.progress_bar.setFormat("0 / 0 (0.0%)" if total_count <= 0 else f"0 / {total_count} (0.0%)")
+        page.progress_label.setText(f"진행률 0.0% (0 / {max(total_count, 0)})")
         page.current_label.setText("현재 항목: -")
         page.total_label.setText("총 대상 0건 / 완료 0건")
         page.counter_label.setText("성공 0 / 실패 0 / 재시도 0")
         page.status_label.setText("준비")
         page.time_label.setText("배치 시간: -")
+        page.eta_label.setText("예상 종료: -")
         page.activity_table.setRowCount(0)
         page._activity_row_map = {}
         page.log_view.clear()
         page.response_view.clear()
+        page.start_button.setEnabled(True)
+        page.pause_button.setEnabled(False)
+        page.resume_button.setEnabled(False)
+        page.cancel_button.setEnabled(False)
         page.result_button.setEnabled(False)
 
     page.record_activity_started = record_activity_started

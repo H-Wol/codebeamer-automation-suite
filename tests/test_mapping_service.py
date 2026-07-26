@@ -75,6 +75,22 @@ class MappingServiceTest(unittest.TestCase):
 
         self.assertEqual(list_columns, ["Test Steps.Action", "Test Steps.Expected result"])
 
+    def test_resolve_tracker_item_reference_value_with_regex_extracts_multiple_matches_from_one_cell(self) -> None:
+        """다중 tracker item 필드는 한 셀 안의 여러 정규식 매치도 각각 reference로 변환해야 한다."""
+        resolved = self.service.resolve_tracker_item_reference_value_with_regex(
+            "REQ-A [REQ:20263671], REQ-B [REQ:20263672]",
+            multiple_values=True,
+            pattern=r"\[(?:[^:\]]+:)?(\d+)[^\]]*\]|^(\d+)(?:\.0)?$",
+        )
+
+        self.assertEqual(
+            resolved,
+            [
+                {"id": 20263671, "type": "TrackerItemReference"},
+                {"id": 20263672, "type": "TrackerItemReference"},
+            ],
+        )
+
     def test_get_default_value_candidates_returns_single_static_option_fields_only(self) -> None:
         """공통 기본값 후보는 단일 static option 필드만 포함해야 한다."""
         schema_df = self.service.flatten_schema_fields([

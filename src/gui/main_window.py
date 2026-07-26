@@ -20,6 +20,10 @@ from .services import GuiUploadPipelineService
 from .settings_store import GuiSettings
 from .settings_store import GuiSettingsStore
 from .settings_store import GuiWorkflowPreset
+from .settings_store import GUI_UPLOAD_MODE_UPDATE
+from .settings_store import normalize_gui_upload_mode
+from .styles import build_gui_stylesheet
+from .styles import normalize_gui_theme_name
 from .worker import BackgroundTask
 from .worker import UploadWorker
 
@@ -30,13 +34,15 @@ def _require_qt():
         from PySide6.QtCore import QSize
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QDialog
         from PySide6.QtWidgets import QFrame
         from PySide6.QtWidgets import QHBoxLayout
         from PySide6.QtWidgets import QLabel
         from PySide6.QtWidgets import QMainWindow
-        from PySide6.QtWidgets import QMessageBox
+        from PySide6.QtWidgets import QPlainTextEdit
         from PySide6.QtWidgets import QProgressBar
         from PySide6.QtWidgets import QPushButton
+        from PySide6.QtWidgets import QScrollArea
         from PySide6.QtWidgets import QStackedWidget
         from PySide6.QtWidgets import QStatusBar
         from PySide6.QtWidgets import QVBoxLayout
@@ -46,14 +52,16 @@ def _require_qt():
 
     return {
         "QApplication": QApplication,
+        "QDialog": QDialog,
         "QEventLoop": QEventLoop,
         "QFrame": QFrame,
         "QHBoxLayout": QHBoxLayout,
         "QLabel": QLabel,
         "QMainWindow": QMainWindow,
-        "QMessageBox": QMessageBox,
+        "QPlainTextEdit": QPlainTextEdit,
         "QProgressBar": QProgressBar,
         "QPushButton": QPushButton,
+        "QScrollArea": QScrollArea,
         "QSize": QSize,
         "QStackedWidget": QStackedWidget,
         "QStatusBar": QStatusBar,
@@ -73,6 +81,128 @@ class GuiSessionState:
     mapping_context: object | None
     validation_context: object | None
     upload_result: dict[str, object] | None
+
+
+def _format_duration_text(seconds: float | None) -> str:
+    if seconds is None:
+        return "-"
+    if seconds < 1:
+        return f"{seconds:.2f}초"
+    if seconds < 60:
+        return f"{seconds:.1f}초"
+    minutes = int(seconds // 60)
+    remainder = seconds - (minutes * 60)
+    return f"{minutes}분 {remainder:.1f}초"
+
+
+def _format_clock_text(timestamp: float | None = None) -> str:
+    if timestamp is None:
+        timestamp = time.time()
+    return datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
+
+
+def _estimate_upload_remaining_seconds(
+    elapsed_seconds: float | None,
+    completed_count: int,
+    total_count: int,
+) -> float | None:
+    if elapsed_seconds is None or elapsed_seconds < 0:
+        return None
+
+    normalized_total = max(int(total_count), 0)
+    normalized_completed = max(int(completed_count), 0)
+    if normalized_total <= 0 or normalized_completed <= 0:
+        return None
+    if normalized_completed >= normalized_total:
+        return 0.0
+
+    average_seconds = elapsed_seconds / normalized_completed
+    remaining_count = normalized_total - normalized_completed
+    return max(average_seconds * remaining_count, 0.0)
+
+
+def _format_upload_progress_text(completed_count: int, total_count: int) -> str:
+    normalized_total = max(int(total_count), 0)
+    normalized_completed = max(int(completed_count), 0)
+    if normalized_total <= 0:
+        return "진행률 0.0% (0 / 0)"
+
+    clamped_completed = min(normalized_completed, normalized_total)
+    percent = (clamped_completed / normalized_total) * 100
+    return f"진행률 {percent:.1f}% ({clamped_completed} / {normalized_total})"
+
+
+def _format_upload_eta_text(
+    *,
+    now_timestamp: float,
+    elapsed_seconds: float | None,
+    completed_count: int,
+    total_count: int,
+) -> str:
+    remaining_seconds = _estimate_upload_remaining_seconds(
+        elapsed_seconds,
+        completed_count,
+        total_count,
+    )
+    if remaining_seconds is None:
+        return "예상 종료: -"
+    if remaining_seconds <= 0:
+        return f"예상 종료: 완료됨 ({_format_clock_text(now_timestamp)})"
+
+    finish_timestamp = now_timestamp + remaining_seconds
+    return (
+        f"예상 종료: {_format_clock_text(finish_timestamp)} "
+        f"(남은 약 {_format_duration_text(remaining_seconds)})"
+    )
+
+
+def _clamp_window_dimension(value: object, *, fallback: int, minimum: int) -> int:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(normalized, minimum)
+
+
+def _window_size_from_settings(settings: GuiSettings) -> tuple[int, int]:
+    return (
+        _clamp_window_dimension(
+            getattr(settings, "window_width", 1160),
+            fallback=1160,
+            minimum=860,
+        ),
+        _clamp_window_dimension(
+            getattr(settings, "window_height", 780),
+            fallback=780,
+            minimum=620,
+        ),
+    )
+
+
+def _merge_window_preferences(current_settings: GuiSettings, incoming_settings: GuiSettings) -> GuiSettings:
+    width, height = _window_size_from_settings(current_settings)
+    return replace(
+        incoming_settings,
+        window_width=width,
+        window_height=height,
+        window_is_maximized=bool(getattr(current_settings, "window_is_maximized", False)),
+        window_is_fullscreen=bool(getattr(current_settings, "window_is_fullscreen", False)),
+    )
+
+
+def _merge_root_item_page_configs(
+    base_config: dict[str, object] | None,
+    *,
+    structure_config: dict[str, object] | None = None,
+    field_config: dict[str, object] | None = None,
+) -> dict[str, object]:
+    merged = dict(base_config or {})
+    if structure_config:
+        merged.update(dict(structure_config))
+    if field_config:
+        merged["field_assignments"] = dict(field_config.get("field_assignments") or {})
+        merged["field_sources"] = dict(field_config.get("field_sources") or {})
+    return merged
 
 
 class MainWindow:
@@ -106,11 +236,19 @@ class MainWindow:
                 self.upload_failed_count = 0
                 self.upload_retry_count = 0
                 self.upload_total_count = 0
+                self._upload_progress_current = 0
+                self._upload_progress_total = 0
                 self._upload_event_started_at = {}
                 self._upload_batch_started_at = None
+                self._current_page = None
+                self.page_scroll_areas = {}
+                self._initial_window_state_applied = False
+                initial_width, initial_height = _window_size_from_settings(self.session_state.settings)
+                self._last_normal_window_width = initial_width
+                self._last_normal_window_height = initial_height
                 self.setWindowTitle("Codebeamer Upload GUI")
-                self.resize(qt["QSize"](920, 500))
-                self.setMinimumSize(qt["QSize"](760, 400))
+                self.resize(qt["QSize"](initial_width, initial_height))
+                self.setMinimumSize(qt["QSize"](860, 620))
                 self._build_shell()
                 self.setStatusBar(qt["QStatusBar"]())
                 self._build_pages()
@@ -159,7 +297,7 @@ class MainWindow:
                 steps_row = QHBoxLayout()
                 steps_row.setSpacing(8)
                 self.step_labels = []
-                for step_name in ("설정", "프로젝트", "파일", "상단 데이터", "매핑", "검증", "업로드", "결과"):
+                for step_name in ("설정", "프로젝트", "파일", "상단 구조", "상단 필드", "매핑", "검증", "업로드", "결과"):
                     label = QLabel(step_name)
                     label.setObjectName("step_badge")
                     steps_row.addWidget(label)
@@ -216,6 +354,22 @@ class MainWindow:
                 self.setCentralWidget(root)
                 self._update_busy_overlay_geometry()
 
+            def _create_page_scroll_area(self, page):
+                QFrame = self.qt["QFrame"]
+                QScrollArea = self.qt["QScrollArea"]
+                Qt = self.qt["Qt"]
+
+                scroll_area = QScrollArea()
+                scroll_area.setObjectName("page_scroll_area")
+                scroll_area.setWidget(page)
+                scroll_area.setWidgetResizable(True)
+                scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+                scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+                scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+                scroll_area.verticalScrollBar().setSingleStep(24)
+                self.page_scroll_areas[page] = scroll_area
+                return scroll_area
+
             def _content_height_for_page(self, page) -> int:
                 if page is None:
                     return self.height()
@@ -249,13 +403,26 @@ class MainWindow:
                     + status_height
                 )
 
+            def _window_height_cap(self) -> int:
+                screen = self.screen()
+                available_height = 1080
+                if screen is not None:
+                    available_height = max(screen.availableGeometry().height(), self.minimumHeight())
+                return max(self.minimumHeight(), int(available_height * 0.88))
+
             def _fit_window_to_current_page(self, *, allow_grow: bool) -> None:
-                page = self.stack.currentWidget() if hasattr(self, "stack") else None
+                page = self._current_page if hasattr(self, "_current_page") else None
                 if page is None:
                     return
+                if self.isFullScreen() or self.isMaximized():
+                    return
 
-                target_height = max(self.minimumHeight(), self._content_height_for_page(page))
-                if not allow_grow and target_height >= self.height():
+                target_height = min(
+                    max(self.minimumHeight(), self._content_height_for_page(page)),
+                    self._window_height_cap(),
+                )
+                current_height = self.height()
+                if not allow_grow and target_height > current_height and current_height <= self._window_height_cap():
                     return
 
                 self.resize(self.width(), target_height)
@@ -268,7 +435,39 @@ class MainWindow:
 
             def resizeEvent(self, event) -> None:
                 super().resizeEvent(event)
+                if not self.isFullScreen() and not self.isMaximized():
+                    self._last_normal_window_width = max(int(self.width()), self.minimumWidth())
+                    self._last_normal_window_height = max(int(self.height()), self.minimumHeight())
                 self._update_busy_overlay_geometry()
+
+            def showEvent(self, event) -> None:
+                super().showEvent(event)
+                if self._initial_window_state_applied:
+                    return
+                self._initial_window_state_applied = True
+                if bool(getattr(self.session_state.settings, "window_is_fullscreen", False)):
+                    self.showFullScreen()
+                elif bool(getattr(self.session_state.settings, "window_is_maximized", False)):
+                    self.showMaximized()
+
+            def closeEvent(self, event) -> None:
+                self._persist_window_preferences()
+                super().closeEvent(event)
+
+            def _persist_window_preferences(self) -> None:
+                current_settings = replace(self.session_state.settings)
+                updated_settings = replace(
+                    current_settings,
+                    window_width=max(int(self._last_normal_window_width), self.minimumWidth()),
+                    window_height=max(int(self._last_normal_window_height), self.minimumHeight()),
+                    window_is_maximized=bool(self.isMaximized()),
+                    window_is_fullscreen=bool(self.isFullScreen()),
+                )
+                self.session_state.settings = updated_settings
+                try:
+                    self.settings_store.save(updated_settings)
+                except Exception:
+                    return
 
             def _set_busy(self, busy: bool, message: str = "") -> None:
                 QApplication = self.qt["QApplication"]
@@ -328,6 +527,7 @@ class MainWindow:
                     self.settings_store,
                     self.session_state.settings,
                     self._on_settings_changed,
+                    self._apply_theme,
                 )
                 self.project_page = create_project_selection_page(
                     self.session_state.settings,
@@ -342,7 +542,14 @@ class MainWindow:
                     self._load_file_preview,
                     self._show_error_dialog,
                 )
-                self.root_item_page = create_root_item_page(self._preview_root_item_config)
+                self.root_item_structure_page = create_root_item_page(
+                    self._preview_root_item_config,
+                    page_mode="structure",
+                )
+                self.root_item_field_page = create_root_item_page(
+                    self._preview_root_item_config,
+                    page_mode="fields",
+                )
                 self.mapping_page = create_mapping_page(
                     self._validate_mapping,
                     self._show_error_dialog,
@@ -371,13 +578,18 @@ class MainWindow:
                     next_handler=self._on_prepare_root_item_context,
                 )
                 self._attach_navigation(
-                    self.root_item_page,
+                    self.root_item_structure_page,
                     previous_page=self.file_page,
-                    next_handler=self._on_confirm_root_item_config,
+                    next_handler=self._on_confirm_root_item_structure_config,
+                )
+                self._attach_navigation(
+                    self.root_item_field_page,
+                    previous_page=self.root_item_structure_page,
+                    next_handler=self._on_confirm_root_item_field_config,
                 )
                 self._attach_navigation(
                     self.mapping_page,
-                    previous_page=self.root_item_page,
+                    previous_page=self.root_item_field_page,
                     next_page=self.validation_page,
                     next_handler=self._enter_validation_page,
                 )
@@ -403,29 +615,32 @@ class MainWindow:
                     self.settings_page,
                     self.project_page,
                     self.file_page,
-                    self.root_item_page,
+                    self.root_item_structure_page,
+                    self.root_item_field_page,
                     self.mapping_page,
                     self.validation_page,
                     self.upload_page,
                     self.result_page,
                 ):
-                    self.stack.addWidget(page)
+                    self.stack.addWidget(self._create_page_scroll_area(page))
 
                 self.page_meta = {
                     self.settings_page: ("설정", "연결 정보와 기본 실행 옵션을 입력합니다.", 0),
                     self.project_page: ("프로젝트 선택", "업로드 대상 프로젝트와 트래커를 선택합니다.", 1),
                     self.file_page: ("파일 선택", "Excel 파일과 시트, 헤더 정보를 확인합니다.", 2),
-                    self.root_item_page: ("상단 데이터", "파일명 기반 부모 데이터의 필드와 정규식 파싱 규칙을 설정합니다.", 3),
-                    self.mapping_page: ("컬럼 매핑", "업로드할 컬럼만 선택하고 Codebeamer 필드와 연결합니다.", 4),
-                    self.validation_page: ("검증", "문제가 있는 항목만 먼저 확인하고 수정 여부를 판단합니다.", 5),
-                    self.upload_page: ("업로드", "진행 상황을 확인하면서 업로드를 제어합니다.", 6),
-                    self.result_page: ("결과", "성공, 실패, 미해결 항목을 정리해서 확인합니다.", 7),
+                    self.root_item_structure_page: ("상단 구조", "상단 폴더를 어떤 구조로 만들지 결정합니다.", 3),
+                    self.root_item_field_page: ("상단 필드", "상단 폴더에 들어갈 이름과 필드 값을 설정합니다.", 4),
+                    self.mapping_page: ("컬럼 매핑", "업로드할 컬럼만 선택하고 Codebeamer 필드와 연결합니다.", 5),
+                    self.validation_page: ("검증", "문제가 있는 항목만 먼저 확인하고 수정 여부를 판단합니다.", 6),
+                    self.upload_page: ("업로드", "진행 상황을 확인하면서 업로드를 제어합니다.", 7),
+                    self.result_page: ("결과", "성공, 실패, 미해결 항목을 정리해서 확인합니다.", 8),
                 }
                 for page in (
                     self.settings_page,
                     self.project_page,
                     self.file_page,
-                    self.root_item_page,
+                    self.root_item_structure_page,
+                    self.root_item_field_page,
                     self.mapping_page,
                     self.validation_page,
                     self.upload_page,
@@ -436,10 +651,13 @@ class MainWindow:
                 if self.session_state.workflow_preset is not None:
                     self._apply_workflow_preset(self.session_state.workflow_preset, startup=True)
                 else:
+                    self._apply_theme(self.session_state.settings.theme_name)
                     self.statusBar().showMessage("GUI 스켈레톤이 준비되었습니다.")
 
             def _show_page(self, page) -> None:
-                self.stack.setCurrentWidget(page)
+                self._current_page = page
+                page_scroll_area = self.page_scroll_areas.get(page, page)
+                self.stack.setCurrentWidget(page_scroll_area)
                 title, subtitle, active_index = self.page_meta.get(page, ("", "", -1))
                 self.page_title_label.setText(title)
                 self.page_subtitle_label.setText(subtitle)
@@ -448,6 +666,11 @@ class MainWindow:
                     label.setProperty("complete", active_index >= 0 and index < active_index)
                     label.style().unpolish(label)
                     label.style().polish(label)
+                on_page_shown = getattr(page, "on_page_shown", None)
+                if callable(on_page_shown):
+                    on_page_shown()
+                if page_scroll_area is not None and hasattr(page_scroll_area, "verticalScrollBar"):
+                    page_scroll_area.verticalScrollBar().setValue(0)
                 self._fit_window_to_current_page(allow_grow=True)
 
             def _attach_navigation(
@@ -485,36 +708,155 @@ class MainWindow:
                 page.request_next = _go_next
                 page.request_restart = _restart
 
+            def _apply_theme(self, theme_name: str | None) -> str:
+                QApplication = self.qt["QApplication"]
+                normalized_theme = normalize_gui_theme_name(theme_name)
+                app = QApplication.instance()
+                if app is not None:
+                    app.setStyleSheet(build_gui_stylesheet(normalized_theme))
+                return normalized_theme
+
+            @staticmethod
+            def _dialog_message_parts(message: str, fallback: str) -> tuple[str, str]:
+                text = str(message or "").strip()
+                if not text:
+                    return fallback, ""
+
+                lines = [line.strip() for line in text.splitlines() if line.strip()]
+                compact = " ".join(lines) if lines else text
+                if "\n" not in text and len(compact) <= 160:
+                    return compact, ""
+
+                if lines:
+                    summary = lines[0]
+                else:
+                    summary = compact
+                if len(summary) > 160:
+                    summary = f"{summary[:157].rstrip()}..."
+                return summary, text
+
+            def _show_message_dialog(self, title: str, message: str, *, tone: str) -> None:
+                QDialog = self.qt["QDialog"]
+                QFrame = self.qt["QFrame"]
+                QHBoxLayout = self.qt["QHBoxLayout"]
+                QLabel = self.qt["QLabel"]
+                QPlainTextEdit = self.qt["QPlainTextEdit"]
+                QPushButton = self.qt["QPushButton"]
+                QVBoxLayout = self.qt["QVBoxLayout"]
+                Qt = self.qt["Qt"]
+
+                fallback_message = (
+                    "알 수 없는 오류가 발생했습니다."
+                    if tone == "error"
+                    else "작업이 완료되었습니다."
+                )
+                header_text = str(title or ("오류" if tone == "error" else "안내")).strip()
+                summary_text, detail_text = self._dialog_message_parts(message, fallback_message)
+
+                dialog = QDialog(self)
+                dialog.setObjectName("alert_dialog")
+                dialog.setWindowTitle(header_text)
+                dialog.setModal(True)
+                dialog.setMinimumWidth(440)
+
+                root_layout = QVBoxLayout(dialog)
+                root_layout.setContentsMargins(14, 14, 14, 14)
+                root_layout.setSpacing(0)
+
+                surface = QFrame(dialog)
+                surface.setObjectName("alert_surface")
+                surface.setProperty("tone", tone)
+                surface_layout = QVBoxLayout(surface)
+                surface_layout.setContentsMargins(20, 18, 20, 18)
+                surface_layout.setSpacing(14)
+
+                header_row = QHBoxLayout()
+                header_row.setSpacing(14)
+
+                badge = QLabel("!" if tone == "error" else "i")
+                badge.setObjectName("alert_badge")
+                badge.setProperty("tone", tone)
+                badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                badge.setFixedSize(40, 40)
+                header_row.addWidget(badge, 0, Qt.AlignmentFlag.AlignTop)
+
+                copy_layout = QVBoxLayout()
+                copy_layout.setSpacing(6)
+
+                title_label = QLabel(header_text)
+                title_label.setObjectName("alert_title")
+                copy_layout.addWidget(title_label)
+
+                message_label = QLabel(summary_text)
+                message_label.setObjectName("alert_message")
+                message_label.setWordWrap(True)
+                message_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                copy_layout.addWidget(message_label)
+                header_row.addLayout(copy_layout, 1)
+
+                surface_layout.addLayout(header_row)
+
+                if detail_text:
+                    details = QPlainTextEdit(surface)
+                    details.setObjectName("alert_details")
+                    details.setReadOnly(True)
+                    details.setPlainText(detail_text)
+                    details.setFixedHeight(116)
+                    surface_layout.addWidget(details)
+
+                button_row = QHBoxLayout()
+                button_row.addStretch(1)
+                confirm_button = QPushButton("확인")
+                confirm_button.setObjectName("primary_button")
+                confirm_button.setDefault(True)
+                confirm_button.setAutoDefault(True)
+                confirm_button.clicked.connect(dialog.accept)
+                button_row.addWidget(confirm_button)
+                surface_layout.addLayout(button_row)
+
+                root_layout.addWidget(surface)
+                dialog.adjustSize()
+                dialog.exec()
+
             def _show_error_dialog(self, title: str, message: str) -> None:
-                QMessageBox = self.qt["QMessageBox"]
-                text = str(message or "").strip() or "알 수 없는 오류가 발생했습니다."
-                QMessageBox.critical(self, str(title or "오류"), text)
+                self._show_message_dialog(title, message, tone="error")
 
             def _show_info_dialog(self, title: str, message: str) -> None:
-                QMessageBox = self.qt["QMessageBox"]
-                text = str(message or "").strip() or "작업이 완료되었습니다."
-                QMessageBox.information(self, str(title or "안내"), text)
+                self._show_message_dialog(title, message, tone="info")
 
             def _on_settings_changed(self, settings: GuiSettings | None) -> GuiSettings:
                 if settings is None:
                     return self.session_state.settings
-                self.session_state.settings = settings
+                normalized_theme = self._apply_theme(settings.theme_name)
+                self.session_state.settings = replace(
+                    settings,
+                    theme_name=normalized_theme,
+                )
                 self.statusBar().showMessage("설정 상태를 갱신했습니다.")
-                return settings
+                return self.session_state.settings
 
             def _on_file_state_changed(self, file_state: dict[str, object]) -> None:
                 self.session_state.file_state = file_state
                 self.statusBar().showMessage("파일 선택 상태를 갱신했습니다.")
 
             def _test_connection(self, settings: GuiSettings) -> list[dict[str, object]]:
+                busy_message = (
+                    "테스트 프로젝트 목록을 불러오는 중입니다."
+                    if bool(getattr(settings, "offline_mode", False))
+                    else "프로젝트 목록을 불러오는 중입니다."
+                )
                 projects = self._run_with_busy(
-                    "프로젝트 목록을 불러오는 중입니다.",
+                    busy_message,
                     self.codebeamer_service.test_connection_and_load_projects,
                     settings,
                 )
                 self.session_state.settings = settings
                 self.session_state.projects = projects
-                self.statusBar().showMessage("연결 테스트와 프로젝트 조회가 완료되었습니다.")
+                self.statusBar().showMessage(
+                    "테스트 프로젝트 목록을 불러왔습니다."
+                    if bool(getattr(settings, "offline_mode", False))
+                    else "연결 테스트와 프로젝트 조회가 완료되었습니다."
+                )
                 return projects
 
             def _load_trackers(self, settings: GuiSettings, project_id: int) -> list[dict[str, object]]:
@@ -580,26 +922,13 @@ class MainWindow:
                 return current_state
 
             def _apply_workflow_preset_to_mapping_context(self, mapping_context, preset: GuiWorkflowPreset) -> None:
-                if preset.root_item_config:
-                    mapping_context.root_item_config = dict(preset.root_item_config)
-                if preset.selected_mapping:
-                    mapping_context.selected_mapping = {
-                        str(df_column): str(schema_field)
-                        for df_column, schema_field in preset.selected_mapping.items()
-                        if str(df_column).strip() and str(schema_field).strip()
-                    }
-                if preset.selected_default_values:
-                    mapping_context.selected_default_values = {
-                        str(field_name): str(value)
-                        for field_name, value in preset.selected_default_values.items()
-                        if str(field_name).strip() and str(value).strip()
-                    }
-                if preset.selected_tracker_item_settings:
-                    mapping_context.selected_tracker_item_settings = {
-                        str(field_name): dict(setting)
-                        for field_name, setting in preset.selected_tracker_item_settings.items()
-                        if str(field_name).strip() and isinstance(setting, dict)
-                    }
+                self.pipeline_service.apply_saved_workflow_values(
+                    mapping_context,
+                    root_item_config=dict(preset.root_item_config or {}),
+                    selected_mapping=dict(preset.selected_mapping or {}),
+                    selected_default_values=dict(preset.selected_default_values or {}),
+                    selected_tracker_item_settings=dict(preset.selected_tracker_item_settings or {}),
+                )
 
             def _collect_workflow_preset(self) -> GuiWorkflowPreset:
                 settings = self._current_settings_snapshot()
@@ -614,8 +943,23 @@ class MainWindow:
                 mapping_context = self.session_state.mapping_context
                 if mapping_context is not None:
                     root_item_config = dict(getattr(mapping_context, "root_item_config", {}) or {})
-                if self.stack.currentWidget() is self.root_item_page and mapping_context is not None:
-                    root_item_config = dict(self.root_item_page.get_config() or root_item_config)
+                current_page = getattr(self, "_current_page", None)
+                if current_page in {getattr(self, "root_item_structure_page", None), getattr(self, "root_item_field_page", None)} and mapping_context is not None:
+                    structure_config = (
+                        self.root_item_structure_page.get_config()
+                        if callable(getattr(self.root_item_structure_page, "get_config", None))
+                        else None
+                    )
+                    field_config = (
+                        self.root_item_field_page.get_config()
+                        if callable(getattr(self.root_item_field_page, "get_config", None))
+                        else None
+                    )
+                    root_item_config = _merge_root_item_page_configs(
+                        root_item_config,
+                        structure_config=structure_config,
+                        field_config=field_config,
+                    )
 
                 selected_mapping: dict[str, str] = {}
                 selected_default_values: dict[str, str] = {}
@@ -645,15 +989,19 @@ class MainWindow:
 
             def _apply_workflow_preset(self, preset: GuiWorkflowPreset, *, startup: bool = False) -> None:
                 self.session_state.workflow_preset = preset
-                self.session_state.settings = replace(preset.settings)
+                normalized_theme = self._apply_theme(preset.settings.theme_name)
+                self.session_state.settings = _merge_window_preferences(
+                    self.session_state.settings,
+                    replace(preset.settings, theme_name=normalized_theme),
+                )
 
                 set_settings = getattr(self.settings_page, "set_settings", None)
                 if callable(set_settings):
-                    set_settings(replace(preset.settings))
+                    set_settings(replace(self.session_state.settings))
 
                 load_selection = getattr(self.project_page, "load_selection", None)
                 if callable(load_selection):
-                    load_selection(preset.settings.default_project_id, preset.settings.default_tracker_id)
+                    load_selection(self.session_state.settings.default_project_id, self.session_state.settings.default_tracker_id)
 
                 load_file_state = getattr(self.file_page, "load_state", None)
                 if callable(load_file_state):
@@ -667,7 +1015,8 @@ class MainWindow:
                         self.session_state.mapping_context,
                         self.session_state.mapping_context.root_item_config,
                     )
-                    self.root_item_page.load_context(preview_context)
+                    self.root_item_structure_page.load_context(preview_context)
+                    self.root_item_field_page.load_context(preview_context)
                     self.mapping_page.load_context(
                         self.session_state.mapping_context.upload_columns,
                         self.session_state.mapping_context.schema_df,
@@ -675,10 +1024,15 @@ class MainWindow:
                         self.session_state.mapping_context.default_value_candidates,
                         self.session_state.mapping_context.selected_default_values,
                         self.session_state.mapping_context.selected_tracker_item_settings,
+                        self.session_state.mapping_context.wizard.state.upload_df,
                     )
                     self.session_state.validation_context = None
                     self.session_state.upload_result = None
-                    if self.stack.currentWidget() in {self.validation_page, self.upload_page, self.result_page}:
+                    if getattr(self, "_current_page", None) in {
+                        self.validation_page,
+                        self.upload_page,
+                        self.result_page,
+                    }:
                         self._show_page(self.mapping_page)
 
                 message = (
@@ -736,9 +1090,15 @@ class MainWindow:
                 if self.session_state.settings.offline_mode:
                     self.upload_page.dry_run_checkbox.setChecked(True)
                     self.upload_page.dry_run_checkbox.setEnabled(False)
-                    self.upload_page.status_label.setText("오프라인 모드에서는 Dry Run만 실행할 수 있습니다.")
+                    self.upload_page.status_label.setText("테스트 모드에서는 Dry Run만 실행할 수 있습니다.")
                 else:
                     self.upload_page.dry_run_checkbox.setEnabled(True)
+                    action_label = (
+                        "업데이트"
+                        if normalize_gui_upload_mode(getattr(self.session_state.settings, "upload_mode", None)) == GUI_UPLOAD_MODE_UPDATE
+                        else "업로드"
+                    )
+                    self.upload_page.status_label.setText(f"{action_label} 준비 완료")
                 self._show_page(self.upload_page)
 
             def _enter_result_page(self) -> None:
@@ -751,6 +1111,12 @@ class MainWindow:
                 self.session_state.upload_result = None
                 self.upload_success_count = 0
                 self.upload_failed_count = 0
+                self.upload_retry_count = 0
+                self.upload_total_count = 0
+                self._upload_progress_current = 0
+                self._upload_progress_total = 0
+                self._upload_event_started_at = {}
+                self._upload_batch_started_at = None
                 self._show_page(self.project_page)
 
             def _on_prepare_root_item_context(self) -> None:
@@ -769,17 +1135,68 @@ class MainWindow:
                         self.session_state.workflow_preset,
                     )
                 self.session_state.mapping_context = mapping_context
+                upload_mode = normalize_gui_upload_mode(mapping_context.upload_mode)
+                if upload_mode == GUI_UPLOAD_MODE_UPDATE:
+                    self._attach_navigation(
+                        self.mapping_page,
+                        previous_page=self.file_page,
+                        next_page=self.validation_page,
+                        next_handler=self._enter_validation_page,
+                    )
+                    self.mapping_page.load_context(
+                        self.session_state.mapping_context.upload_columns,
+                        self.session_state.mapping_context.schema_df,
+                        self.session_state.mapping_context.selected_mapping,
+                        self.session_state.mapping_context.default_value_candidates,
+                        self.session_state.mapping_context.selected_default_values,
+                        self.session_state.mapping_context.selected_tracker_item_settings,
+                        self.session_state.mapping_context.wizard.state.upload_df,
+                    )
+                    self._show_page(self.mapping_page)
+                    return
+
+                self._attach_navigation(
+                    self.mapping_page,
+                    previous_page=self.root_item_field_page,
+                    next_page=self.validation_page,
+                    next_handler=self._enter_validation_page,
+                )
                 root_preview_context = self.pipeline_service.build_root_item_preview_context(
                     mapping_context,
                     mapping_context.root_item_config,
                 )
-                self.root_item_page.load_context(root_preview_context)
-                self._show_page(self.root_item_page)
+                self.root_item_structure_page.load_context(root_preview_context)
+                self.root_item_field_page.load_context(root_preview_context)
+                self._show_page(self.root_item_structure_page)
 
-            def _on_confirm_root_item_config(self) -> None:
+            def _on_confirm_root_item_structure_config(self) -> None:
                 if self.session_state.mapping_context is None:
                     raise ValueError("매핑 컨텍스트가 준비되지 않았습니다.")
-                self.session_state.mapping_context.root_item_config = self.root_item_page.get_config()
+                root_item_config = _merge_root_item_page_configs(
+                    self.session_state.mapping_context.root_item_config,
+                    structure_config=(
+                        self.root_item_structure_page.get_config()
+                        if callable(getattr(self.root_item_structure_page, "get_config", None))
+                        else None
+                    ),
+                    field_config=(
+                        self.root_item_field_page.get_config()
+                        if callable(getattr(self.root_item_field_page, "get_config", None))
+                        else None
+                    ),
+                )
+                self.session_state.mapping_context.root_item_config = root_item_config
+                root_preview_context = self.pipeline_service.build_root_item_preview_context(
+                    self.session_state.mapping_context,
+                    self.session_state.mapping_context.root_item_config,
+                )
+                self.root_item_field_page.load_context(root_preview_context)
+                self._show_page(self.root_item_field_page)
+
+            def _on_confirm_root_item_field_config(self) -> None:
+                if self.session_state.mapping_context is None:
+                    raise ValueError("매핑 컨텍스트가 준비되지 않았습니다.")
+                self.session_state.mapping_context.root_item_config = self.root_item_field_page.get_config()
                 self.mapping_page.load_context(
                     self.session_state.mapping_context.upload_columns,
                     self.session_state.mapping_context.schema_df,
@@ -787,6 +1204,7 @@ class MainWindow:
                     self.session_state.mapping_context.default_value_candidates,
                     self.session_state.mapping_context.selected_default_values,
                     self.session_state.mapping_context.selected_tracker_item_settings,
+                    self.session_state.mapping_context.wizard.state.upload_df,
                 )
                 self._show_page(self.mapping_page)
 
@@ -818,15 +1236,18 @@ class MainWindow:
                     self.upload_page.status_label.setText("업로드 컨텍스트가 없습니다.")
                     return
                 if self.session_state.settings.offline_mode and not self.upload_page.dry_run_checkbox.isChecked():
-                    message = "오프라인 모드에서는 Dry Run만 실행할 수 있습니다."
+                    message = "테스트 모드에서는 Dry Run만 실행할 수 있습니다."
                     self.upload_page.status_label.setText(message)
-                    self._show_error_dialog("오프라인 업로드 제한", message)
+                    self._show_error_dialog("테스트 모드 업로드 제한", message)
                     return
                 output_dir = str(Path(self.session_state.settings.output_dir))
+                self.upload_page.reset(0)
                 self.upload_success_count = 0
                 self.upload_failed_count = 0
                 self.upload_retry_count = 0
                 self.upload_total_count = 0
+                self._upload_progress_current = 0
+                self._upload_progress_total = 0
                 self._upload_event_started_at = {}
                 self._upload_batch_started_at = time.perf_counter()
                 self.upload_worker = UploadWorker(
@@ -845,7 +1266,12 @@ class MainWindow:
                 self.upload_page.start_button.setEnabled(False)
                 self.upload_page.pause_button.setEnabled(True)
                 self.upload_page.cancel_button.setEnabled(True)
-                self.upload_page.status_label.setText("업로드 실행 중")
+                action_label = (
+                    "업데이트"
+                    if normalize_gui_upload_mode(getattr(self.session_state.settings, "upload_mode", None)) == GUI_UPLOAD_MODE_UPDATE
+                    else "업로드"
+                )
+                self.upload_page.status_label.setText(f"{action_label} 실행 중")
                 self.upload_worker.start()
 
             def _pause_upload(self) -> None:
@@ -869,21 +1295,11 @@ class MainWindow:
 
             @staticmethod
             def _format_clock(timestamp: float | None = None) -> str:
-                if timestamp is None:
-                    timestamp = time.time()
-                return datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
+                return _format_clock_text(timestamp)
 
             @staticmethod
             def _format_duration(seconds: float | None) -> str:
-                if seconds is None:
-                    return "-"
-                if seconds < 1:
-                    return f"{seconds:.2f}초"
-                if seconds < 60:
-                    return f"{seconds:.1f}초"
-                minutes = int(seconds // 60)
-                remainder = seconds - (minutes * 60)
-                return f"{minutes}분 {remainder:.1f}초"
+                return _format_duration_text(seconds)
 
             @staticmethod
             def _upload_event_key(event: dict[str, object]) -> str:
@@ -915,13 +1331,32 @@ class MainWindow:
                     f"총 대상 {self.upload_total_count}건 / 완료 {completed_count}건"
                 )
 
+            def _update_upload_progress_widgets(self) -> None:
+                total = max(int(self._upload_progress_total), 0)
+                completed = max(int(self._upload_progress_current), 0)
+                clamped_completed = min(completed, total) if total > 0 else 0
+                self.upload_page.progress_bar.setMaximum(max(total, 1))
+                self.upload_page.progress_bar.setValue(clamped_completed)
+                progress_text = _format_upload_progress_text(clamped_completed, total)
+                self.upload_page.progress_label.setText(progress_text)
+                self.upload_page.progress_bar.setFormat(progress_text.replace("진행률 ", ""))
+
             def _update_upload_time_label(self) -> None:
                 if self._upload_batch_started_at is None:
                     self.upload_page.time_label.setText("배치 시간: -")
+                    self.upload_page.eta_label.setText("예상 종료: -")
                     return
                 elapsed = time.perf_counter() - self._upload_batch_started_at
                 self.upload_page.time_label.setText(
                     f"배치 시간: {self._format_duration(elapsed)} 경과 (현재 시각 {self._format_clock()})"
+                )
+                self.upload_page.eta_label.setText(
+                    _format_upload_eta_text(
+                        now_timestamp=time.time(),
+                        elapsed_seconds=elapsed,
+                        completed_count=self._upload_progress_current,
+                        total_count=self._upload_progress_total,
+                    )
                 )
 
             def _on_upload_event(self, event: dict) -> None:
@@ -940,6 +1375,8 @@ class MainWindow:
 
                 if event_type == "batch_total":
                     self.upload_total_count = int(event.get("total") or 0)
+                    self._upload_progress_total = self.upload_total_count
+                    self._update_upload_progress_widgets()
                     self._update_upload_counter()
                     self._append_timestamped_log(f"총 업로드 예정 건수: {self.upload_total_count}")
                     return
@@ -989,24 +1426,30 @@ class MainWindow:
                 self._append_timestamped_log(f"{status_text} | {message}")
 
             def _on_upload_progress(self, current: int, total: int, upload_name: str) -> None:
-                self.upload_page.progress_bar.setMaximum(max(total, 1))
-                self.upload_page.progress_bar.setValue(current)
+                self._upload_progress_current = max(int(current), 0)
+                self._upload_progress_total = max(int(total), 0)
+                self._update_upload_progress_widgets()
                 self.upload_page.current_label.setText(f"현재 항목: {upload_name or '-'}")
                 self._update_upload_time_label()
 
             def _on_upload_finished(self, result: dict) -> None:
                 self.session_state.upload_result = result
+                self.upload_worker = None
                 success_df = result.get("success_df")
                 failed_df = result.get("failed_df")
                 unresolved_df = result.get("unresolved_df")
                 self.upload_success_count = 0 if success_df is None else len(success_df)
                 self.upload_failed_count = 0 if failed_df is None else len(failed_df)
+                self._upload_progress_current = self.upload_success_count + self.upload_failed_count
+                self._update_upload_progress_widgets()
                 self._update_upload_counter()
                 if failed_df is not None and not getattr(failed_df, "empty", True) and "error_response_json" in failed_df.columns:
                     self.upload_page.response_view.setPlainText(str(failed_df.iloc[0].get("error_response_json") or ""))
                 self._update_upload_time_label()
+                self.upload_page.eta_label.setText(f"예상 종료: 완료됨 ({self._format_clock()})")
                 self._append_timestamped_log("배치 업로드가 완료되었습니다.")
                 self.upload_page.status_label.setText("업로드 완료")
+                self.upload_page.start_button.setEnabled(True)
                 self.upload_page.pause_button.setEnabled(False)
                 self.upload_page.resume_button.setEnabled(False)
                 self.upload_page.cancel_button.setEnabled(False)
@@ -1019,9 +1462,12 @@ class MainWindow:
                     )
 
             def _on_upload_failed(self, message: str) -> None:
+                self.upload_worker = None
                 self.upload_page.status_label.setText(message)
                 self._update_upload_time_label()
+                self.upload_page.eta_label.setText(f"예상 종료: 중단됨 ({self._format_clock()})")
                 self._append_timestamped_log(message)
+                self.upload_page.start_button.setEnabled(True)
                 self.upload_page.pause_button.setEnabled(False)
                 self.upload_page.resume_button.setEnabled(False)
                 self.upload_page.cancel_button.setEnabled(False)

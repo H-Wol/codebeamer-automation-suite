@@ -60,6 +60,28 @@ class ExcelReaderTest(unittest.TestCase):
 
             self.assertEqual(reader.count_upload_rows(str(path), "0"), 2)
 
+    def test_read_excel_normalizes_integer_like_numbers_without_decimal_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary", "번호", "실수"])
+            sheet.append(["REQ-001", 101, 1.5])
+            sheet.append([None, 202, 2.0])
+            sheet.append(["REQ-002", None, 3.0])
+            workbook.save(path)
+            workbook.close()
+
+            reader = ExcelReader(header_row=1, summary_col="Summary")
+
+            raw_df = reader.read_excel(str(path), sheet_name=0)
+
+            self.assertEqual(raw_df["번호"].tolist(), [101, 202, None])
+            self.assertEqual(raw_df["실수"].tolist(), [1.5, 2, 3])
+            self.assertIsInstance(raw_df.iloc[0]["번호"], int)
+            self.assertIsInstance(raw_df.iloc[1]["실수"], int)
+
 
 if __name__ == "__main__":
     unittest.main()

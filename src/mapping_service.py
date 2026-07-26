@@ -138,28 +138,81 @@ class MappingService:
         pattern: str,
     ) -> int:
         """사용자 지정 정규식에서 tracker item id를 추출한다."""
+        ids = cls._parse_tracker_item_reference_ids_with_regex(raw_value, pattern=pattern)
+        return ids[0]
+
+    @classmethod
+    def _parse_tracker_item_reference_ids_with_regex(
+        cls,
+        raw_value: Any,
+        *,
+        pattern: str,
+    ) -> list[int]:
+        """사용자 지정 정규식에서 tracker item id 후보를 모두 추출한다."""
         if isinstance(raw_value, dict) and raw_value.get("id") is not None:
-            return int(raw_value["id"])
+            return [int(raw_value["id"])]
 
         regex_pattern = str(pattern or "").strip()
         if not regex_pattern:
             raise ValueError("Tracker item regex pattern is empty.")
 
         text = str(raw_value).strip()
-        match = re.search(regex_pattern, text)
-        if match is None:
+        matches = list(re.finditer(regex_pattern, text))
+        if not matches:
             raise ValueError(f"Tracker item regex did not match value: {raw_value!r}")
 
-        groups = [group for group in match.groups() if group is not None and str(group).strip()]
-        candidate = groups[0] if groups else match.group(0)
-        candidate_text = str(candidate).strip()
-        if not candidate_text:
-            raise ValueError(f"Tracker item regex produced empty match: {raw_value!r}")
-        if candidate_text.endswith(".0") and candidate_text[:-2].isdigit():
-            return int(candidate_text[:-2])
-        if candidate_text.isdigit():
-            return int(candidate_text)
-        raise ValueError(f"Tracker item regex did not produce numeric id: {candidate_text!r}")
+        resolved_ids: list[int] = []
+        for match in matches:
+            groups = [group for group in match.groups() if group is not None and str(group).strip()]
+            candidate = groups[0] if groups else match.group(0)
+            candidate_text = str(candidate).strip()
+            if not candidate_text:
+                raise ValueError(f"Tracker item regex produced empty match: {raw_value!r}")
+            if candidate_text.endswith(".0") and candidate_text[:-2].isdigit():
+                resolved_ids.append(int(candidate_text[:-2]))
+                continue
+            if candidate_text.isdigit():
+                resolved_ids.append(int(candidate_text))
+                continue
+            raise ValueError(f"Tracker item regex did not produce numeric id: {candidate_text!r}")
+
+        return resolved_ids
+
+    @classmethod
+    def normalize_multi_value_items(cls, raw_value: Any) -> list[Any]:
+        """다중값 필드 입력을 개별 항목 목록으로 정규화한다."""
+        if raw_value is None:
+            return []
+
+        if isinstance(raw_value, list):
+            candidates = raw_value
+        elif isinstance(raw_value, tuple | set):
+            candidates = list(raw_value)
+        elif isinstance(raw_value, str):
+            text = raw_value.strip()
+            if not text:
+                return []
+            if "\n" in text or "\r" in text:
+                candidates = text.splitlines()
+            elif ";" in text:
+                candidates = text.split(";")
+            else:
+                candidates = [raw_value]
+        else:
+            candidates = [raw_value]
+
+        normalized_items: list[Any] = []
+        for item in candidates:
+            if item is None:
+                continue
+            if isinstance(item, str):
+                stripped = item.strip()
+                if not stripped:
+                    continue
+                normalized_items.append(stripped)
+                continue
+            normalized_items.append(item)
+        return normalized_items
 
     @classmethod
     def _to_tracker_item_reference_payload(cls, raw_value: Any) -> dict[str, Any]:
@@ -218,7 +271,7 @@ class MappingService:
             return None
 
         if multiple_values:
-            values = raw_value if isinstance(raw_value, list) else [raw_value]
+            values = cls.normalize_multi_value_items(raw_value)
             resolved_values = []
             for item in values:
                 if item is None or str(item).strip() == "":
@@ -241,11 +294,22 @@ class MappingService:
             return None
 
         if multiple_values:
-            values = raw_value if isinstance(raw_value, list) else [raw_value]
+            values = cls.normalize_multi_value_items(raw_value)
             resolved_values = []
             for item in values:
                 if item is None or str(item).strip() == "":
                     continue
+                if isinstance(item, str):
+                    matched_ids = cls._parse_tracker_item_reference_ids_with_regex(item, pattern=pattern)
+                    if len(matched_ids) > 1:
+                        resolved_values.extend(
+                            {
+                                "id": item_id,
+                                "type": ReferenceType.TRACKER_ITEM.value,
+                            }
+                            for item_id in matched_ids
+                        )
+                        continue
                 resolved_values.append(
                     cls._to_tracker_item_reference_payload_with_regex(item, pattern=pattern)
                 )

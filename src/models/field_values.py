@@ -13,6 +13,7 @@ from .common import _as_list
 from .common import _coerce_bool
 from .common import _drop_none
 from .common import _serialize_value
+from .common import _stringify_scalar
 from .references import _build_reference
 
 
@@ -133,7 +134,7 @@ class TextFieldValue(AbstractFieldValue):
         """입력값을 문자열로 바꿔 텍스트 필드 값 객체를 만든다."""
         return cls(
             **cls._base_kwargs(field_info),
-            value=str(value) if value is not None else None,
+            value=_stringify_scalar(value),
         )
 
 
@@ -157,7 +158,7 @@ class ColorFieldValue(AbstractFieldValue):
         """입력값을 문자열로 보존해 색상 필드 값 객체를 만든다."""
         return cls(
             **cls._base_kwargs(field_info),
-            value=str(value) if value is not None else None,
+            value=_stringify_scalar(value),
         )
 
 
@@ -181,7 +182,7 @@ class CountryFieldValue(AbstractFieldValue):
         """입력값을 문자열로 보존해 국가 필드 값 객체를 만든다."""
         return cls(
             **cls._base_kwargs(field_info),
-            value=str(value) if value is not None else None,
+            value=_stringify_scalar(value),
         )
 
 
@@ -205,7 +206,7 @@ class LanguageFieldValue(AbstractFieldValue):
         """입력값을 문자열로 보존해 언어 필드 값 객체를 만든다."""
         return cls(
             **cls._base_kwargs(field_info),
-            value=str(value) if value is not None else None,
+            value=_stringify_scalar(value),
         )
 
 
@@ -229,7 +230,7 @@ class WikiTextFieldValue(AbstractFieldValue):
         """입력값을 문자열로 바꿔 위키 텍스트 필드 값 객체를 만든다."""
         return cls(
             **cls._base_kwargs(field_info),
-            value=str(value) if value is not None else None,
+            value=_stringify_scalar(value),
         )
 
 
@@ -380,7 +381,7 @@ class DateFieldValue(AbstractFieldValue):
         """입력값을 문자열로 보존해 날짜 필드 값 객체를 만든다."""
         return cls(
             **cls._base_kwargs(field_info),
-            value=str(value) if value is not None else None,
+            value=_stringify_scalar(value),
         )
 
 
@@ -404,7 +405,7 @@ class UrlFieldValue(AbstractFieldValue):
         """입력값을 문자열로 바꿔 URL 필드 값 객체를 만든다."""
         return cls(
             **cls._base_kwargs(field_info),
-            value=str(value) if value is not None else None,
+            value=_stringify_scalar(value),
         )
 
 

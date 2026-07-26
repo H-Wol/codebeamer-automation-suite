@@ -1,733 +1,270 @@
-# GUI 설계 초안
+# GUI 사용 가이드
 
-## 목표
+## 목적
 
-이 문서는 현재 CLI 업로드 파이프라인을 사용자용 GUI로 감싸기 위한 1차 설계안이다.
+이 문서는 현재 GUI의 실제 사용 흐름과 구현 범위를 정리합니다.
+GUI는 CLI 업로드 파이프라인을 그대로 재사용하면서, 비개발자도 설정, 검증, 업로드를 단계적으로 진행할 수 있도록 만든 화면 계층입니다.
 
-목표는 다음과 같다.
+## 현재 구현 범위
 
-- 비개발자도 설정, 매핑, 검증, 업로드를 순서대로 수행할 수 있어야 한다.
-- 이후 `exe` 로 배포 가능한 구조를 전제로 한다.
-- 현재 CLI 로직을 최대한 재사용하되, GUI 에 필요한 상태 제어와 진행률 표시를 추가한다.
-- 사용자가 잘못된 매핑이나 미지원 필드를 업로드 전에 확인할 수 있어야 한다.
+현재 GUI는 아래 기능을 실제로 연결합니다.
 
-## 현재 구현 상태
+- 설정 저장과 불러오기
+  - 일반 설정 저장
+  - 비밀번호 암호화 저장
+  - 전체 워크플로우 preset 저장 / 불러오기
+  - `케피코`, `이글루` 테마 선택
+- 온라인 / 테스트 모드
+  - 온라인 모드에서 Codebeamer 연결
+  - 테스트 모드에서 offline schema / tracker configuration snapshot 사용
+  - 테스트 모드에서는 실제 업로드 차단, Dry Run만 허용
+- 프로젝트 / 트래커 선택
+  - 온라인 조회
+  - 테스트 모드 자동 채움
+- 파일 단계
+  - 여러 Excel 파일 동시 선택
+  - 대표 파일 미리보기 선택
+  - `데이터 불러오기` 버튼 기반 시트 / 헤더 / summary 재분석
+  - Excel 재열기 비용을 줄이기 위한 raw dataframe 캐시 재사용
+- 상단 데이터 단계
+  - 파일별 루트 parent item 생성 여부 선택
+  - 파일명 또는 정규식 group 값을 필드 source로 사용
+  - 지원 필드는 고정값도 입력 가능
+  - 파일명 정규식 미리보기 제공
+- 매핑 단계
+  - `id`, `parent`, 내부 생성 컬럼 숨김
+  - 체크박스와 콤보박스 기반 필드 매핑
+  - 필드별 공통 기본값 지정
+  - `TrackerItemChoiceField` 의 regex / query 방식 선택
+  - query 다건 결과 처리 전략 선택
+- 검증 단계
+  - 차단 이슈와 안내 이슈 분리
+  - 대표 파일 검증 결과 표시
+  - 선택 파일 수와 전체 예상 업로드 건수 표시
+- 업로드 단계
+  - Dry Run / continue on error
+  - 총 건수, 현재 항목, 성공 / 실패 / 재시도 수 표시
+  - 항목별 시작 / 완료 / 소요 시간과 로그 표시
+  - 실패 응답 JSON 표시
+- 결과 단계
+  - 성공 / 실패 / 미해결 탭 표시
+  - 내부 생성 컬럼 숨김
 
-현재 브랜치 기준으로 1차 연결이 완료된 항목은 아래와 같다.
+## 빠른 사용 순서
 
-- 설정 화면
-  - 설정 불러오기/저장
-  - 비밀번호 저장 체크박스
-  - 암호화 저장
-  - compact 폼 레이아웃
-  - 기본 입력과 `추가 설정` 분리
-  - 연결 테스트
-  - 프로젝트/트래커 조회
-- 파일 선택 화면
-  - 실제 Excel 파일 선택
-  - 시트 목록 조회
-  - 헤더/미리보기 조회
-  - Summary 컬럼 자동 제안
-  - 미리보기 완료 전 `다음` 비활성화
-- 컬럼 매핑 화면
-  - 업로드 대상 컬럼 표시
-  - `id`, `parent` 제외
-  - 체크박스/콤보박스 기반 매핑
-  - 검증 실행 연결
-- 검증 화면
-  - `comparison_df`, `option_check_df`, `payload_df` 실패 정보 표시
-  - GUI에서 제외한 `UNMAPPED` 컬럼 무시
-  - `PAYLOAD_READY` 기준 payload 준비 상태 판정
-- 업로드 화면
-  - worker 기반 업로드 실행
-  - progress 갱신
-  - pause / resume / cancel 플래그 처리
-  - 로그와 실패 응답 JSON 표시
-- 결과 화면
-  - 성공 / 실패 / 미해결 결과 테이블 표시
+### 온라인 모드
 
-아직 남아 있는 항목은 다음과 같다.
+1. 설정 화면에서 Base URL, Username, Password를 입력합니다.
+2. 필요하면 `추가 설정`에서 Header Row, Summary Column, Sheet Name, 재시도 옵션을 조정합니다.
+3. 프로젝트 화면에서 프로젝트와 트래커를 불러옵니다.
+4. 파일 화면에서 Excel 파일을 하나 이상 선택하고 `데이터 불러오기`를 눌러 미리보기를 확인합니다.
+5. 필요하면 상단 데이터 화면에서 파일별 루트 parent item 규칙을 설정합니다.
+6. 매핑 화면에서 업로드 대상 컬럼, 기본값, tracker item 처리 방식을 정합니다.
+7. 검증 결과를 확인하고 차단 이슈를 해소합니다.
+8. 업로드 화면에서 Dry Run 또는 실제 업로드를 실행합니다.
 
-- 매핑 화면의 사용성 개선
-- 결과 화면에서 행 선택 기반 상세 보기 개선
-- GUI 수동 테스트 및 예외 경로 보강
-- `PyInstaller` 기반 exe 배포 스크립트 정리
+### 테스트 모드
 
-## 최근 반영 내용
+1. 설정 화면에서 `테스트` 토글을 켭니다.
+2. schema snapshot 과 tracker configuration snapshot 경로를 지정합니다.
+3. 프로젝트 화면으로 이동하면 테스트 프로젝트와 트래커가 자동으로 채워집니다.
+4. 이후 흐름은 온라인 모드와 같지만 실제 업로드는 허용되지 않고 Dry Run만 가능합니다.
 
-- 프로젝트/트래커 조회, Excel 미리보기, 매핑 준비, 검증은 `BackgroundTask` 기반으로 실행하고 작업 중 로딩 오버레이와 대기 커서를 표시한다.
-- 설정, 프로젝트, 파일, 검증 단계는 필요한 입력과 선행 작업이 끝나기 전까지 `다음` 버튼을 비활성화한다.
-- 설정 화면은 compact 레이아웃을 적용했고, 자주 바꾸지 않는 옵션은 `추가 설정` 카드로 접어 두었다.
-- 기본 창 크기는 `920x500`, 최소 크기는 `760x400`이며 단계 전환과 `추가 설정` 토글 시 현재 페이지 내용 높이를 기준으로 창 크기를 다시 계산한다.
-- 페이지 카드 내부 중복 제목을 제거해 헤더 영역만 단계 제목을 표시하고, 입력칸/버튼/배지/여백을 함께 줄여 밀도를 낮췄다.
-- `QComboBox` 는 기본 시스템 화살표 대신 커스텀 chevron 아이콘을 사용한다.
-- GUI 검증은 CLI 와 같은 enum 값을 기준으로 `payload_status`, `mapping status` 를 해석하며, 사용자가 GUI 에서 제외한 컬럼은 차단 이슈로 보지 않는다.
+샘플 데이터는 [data/gui-offline-sample/README.md](../data/gui-offline-sample/README.md)를 참고합니다.
 
-## 권장 기술 선택
-
-- GUI 프레임워크: `PySide6`
-- 화면 전환: `QMainWindow + QStackedWidget`
-- 백그라운드 실행: `QThread`
-- 결과 테이블: `QTableView + custom table model`
-- 설정 저장: JSON 파일
-- 배포: `PyInstaller`
-
-선택 이유:
-
-- 단계형 화면과 테이블 기반 검증 결과를 구현하기 쉽다.
-- 업로드 중 진행률, 일시정지, 중단을 UI thread 와 분리해 처리할 수 있다.
-- 추후 `exe` 배포 시 비교적 안정적인 선택지다.
-
-## 사용자 흐름
-
-1. 설정 화면에서 접속 정보와 기본 옵션을 수정하거나 저장한다.
-2. 파일 선택 화면에서 Excel 파일, 시트, 헤더 행을 지정한다.
-3. 컬럼 매핑 화면에서 업로드 대상 컬럼과 Codebeamer 필드를 매핑한다.
-4. 검증 화면에서 매핑 결과, lookup 결과, 미지원 필드를 확인한다.
-5. 업로드 화면에서 진행률을 보며 실행하고, 필요 시 일시정지하거나 재개한다.
-6. 결과 화면에서 성공/실패 목록과 서버 응답 JSON 을 확인하고 결과 파일을 저장한다.
-
-각 단계는 `이전` / `다음` 버튼으로 이동한다. 페이지에 진입할 때 필요한 데이터와 UI 만 생성하거나 갱신한다.
-작업 시간이 걸리는 단계는 백그라운드 worker 와 로딩 오버레이를 사용해 UI 멈춤처럼 보이지 않게 한다.
-
-## 화면 구성
+## 화면별 설명
 
 ### 1. 설정 화면
 
-사용자가 수정할 수 있어야 하는 항목:
+주요 항목:
 
-- `Codebeamer Base URL`
-- `Username`
-- `Password`
-- `Excel Header Row`
-- `Summary Column`
-- `Sheet Name`
-- `Rate Limit Retry Delay`
-- `Rate Limit Max Retries`
-- `Output Directory`
-
-버튼:
-
-- `불러오기`
-- `저장`
-- `다음`
-
-요구사항:
-
-- 설정 파일을 직접 수정하지 않아도 GUI 에서 변경 및 저장 가능해야 한다.
-- 비밀번호 저장은 별도 체크박스로 제어하는 것이 안전하다.
-- 최소한 최근 사용 설정 1개는 다시 불러올 수 있어야 한다.
-- 기본 화면에는 접속 정보만 두고, 나머지 실행 옵션은 `추가 설정` 섹션에서 접고 펼칠 수 있어야 한다.
-
-### 2. 파일 선택 화면
-
-사용자가 지정할 수 있어야 하는 항목:
-
-- Excel 파일 경로
-- 시트 이름 또는 시트 번호
-- 헤더 행
-- Summary 컬럼
-
-UI 요소:
-
-- 파일 선택 버튼
-- 시트 선택 콤보박스
-- 미리보기 테이블
-- 자동 감지 결과 표시
-
-자동 처리:
-
-- `Summary` 를 우선 기본 컬럼으로 선택한다.
-- 없으면 `요약` 을 fallback 으로 사용한다.
-
-### 3. 컬럼 매핑 화면
-
-이 화면은 수동 텍스트 입력보다 체크박스와 콤보박스 중심으로 구성한다.
-
-권장 테이블 컬럼:
-
-- `사용` 체크박스
-- `Excel 컬럼명`
-- `Codebeamer 필드` 콤보박스
-- `필드 타입`
-- `다중값 여부`
-- `지원 여부`
+- Base URL
+- Username
+- Password
+- 비밀번호 저장
+- 테마
+- 테스트 모드 토글
+- Schema Snapshot / Config Snapshot
+- Header Row
+- Summary Column
+- Sheet Name
+- Retry Delay / Max Retries
+- Output Directory
 
 동작 원칙:
 
-- 자동 매핑 결과를 먼저 제안한다.
-- 사용자는 체크박스로 업로드에 포함할 컬럼만 선택한다.
-- 선택된 컬럼만 대상 필드 콤보박스를 활성화한다.
-- 사용자가 GUI 에서 체크를 해제한 컬럼은 검증 차단 대상에서 제외한다.
+- 테스트 모드가 꺼져 있으면 온라인 연결 정보를 사용합니다.
+- 테스트 모드가 켜져 있으면 snapshot 경로만 필수입니다.
+- `전체 설정 저장`은 현재 설정, 파일 옵션, 상단 데이터, 매핑, 기본값, tracker item 설정을 함께 저장합니다.
+- `전체 설정 불러오기`는 저장된 preset을 다시 적용합니다.
+- 테스트 모드가 켜진 경우에만 상단의 `테스트 모드` 배지를 표시합니다.
 
-매핑에서 제외할 필드:
+### 2. 프로젝트 화면
 
-- `id`
-- `parent`
+온라인 모드:
 
-제외 이유:
+- `프로젝트 불러오기`로 프로젝트 목록을 가져옵니다.
+- 프로젝트를 선택하면 해당 프로젝트의 트래커를 조회합니다.
 
-- `parent` 는 hierarchy processor 가 자동 계산한다.
-- `id` 는 신규 업로드 매핑 대상이 아니다.
+테스트 모드:
 
-자동 계산으로 유지할 항목:
+- `스냅샷 불러오기`를 누르거나 페이지 진입 시 snapshot 기반 프로젝트 / 트래커를 자동으로 채웁니다.
 
-- `multipleValues=true` 여부
-- payload target kind
-- preconstruction kind
-- lookup target kind
+### 3. 파일 화면
 
-이 항목들은 사용자 수정 대상이 아니라 설명용 정보로 노출하는 것이 맞다.
+주요 항목:
 
-### 4. 검증 화면
+- Excel 파일
+- 미리보기 파일
+- 시트
+- 헤더 행
+- Summary 컬럼
 
-이 화면은 업로드 전 품질 게이트 역할을 한다.
+중요한 동작:
 
-표시해야 하는 항목:
+- 파일을 고른 직후에는 미리보기를 다시 만들지 않습니다.
+- 사용자가 `데이터 불러오기`를 눌렀을 때만 시트 목록, 헤더, 미리보기를 갱신합니다.
+- 여러 파일을 고르면 대표 파일을 바꿔가며 미리보기를 확인할 수 있습니다.
+- 저장된 파일 설정을 다시 불러온 뒤에도 `데이터 불러오기`를 한 번 실행해야 다음 단계로 갈 수 있습니다.
 
-- 필수 필드 누락
-- unsupported field
-- lookup 실패
-- ambiguous lookup
-- tracker item ID parse 실패
-- status transition TODO 경고
+### 4. 상단 데이터 화면
 
-권장 상단 요약:
+의미:
 
-- 전체 행 수
-- 업로드 가능 행 수
-- 오류 행 수
-- 경고 행 수
+- 각 Excel 파일의 모든 업로드 row를 하나의 루트 parent item 아래에 넣고 싶을 때 사용하는 단계입니다.
+- 옵션을 끄면 루트 parent item을 만들지 않고 기존 업로드 흐름만 사용합니다.
 
-현재 구현 메모:
+지원 기능:
 
-- 내부적으로는 `comparison_df`, `option_check_df`, `payload_df` 를 조합해 사용자 표시용 이슈 테이블을 만든다.
-- payload 준비 여부는 `PAYLOAD_READY` enum 값 기준으로 해석한다.
+- 파일명(확장자 제외) 또는 전체 파일명을 정규식 대상으로 선택
+- 정규식 전체 match 또는 group 값을 source로 선택
+- 필드별 `파일명/정규식` 또는 `고정값` 선택
+- 파일명 파싱 미리보기
 
-권장 하단 테이블 컬럼:
+현재 기본 동작:
 
-- `행 번호`
-- `컬럼명`
-- `원본 값`
-- `해석 결과`
-- `상태`
-- `오류/경고 메시지`
+- schema 의 `name` builtin 에 대응하는 루트 item 제목 필드는 기본적으로 파일명(확장자 제외)을 사용합니다.
+- 제목 필드 외 나머지 필드는 고정값 또는 schema 지원 방식에 따라 따로 지정할 수 있습니다.
 
-필터:
+### 5. 매핑 화면
 
-- `오류만 보기`
-- `경고만 보기`
-- `현재 선택 컬럼만 보기`
+표시 항목:
 
-### 5. 업로드 화면
+- 사용 여부
+- Excel 컬럼
+- Codebeamer 필드
+- 필드 타입
+- 다중값 여부
+- 지원 여부
 
-필수 요소:
+추가 설정:
 
-- 전체 progress bar
-- 현재 처리 중 행 번호 / 항목명
-- 성공 수
-- 실패 수
-- 재시도 수
-- 최근 로그 영역
-- `시작`
-- `일시정지`
-- `재개`
-- `중단`
+- 공통 기본값
+- Tracker Item 처리
 
-중요 요구사항:
+현재 기본값 지원 원칙:
 
-- 업로드는 중간에 일시정지 가능해야 한다.
-- 진행률은 행 기준으로 표시한다.
-- 실패 시 서버 응답 JSON 을 즉시 확인할 수 있어야 한다.
+- `multipleValues=false` 인 필드만 대상으로 합니다.
+- 정적 option 필드는 schema option 목록에서 선택합니다.
+- `BoolField` 는 `true` / `false` 를 선택합니다.
+- 일반 scalar 필드, `UserReference`, `MemberField`, `TrackerItemChoiceField` 는 직접 입력을 허용합니다.
 
-pause/resume 정책:
+`TrackerItemChoiceField` 처리:
 
-- 현재 진행 중인 HTTP 요청을 강제 중단하지 않는다.
-- 각 row 처리 경계에서 `pause flag` 를 확인해 다음 row 로 넘어가기 전에 멈춘다.
-- `cancel flag` 는 다음 안전 지점에서 종료한다.
+- regex 모드
+  - 입력값에서 ID를 직접 추출합니다.
+  - 예시 텍스트를 바로 보여줍니다.
+- query 모드
+  - tracker configuration 에서 source tracker를 찾은 경우에만 활성화됩니다.
+  - 필요한 이름/summary 값은 선택 파일 전체에서 중복 제거 후 사전 조회합니다.
+  - 다건 결과 처리 전략은 `가장 비슷한 값`, `첫 번째 결과`, `마지막 결과`, `오류로 처리` 중에서 선택합니다.
 
-### 6. 결과 화면
+### 6. 검증 화면
 
-표시해야 하는 항목:
+요약 영역에 표시하는 값:
 
-- 성공 목록
-- 실패 목록
-- unresolved 목록
-- 실패 응답 JSON 상세
-- 생성된 item ID 매핑
-
-버튼:
-
-- `실패 목록 내보내기`
-- `결과 폴더 열기`
-- `새 업로드 시작`
-- `설정으로 돌아가기`
-
-## 상태 모델
-
-GUI 전용 상태는 최소한 아래처럼 분리한다.
-
-### AppSettingsState
-
-- base_url
-- username
-- password
-- default_project_id
-- default_tracker_id
-- excel_header_row
-- summary_column
-- rate_limit_retry_delay_seconds
-- rate_limit_max_retries
-- output_dir
-
-### FileSelectionState
-
-- file_path
-- sheet_name
-- header_row
-- preview_df
-
-### MappingState
-
-- selected_project_id
-- selected_tracker_id
-- schema_df
-- mapping_dict
-- enabled_columns
-- auto_list_columns
-
-### ValidationState
-
-- comparison_df
-- option_candidates_df
-- option_check_df
-- converted_upload_df
-- blocking_issues
-- warning_issues
-
-### UploadRunState
-
-- is_running
-- is_paused
-- is_cancel_requested
-- current_index
-- total_count
-- success_count
-- failed_count
-- retry_count
-- current_item_name
-- last_error_message
-- last_error_response_json
-
-### ResultState
-
-- success_df
-- failed_df
-- unresolved_df
-- created_map
-- output_dir
-
-## 기존 로직 재사용 전략
-
-재사용 대상:
-
-- `src/codebeamer_client.py`
-- `src/excel_reader.py`
-- `src/hierarchy_processor.py`
-- `src/mapping_service.py`
-- `src/wizard.py`
-- `src/models/`
-
-GUI 에 새로 필요한 래퍼:
-
-- 설정 파일 I/O 서비스
-- 위저드 단계별 view model
-- upload worker
-- progress/paused/cancelled 신호 전달 계층
-
-즉 업로드 도메인 로직은 가능한 한 기존 `wizard` 와 `mapping_service` 에 두고, GUI 는 상태 제어와 표시 역할만 담당해야 한다.
-
-## 업로드 실행 모델
-
-권장 실행 단위:
-
-- 한 row 단위로 payload upload
-- row 경계에서 pause/cancel 확인
-- 실패 시 `error_status_code`, `error_response_json` 를 즉시 UI 상태에 반영
-
-권장 신호:
-
-- `started(total_count)`
-- `row_started(index, upload_name)`
-- `row_succeeded(index, item_id)`
-- `row_failed(index, error_status_code, error_response_json)`
-- `progress_changed(current, total)`
-- `paused()`
-- `resumed()`
-- `cancelled()`
-- `finished(result_state)`
-
-## 설정 파일 정책
-
-GUI 에서는 설정 파일 수정과 저장이 가능해야 한다.
-
-권장 파일 예시:
-
-- `app_settings.json`
-
-저장 대상:
-
-- 접속 정보
-- 기본 프로젝트/트래커
-- Excel 기본 옵션
-- 업로드 재시도 설정
-- 마지막 사용 파일 경로
+- 선택 파일 수
+- 전체 예상 업로드 건수
+- 대표 파일 검증 행 수
+- 바로 업로드 가능 행 수
+- 수정 필요 행 수
+- 안내 행 수
 
 주의:
 
-- 비밀번호 저장은 사용자 동의가 있을 때만 허용하는 것이 맞다.
-- OS keyring 연동은 이후 확장 항목으로 둔다.
+- 다중 파일일 때 세부 이슈 테이블은 대표 파일 기준으로 보여줍니다.
+- 전체 배치 건수는 모든 선택 파일을 합산한 결과를 사용합니다.
 
-## MVP 범위
+### 7. 업로드 화면
 
-1차 MVP 에 포함할 항목:
+표시 항목:
 
-- 설정 수정/저장
-- 비밀번호 저장 체크박스와 암호화 저장
-- 파일 선택
-- 프로젝트/트래커 선택
-- 체크박스 기반 컬럼 매핑
-- 검증 결과 테이블
-- 업로드 progress bar
-- pause / resume / cancel
-- 결과 화면
-- 실패 응답 JSON 보기
+- 전체 progress bar
+- 현재 항목
+- 총 대상 / 완료 건수
+- 성공 / 실패 / 재시도 수
+- 배치 시간
+- 실시간 로그
+- 항목별 진행 기록
+- 실패 응답 JSON
 
-1차 MVP 에서 제외해도 되는 항목:
+현재 동작:
 
-- status transition 후처리 UI
-- 다중 프로필 관리
-- 템플릿 저장
-- 최근 업로드 이력 브라우저
-- 고급 시각화 대시보드
+- tracker item query가 필요한 경우, 업로드 전에 전체 파일의 query 후보를 사전 조회합니다.
+- 상단 데이터가 켜져 있으면 파일별 root item을 먼저 업로드한 뒤 child row를 올립니다.
+- pause / cancel 은 안전한 경계에서 처리합니다.
 
-## 미결정 항목
+### 8. 결과 화면
 
-다음 구현 전에 결정이 필요한 항목:
+탭:
 
-- 비밀번호 저장 허용 여부와 방식
-- 설정 파일 저장 위치
-- Excel 미리보기 최대 행 수
-- 업로드 중 로그 저장 포맷
-- status transition 후처리 UI 반영 시점
+- 성공
+- 실패
+- 미해결
 
-## 권장 다음 작업
+표시 원칙:
 
-1. 컬럼 매핑 화면의 편집 UX를 개선한다.
-2. 결과 화면에서 실패 행 선택 시 상세 JSON 을 동적으로 갱신한다.
-3. GUI 수동 테스트 시나리오를 문서화한다.
-4. `PyInstaller` 빌드 스크립트와 배포 가이드를 추가한다.
+- `_row_id`, `parent_row_id`, `payload_json`, `__lookup_*` 같은 내부 컬럼은 숨깁니다.
+- 실패 응답 JSON 이 있으면 첫 실패 응답을 하단 뷰어에 표시합니다.
 
-## 화면별 위젯 목록
+## 저장 정책
 
-### 설정 화면 위젯
+설정 파일 위치:
 
-- `QLineEdit`: Base URL
-- `QLineEdit`: Username
-- `QLineEdit`: Password
-- `QSpinBox` 또는 `QLineEdit`: Default Project ID
-- `QSpinBox` 또는 `QLineEdit`: Default Tracker ID
-- `QSpinBox`: Excel Header Row
-- `QLineEdit`: Summary Column
-- `QDoubleSpinBox`: Rate Limit Retry Delay
-- `QSpinBox`: Rate Limit Max Retries
-- `QLineEdit`: Output Directory
-- `QCheckBox`: 비밀번호 저장
-- `QPushButton`: 불러오기
-- `QPushButton`: 저장
-- `QPushButton`: 기본값 복원
-- `QPushButton`: 연결 테스트
-- `QPushButton`: 다음
+- `~/.codebeamer-automation-suite/gui_settings.json`
+- `~/.codebeamer-automation-suite/gui_workflow_preset.json`
+- `~/.codebeamer-automation-suite/gui_settings.key`
 
-### 파일 선택 화면 위젯
+저장 대상:
 
-- `QLineEdit`: 파일 경로
-- `QPushButton`: 파일 선택
-- `QComboBox`: 시트 선택
-- `QSpinBox`: 헤더 행
-- `QComboBox`: Summary 컬럼 선택
-- `QTableView`: Excel 미리보기
-- `QLabel`: 자동 감지 결과
-- `QPushButton`: 이전
-- `QPushButton`: 다음
+- 일반 설정
+- 비밀번호 저장 여부와 암호화된 비밀번호
+- 마지막 파일 경로
+- 파일 옵션
+- 상단 데이터 설정
+- 선택된 매핑
+- 기본값
+- tracker item 처리 설정
 
-### 컬럼 매핑 화면 위젯
+## UX 관련 변경 사항
 
-- `QTableView`: 매핑 테이블
-- `QCheckBox`: 미지원 필드 숨기기
-- `QCheckBox`: 매핑된 항목만 보기
-- `QPushButton`: 자동 매핑 재실행
-- `QPushButton`: 선택 초기화
-- `QPushButton`: 이전
-- `QPushButton`: 다음
+- 긴 페이지는 내부 스크롤로 처리합니다.
+- 창 높이는 화면 높이의 88%를 넘지 않도록 제한합니다.
+- 기본 창 크기는 `1160x780`, 최소 크기는 `860x620`입니다.
+- 에러와 안내는 커스텀 다이얼로그로 표시합니다.
 
-매핑 테이블 delegate:
+## 현재 제한 사항
 
-- `사용`: 체크박스 delegate
-- `Codebeamer 필드`: 콤보박스 delegate
-- `메모`: 읽기 전용 텍스트
+- 테스트 모드에서는 실제 Codebeamer 업로드를 지원하지 않습니다.
+- `Status` transition 후처리는 아직 구현하지 않았습니다.
+- tracker configuration 에 source tracker 정보가 없는 `TrackerItemChoiceField` 는 query 모드를 지원하지 않습니다.
+- offline snapshot 에 사용자 / 그룹 / tracker item query 데이터가 없으면 관련 lookup 은 실패하도록 유지합니다.
+- 결과 화면의 상세 상호작용은 아직 최소 구성입니다.
 
-### 검증 화면 위젯
+## 권장 테스트 시나리오
 
-- `QLabel`: 전체 행 수
-- `QLabel`: 업로드 가능 행 수
-- `QLabel`: 오류 행 수
-- `QLabel`: 경고 행 수
-- `QCheckBox`: 오류만 보기
-- `QCheckBox`: 경고만 보기
-- `QCheckBox`: 현재 선택 컬럼만 보기
-- `QTableView`: 검증 결과 테이블
-- `QPlainTextEdit`: 상세 메시지 뷰어
-- `QPushButton`: 이전
-- `QPushButton`: 다음
-
-### 업로드 화면 위젯
-
-- `QProgressBar`: 전체 진행률
-- `QLabel`: 현재 처리 중 항목
-- `QLabel`: 성공 수
-- `QLabel`: 실패 수
-- `QLabel`: 재시도 수
-- `QLabel`: 현재 상태
-- `QPlainTextEdit`: 실시간 로그
-- `QPlainTextEdit`: 최근 실패 응답 JSON
-- `QPushButton`: 시작
-- `QPushButton`: 일시정지
-- `QPushButton`: 재개
-- `QPushButton`: 중단
-- `QPushButton`: 결과 화면으로 이동
-
-### 결과 화면 위젯
-
-- `QTabWidget`
-  - 성공 목록 탭
-  - 실패 목록 탭
-  - unresolved 목록 탭
-  - 생성 ID 매핑 탭
-- `QTableView`: 각 결과 테이블
-- `QPlainTextEdit`: 실패 응답 JSON 상세 뷰
-- `QPushButton`: 실패 목록 내보내기
-- `QPushButton`: 결과 폴더 열기
-- `QPushButton`: 새 업로드 시작
-- `QPushButton`: 설정으로 돌아가기
-
-## 버튼 동작 정의
-
-### 설정 화면
-
-- `불러오기`
-  - 저장된 GUI 설정 파일을 읽는다.
-  - 유효하지 않은 값이 있으면 필드 단위 오류를 표시한다.
-- `저장`
-  - 현재 입력값을 검증한 뒤 설정 파일에 저장한다.
-  - 저장 성공 시 상태 표시줄에 메시지를 남긴다.
-- `기본값 복원`
-  - GUI 기본값으로 되돌린다.
-- `연결 테스트`
-  - Base URL, Username, Password 로 API 연결 여부를 확인한다.
-  - 성공 시 프로젝트 조회 가능 상태로 전환한다.
-- `다음`
-  - 필수 설정값 검증 후 파일 선택 화면으로 이동한다.
-
-### 파일 선택 화면
-
-- `파일 선택`
-  - 파일 다이얼로그를 열고 Excel 파일 경로를 채운다.
-  - 파일이 바뀌면 시트 목록과 미리보기를 다시 불러온다.
-- `이전`
-  - 설정 화면으로 돌아간다.
-- `다음`
-  - 파일, 시트, 헤더 행 검증 후 컬럼 매핑 화면으로 이동한다.
-
-### 컬럼 매핑 화면
-
-- `자동 매핑 재실행`
-  - 현재 schema 기준으로 Excel 컬럼 자동 매핑을 다시 계산한다.
-- `선택 초기화`
-  - 사용 체크박스와 수동 지정 필드를 초기 상태로 되돌린다.
-- `이전`
-  - 파일 선택 화면으로 돌아간다.
-- `다음`
-  - 최소 필수 매핑 충족 여부를 확인한 뒤 검증 화면으로 이동한다.
-
-### 검증 화면
-
-- `이전`
-  - 컬럼 매핑 화면으로 돌아가 수정한다.
-- `다음`
-  - blocking issue 가 없을 때만 업로드 화면으로 이동한다.
-  - blocking issue 가 있으면 이동을 차단하고 해당 건수를 강조한다.
-
-### 업로드 화면
-
-- `시작`
-  - upload worker 를 시작한다.
-  - 시작 후 설정/매핑 관련 화면 이동은 잠근다.
-- `일시정지`
-  - pause flag 를 true 로 변경한다.
-  - 현재 row 완료 후 대기 상태로 전환한다.
-- `재개`
-  - pause flag 를 false 로 변경하고 worker 진행을 재개한다.
-- `중단`
-  - cancel flag 를 true 로 변경한다.
-  - 다음 안전 지점에서 종료한다.
-- `결과 화면으로 이동`
-  - 업로드가 완료되었거나 중단된 후에만 활성화한다.
-
-### 결과 화면
-
-- `실패 목록 내보내기`
-  - `failed_df.csv`, `failed_responses.jsonl` 를 저장하거나 복사한다.
-- `결과 폴더 열기`
-  - output 디렉터리를 연다.
-- `새 업로드 시작`
-  - 업로드 관련 상태를 초기화하고 파일 선택 화면으로 이동한다.
-- `설정으로 돌아가기`
-  - 전체 세션을 닫고 설정 화면으로 이동한다.
-
-## 상태 전이
-
-### 페이지 전이
-
-```text
-설정
-  -> 파일 선택
-  -> 컬럼 매핑
-  -> 검증
-  -> 업로드
-  -> 결과
-```
-
-세부 규칙:
-
-- `설정 -> 파일 선택`
-  - 접속 정보가 최소 조건을 만족해야 한다.
-- `파일 선택 -> 컬럼 매핑`
-  - 파일, 시트, 헤더 행이 유효해야 한다.
-- `컬럼 매핑 -> 검증`
-  - 필수 컬럼 매핑이 완료되어야 한다.
-- `검증 -> 업로드`
-  - blocking issue 가 없어야 한다.
-- `업로드 -> 결과`
-  - 완료 또는 중단 상태여야 한다.
-
-### 업로드 상태 전이
-
-```text
-idle
-  -> running
-  -> paused
-  -> running
-  -> completed
-
-idle
-  -> running
-  -> cancelling
-  -> cancelled
-
-idle
-  -> running
-  -> failed
-```
-
-설명:
-
-- `idle`
-  - 업로드 전 초기 상태
-- `running`
-  - worker 가 row 를 순차 처리 중인 상태
-- `paused`
-  - 현재 row 완료 후 다음 row 시작 전 대기 상태
-- `cancelling`
-  - 중단 요청을 받았고 종료 지점으로 이동 중인 상태
-- `completed`
-  - 전체 row 처리 완료
-- `cancelled`
-  - 사용자 요청으로 종료
-- `failed`
-  - worker 수준 치명적 오류 발생
-
-## 와이어프레임 초안
-
-### 설정 화면
-
-```text
-+------------------------------------------------------+
-| [설정]                                               |
-| Base URL          [______________________________]   |
-| Username          [______________________________]   |
-| Password          [______________________________]   |
-| [ ] 비밀번호 저장                                   |
-| Default Project   [________]  Default Tracker [__]   |
-| Header Row        [__]       Summary Column [____]   |
-| Retry Delay       [__._]     Max Retries   [___]     |
-| Output Dir        [________________________] [찾기]  |
-|                                                      |
-| [불러오기] [저장] [기본값 복원] [연결 테스트] [다음] |
-+------------------------------------------------------+
-```
-
-### 컬럼 매핑 화면
-
-```text
-+----------------------------------------------------------------------------------+
-| [컬럼 매핑]                                                                      |
-| [ ] 미지원 필드 숨기기   [ ] 매핑된 항목만 보기   [자동 매핑 재실행] [선택 초기화] |
-|----------------------------------------------------------------------------------|
-| 사용 | Excel 컬럼 | Codebeamer 필드 | 타입 | 다중값 | lookup | 지원 | 메모       |
-| [x] | Summary    | Summary         | text | false  | no     | yes  |            |
-| [x] | 담당자      | MemberField     | ref  | true   | yes    | yes  | USER/ROLE |
-| [ ] | parent     | -               | -    | -      | -      | n/a  | 제외      |
-| [ ] | id         | -               | -    | -      | -      | n/a  | 제외      |
-|----------------------------------------------------------------------------------|
-| [이전]                                                              [다음]      |
-+----------------------------------------------------------------------------------+
-```
-
-### 업로드 화면
-
-```text
-+--------------------------------------------------------------+
-| [업로드]                                                     |
-| 진행률: [######################------------] 62%             |
-| 현재 항목: REQ-102                                            |
-| 성공 120   실패 3   재시도 4   상태 running                  |
-|--------------------------------------------------------------|
-| 로그                                                         |
-| - row 121 uploaded                                           |
-| - row 122 rate limited, retry in 4s                          |
-| - row 123 failed: 400                                        |
-|--------------------------------------------------------------|
-| 최근 실패 응답 JSON                                          |
-| {                                                            |
-|   "message": "Invalid tracker item"                          |
-| }                                                            |
-|--------------------------------------------------------------|
-| [시작] [일시정지] [재개] [중단] [결과 화면으로 이동]         |
-+--------------------------------------------------------------+
-```
-
-## 구현 우선순위
-
-1. 설정 화면
-2. 파일 선택 화면
-3. 컬럼 매핑 화면
-4. 검증 화면
-5. 업로드 worker 와 progress/pause/resume
-6. 결과 화면
-
-이 순서가 맞는 이유:
-
-- 앞단 화면이 준비되어야 기존 `wizard` 흐름을 GUI 에 연결할 수 있다.
-- pause/resume 은 upload worker 구조가 잡힌 뒤 구현해야 안전하다.
-- 결과 화면은 upload 상태 구조가 확정된 뒤 붙이는 것이 중복 작업이 적다.
+1. offline sample 두 파일을 함께 선택해 다중 파일 preview / validation / Dry Run 흐름을 확인합니다.
+2. 상단 데이터 옵션을 켜고 파일명 정규식 미리보기가 예상대로 나오는지 확인합니다.
+3. tracker item regex 모드와 query 모드를 각각 검증합니다.
+4. 기본값이 비어 있는 행에서 올바르게 fallback 되는지 확인합니다.
+5. 실패 응답 JSON 과 항목별 진행 기록이 업로드 화면에 남는지 확인합니다.

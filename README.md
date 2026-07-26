@@ -2,9 +2,8 @@
 
 Excel 기반 계층형 데이터를 Codebeamer Tracker Item으로 변환하고 업로드하는 자동화 도구입니다.
 
-현재 기본 실행 경로는 `cli_main.py`이며, 예전 `v2` 경로의 개선 사항은 모두 원본 모듈에 반영되어 있습니다.
-
-GUI 1차 스켈레톤 엔트리 포인트는 `gui_main.py` 입니다.
+현재 기본 실행 경로는 `cli_main.py`이며, GUI 엔트리 포인트는 `gui_main.py` 입니다.
+예전 `v2` 경로의 개선 사항은 원본 모듈에 반영되어 있고, GUI도 같은 업로드 파이프라인을 재사용합니다.
 
 ## 현재 지원하는 핵심 기능
 
@@ -15,19 +14,24 @@ GUI 1차 스켈레톤 엔트리 포인트는 `gui_main.py` 입니다.
 - 정적 option 값을 Codebeamer reference payload로 변환
 - `UserChoiceField`, `UserReference` 필드에 대해 사용자 이름 우선 lookup 후 reference로 변환
 - `MemberField` 는 `USER/ROLE/GROUP` 타입별 후보를 이름으로 찾아 mixed reference로 변환
-- `TrackerItemChoiceField` 및 builtin `subjects` 필드에 대해 tracker item ID를 파싱해 `TrackerItemReference`로 변환
+- `TrackerItemChoiceField` 및 builtin `subjects` 필드에 대해 정규식 ID 추출 또는 configuration 기반 tracker item query lookup 지원
 - 사용자 lookup 결과를 프로젝트 단위 임시 캐시에 저장해 반복 요청 최소화
 - `TableFieldName.ColumnName` 형식 헤더를 이용한 `TableField` 조립
 - row별 payload cache 생성과 preview/upload 재사용
 - parent-first 순서 보장 업로드
 - 실행 결과와 중간 산출물 저장
-- PySide6 기반 GUI 스켈레톤
+- PySide6 기반 단계형 GUI
 - GUI 설정 저장 및 암호화된 비밀번호 저장
-- GUI에서 연결 테스트, 프로젝트/트래커 조회, Excel 시트/미리보기 조회
-- GUI에서 컬럼 매핑, 검증, 업로드, 결과 화면의 1차 연결
-- GUI에서 프로젝트/트래커 조회, 파일 미리보기, 매핑 준비, 검증 단계의 백그라운드 실행과 로딩 오버레이 표시
+- GUI 전체 설정 저장/불러오기와 테마 선택
+- GUI 테스트 모드용 offline schema/config snapshot 로딩
+- GUI에서 프로젝트/트래커 조회, 다중 Excel 파일 선택, 시트/미리보기 조회
+- GUI에서 상단 데이터 생성 여부, 파일명 정규식 파싱, 루트 필드 매핑 설정
+- GUI에서 컬럼 매핑, 기본값 설정, tracker item query/regex 전략 선택
+- GUI에서 파일/검증/업로드 단계의 백그라운드 실행과 로딩 오버레이 표시
 - GUI에서 단계별 `다음` 버튼 활성화 조건과 검증 차단 정책 적용
-- GUI 설정 화면의 compact 레이아웃, `추가 설정` 접기, 현재 페이지 기준 창 높이 재계산
+- GUI 검증/결과 화면에서 내부 생성 컬럼 숨김
+- GUI 업로드 화면에서 총 건수, 항목별 로그, 시작/완료 시각, 소요 시간 표시
+- GUI 설정 화면 compact 레이아웃, 테스트 모드 배지, 1080 높이 대응 스크롤/높이 상한 적용
 - GUI와 CLI 간 payload ready 판정 및 사용자 표시용 이슈 추출 기준 일치
 
 ## 권장 실행 명령
@@ -36,61 +40,74 @@ GUI 1차 스켈레톤 엔트리 포인트는 `gui_main.py` 입니다.
 py -3 cli_main.py
 ```
 
-GUI 스켈레톤 실행:
+GUI 실행:
 
 ```bash
 py -3 gui_main.py
 ```
 
+## GUI 오프라인 예시 데이터
+
+GUI `테스트 모드`를 바로 눌러볼 수 있는 샘플 세트는 `data/gui-offline-sample/` 에 있습니다.
+
+- `offline_schema.json`
+- `offline_tracker_configuration.json`
+- `files/SAMPLE_MODULE_A_TC_001.xlsx`
+- `files/SAMPLE_MODULE_B_TC_002.xlsx`
+- `files/SAMPLE_LOOKUP_TC_003.xlsx`
+
+사용 순서와 매핑 팁은 [data/gui-offline-sample/README.md](./data/gui-offline-sample/README.md)에 정리했습니다.
+
 ## GUI 구현 현황
 
-현재 `feature/upload-gui` 브랜치 기준 GUI에서 실제로 연결된 범위는 다음과 같습니다.
+현재 GUI는 아래 단계를 실제 업로드 흐름으로 연결합니다.
 
 - 설정 화면
-  - 설정 불러오기/저장
-  - 비밀번호 저장 체크박스
-  - `cryptography` 기반 비밀번호 암호화 저장
-  - compact 폼 레이아웃
-  - 기본 입력과 `추가 설정` 분리
-  - 연결 테스트
-  - 프로젝트/트래커 조회
-- 파일 선택 화면
-  - Excel 파일 선택
-  - 시트 목록 조회
-  - 헤더/미리보기 조회
+  - Base URL, 계정, 비밀번호 암호화 저장
+  - `케피코` / `이글루` 테마 선택
+  - 테스트 모드 토글과 snapshot 경로 지정
+  - `추가 설정` 접기
+  - 전체 설정 저장 / 불러오기
+- 프로젝트 화면
+  - 온라인 모드 프로젝트/트래커 조회
+  - 테스트 모드 snapshot 기반 프로젝트/트래커 자동 채움
+- 파일 화면
+  - 여러 Excel 파일 동시 선택
+  - 대표 파일 미리보기 선택
+  - `데이터 불러오기` 버튼으로만 시트/헤더/미리보기 재생성
   - Summary 컬럼 자동 제안
-  - 미리보기 완료 전 `다음` 비활성화
-- 컬럼 매핑 화면
-  - 업로드 대상 컬럼 표시
-  - `id`, `parent` 제외
-  - 체크박스/콤보박스 기반 1차 매핑
-  - 검증 실행 연결
+- 상단 데이터 화면
+  - 파일별 상단 부모 데이터 생성 여부 선택
+  - 파일명 또는 파일명 정규식 기반 source 선택
+  - 정규식 실시간 미리보기
+  - 루트 제목 필드는 파일명 기반으로, 다른 필드는 파일명 source 또는 고정값으로 설정
+- 매핑 화면
+  - `id`, `parent`, 내부 생성 컬럼 제외
+  - 기본값 설정
+  - `TrackerItemChoiceField` 별 regex/query 방식 선택
+  - query 다건 결과 처리 전략 선택
 - 검증 화면
-  - `comparison_df`, `option_check_df`, `payload_df` 실패 정보 표시
-  - GUI에서 제외한 `UNMAPPED` 컬럼 무시
-  - `PAYLOAD_READY` 기준 payload 준비 상태 판정
+  - 차단 이슈와 안내 이슈 분리
+  - 다중 파일일 때 선택 파일 수와 전체 예상 항목 수 표시
+  - 대표 파일 검증 결과 표시
 - 업로드 화면
-  - worker 기반 실행
-  - progress 갱신
-  - pause / resume / cancel 플래그 처리
-  - 로그 및 실패 응답 JSON 표시
+  - Dry Run / continue on error
+  - 총 건수, 현재 항목, 성공/실패/재시도 수 표시
+  - 항목별 시작/완료/소요 시간과 로그 표시
+  - 실패 응답 JSON 표시
 - 결과 화면
-  - 성공 / 실패 / 미해결 결과 테이블 표시
-
-아직 남아 있는 항목:
-
-- 컬럼 매핑 UX 개선
-- 결과 화면 상세 상호작용 개선
-- 실제 GUI 수동 테스트와 예외 케이스 보강
-- `PyInstaller` 배포 스크립트 정리
+  - 성공 / 실패 / 미해결 탭
+  - 내부 생성 컬럼 숨김
 
 ## 최근 GUI 보완 사항
 
 - 연결 테스트, 프로젝트/트래커 조회, Excel 미리보기, 매핑 준비, 검증은 `BackgroundTask` 기반으로 실행하고 작업 중 로딩 오버레이와 대기 커서를 표시합니다.
 - 설정, 프로젝트, 파일, 검증 단계는 필수 입력이나 선행 작업이 완료되기 전까지 `다음` 버튼을 비활성화합니다.
-- 설정 화면은 기본 항목과 `추가 설정`을 분리했고, `Header Row` 이하 옵션은 접은 상태로 시작합니다.
-- 기본 창 크기는 `920x500`, 최소 크기는 `760x400`이며 단계 전환이나 `추가 설정` 토글 시 현재 페이지 내용 높이에 맞춰 창 크기를 다시 계산합니다.
-- 페이지 카드 내부 중복 제목을 제거하고 입력칸, 버튼, 단계 배지, 여백을 줄여 전체 밀도를 낮췄습니다.
+- 파일 단계는 값이 바뀔 때마다 Excel 을 다시 열지 않고, 사용자가 `데이터 불러오기`를 눌렀을 때만 미리보기를 갱신합니다.
+- 다중 파일 업로드 시 tracker item query 대상 값은 전체 파일에서 중복 제거 후 한 번만 사전 조회해 캐시에 올립니다.
+- 테스트 모드에서는 실제 업로드를 막고 Dry Run만 허용합니다.
+- 기본 창 크기는 `1160x780`, 최소 크기는 `860x620`이며, 페이지 내용이 길면 내부 스크롤을 사용하고 창 높이는 화면 높이의 88%를 넘지 않도록 제한합니다.
+- 알림은 커스텀 다이얼로그로 표시하며, 테마와 톤을 맞춘 상태로 오류/안내를 구분합니다.
 - `QComboBox` 는 기본 시스템 화살표 대신 커스텀 chevron 아이콘을 사용합니다.
 
 ## 프로젝트 구조
@@ -105,6 +122,7 @@ py -3 gui_main.py
 - `src/wizard.py`: 업로드 오케스트레이션, preview, 업로드, 상태 저장
 - `src/models/`: reference, field value, tracker item, user info, wizard state 모델
 - `src/gui/`: PySide6 기반 단계형 GUI, 서비스 계층, upload worker
+- `data/gui-offline-sample/`: GUI 테스트 모드용 snapshot, 다중 Excel 샘플, 사용 안내
 - `docs/`: 사용 가이드와 아키텍처 문서
 - `output/`: 실행 결과 산출물 저장 디렉터리
 
@@ -146,11 +164,13 @@ py -3 cli_main.py
 6. 정적 option 필드는 reference payload로 변환합니다.
 7. 사용자 선택 필드는 사용자 이름을 우선 조회하고, 숫자 입력일 때만 사용자 ID fallback 을 사용합니다.
 8. `MemberField` 는 `USER/ROLE/GROUP` 후보를 이름으로 찾아 mixed reference 로 변환합니다.
-9. `TrackerItemChoiceField` 와 builtin `subjects` 는 입력값에서 tracker item ID를 파싱해 `TrackerItemReference`로 변환합니다.
-10. row별 payload를 먼저 cache하고 preview와 upload가 같은 payload를 재사용합니다.
-11. 업로드 시점에는 parentItemId만 `created_map[parent_row_id]` 기준으로 결정합니다.
-12. `Status` 는 transition 기반 후처리로 옮겨야 하므로 현재 TODO 로 남겨두고 있습니다.
-13. 실행 결과와 중간 dataframe, schema, payload cache, 검증 결과를 `output/`에 저장할 수 있습니다.
+9. `TrackerItemChoiceField` 는 configuration 에 source tracker 정보가 있으면 이름/summary query lookup 을, 없으면 정규식 ID 추출을 사용합니다.
+10. GUI 상단 데이터 설정이 켜져 있으면 파일별 루트 parent item payload 를 먼저 준비합니다.
+11. row별 payload를 먼저 cache하고 preview와 upload가 같은 payload를 재사용합니다.
+12. 다중 파일 업로드 시 tracker item query 값은 전체 파일 기준으로 중복 제거 후 사전 조회합니다.
+13. 업로드 시점에는 파일별 루트 parent item을 먼저 만들고, 이후 child row 의 `parentItemId` 를 `created_map[parent_row_id]` 또는 루트 item 기준으로 결정합니다.
+14. `Status` 는 transition 기반 후처리로 옮겨야 하므로 현재 TODO 로 남겨두고 있습니다.
+15. 실행 결과와 중간 dataframe, schema, payload cache, 검증 결과를 `output/`에 저장할 수 있습니다.
 
 ## 문서
 
@@ -159,7 +179,7 @@ py -3 cli_main.py
 - [Codebeamer 업로드 조사 정리](./docs/codebeamer-upload-reference.md)
 - [Codebeamer 프로젝트 시작 패키지](./docs/codebeamer-project-start-kit.md)
 - [CLI 사용 가이드](./docs/cli-guide.md)
-- [GUI 설계 초안](./docs/gui-plan.md)
+- [GUI 사용 가이드](./docs/gui-plan.md)
 - [변경 이력 성격의 v2 문서](./docs/v2-changes.md)
 - [트러블슈팅](./docs/troubleshooting.md)
 
@@ -183,6 +203,8 @@ powershell -ExecutionPolicy Bypass -File scripts/render_uml.ps1
 - 정적 option이 없는 일반 reference 필드는 아직 자동 lookup을 모두 지원하지 않습니다.
 - 사용자 관련 필드는 이름을 우선 사용하고, 숫자 입력일 때만 사용자 ID fallback 을 사용합니다.
 - `MemberField` 의 `ROLE` 은 field permission matrix, `GROUP` 은 `/v3/users/groups` 전체 목록에서 이름으로 찾습니다.
-- `TrackerItemChoiceField` 와 builtin `subjects` 는 각 값에서 `[:id]` 패턴을 먼저, 없으면 `[]` 안 첫 번째 정수를 사용해 `TrackerItemReference`를 만듭니다.
+- `TrackerItemChoiceField` 는 tracker configuration 의 `fields` 목록에서 `referenceId == schema.field_id` 로 우선 매칭하고, source tracker가 확인되면 query lookup 을 사용할 수 있습니다.
+- 위 source tracker를 찾지 못하거나 offline snapshot 만 사용하는 경우에는 기본 정규식 ID 추출 방식으로 동작합니다.
+- 테스트 모드에서는 실제 업로드를 막고 Dry Run만 허용합니다.
 - `Status` 는 workflow transition 제약을 반영해야 하므로 현재 TODO 입니다.
 - `save_state()`는 `payload_df.csv`, `payload_preview.jsonl`을 포함해 payload cache 상태도 함께 저장합니다.

@@ -14,7 +14,8 @@ py -3 cli_main.py
 - 정적 option 필드는 reference payload로 자동 변환합니다.
 - `UserChoiceField`, `UserReference` 필드는 사용자 이름 우선 lookup 후 reference로 변환하고, 같은 사용자 이름/ID에 대한 결과는 프로젝트 단위로 캐시합니다.
 - `MemberField` 는 `USER/ROLE/GROUP` 후보를 이름으로 찾아 mixed reference로 변환합니다.
-- `TrackerItemChoiceField` 와 builtin `subjects` 는 tracker item ID를 파싱해 `TrackerItemReference`로 변환합니다.
+- `TrackerItemChoiceField` 는 기본적으로 tracker item ID를 파싱해 `TrackerItemReference`로 변환하며, 코어 파이프라인은 configuration 기반 query lookup 확장도 지원합니다.
+- builtin `subjects` 는 tracker item ID를 파싱해 `TrackerItemReference`로 변환합니다.
 - `Status` 는 transition 기반 후처리로 옮겨야 하므로 현재 TODO 상태입니다.
 - row별 payload cache를 먼저 만들고 preview와 upload가 같은 payload를 재사용합니다.
 - payload 생성 실패와 upload 실패를 분리해 저장합니다.
@@ -108,7 +109,9 @@ wizard는 다음 결과를 저장할 수 있습니다.
 - 사용자/member lookup 결과는 `__resolved`, `__user_info`, `__lookup_status`, `__lookup_error` 컬럼에 반영됩니다.
 - 같은 프로젝트 안에서 동일한 사용자 이름/ID, 동일한 member 이름은 재사용 캐시로 처리됩니다.
 - `__user_info` 는 `{id, name, type="UserReference"}` 최소 구조로 저장됩니다.
-- `TrackerItemChoiceField` 와 builtin `subjects` 는 lookup 없이 입력값에서 tracker item ID를 직접 파싱합니다.
+- `TrackerItemChoiceField` 는 현재 CLI 기본 흐름에서는 tracker item ID를 직접 파싱합니다.
+- GUI나 별도 설정에서는 configuration 기반 query lookup 을 사용할 수 있습니다.
+- builtin `subjects` 는 lookup 없이 입력값에서 tracker item ID를 직접 파싱합니다.
 - `MemberField` 의 `ROLE` 은 `GET /v3/trackers/{trackerId}/fields/{fieldId}/permissions`, `GROUP` 은 `GET /v3/users/groups` 로 후보를 미리 가져와 이름으로 찾습니다.
 - 정적 option이 없는 일반 reference field는 아직 자동 lookup을 모두 지원하지 않습니다.
 - payload cache 상태는 `PAYLOAD_READY`, `PAYLOAD_FAILED` 로 구분됩니다.

@@ -70,7 +70,8 @@
 - `referenceType`, `options`, `multipleValues`, `valueModel` 로 보조 판정
 - `UserChoiceField`, `UserReference` 는 사용자 이름 우선 lookup 대상으로 분류
 - `MemberField` 는 `USER/ROLE/GROUP` mixed member lookup 대상으로 분류
-- `TrackerItemChoiceField` 는 tracker item ID direct parse 대상으로 분류
+- `TrackerItemChoiceField` 는 tracker configuration 에 source tracker 정보가 있으면 query lookup 가능 대상으로 분류
+- source tracker를 안전하게 결정할 수 없는 `TrackerItemChoiceField` 는 regex ID 추출 경로만 허용
 - `Status` 는 transition 기반 후처리가 필요하므로 TODO 로 분리
 - 정적 option이 없는 일반 reference field는 `LOOKUP_REQUIRED` 또는 `FIELD_UNSUPPORTED` 로 조기 노출
 
@@ -124,10 +125,15 @@
 주요 책임:
 - 단계형 화면 전환과 상태 유지
 - 설정 저장 및 암호화된 비밀번호 저장
+- 전체 설정 preset 저장 및 재적용
+- 테마 전환과 테스트 모드 제어
 - 연결 테스트와 프로젝트/트래커 조회
-- Excel 시트/헤더/미리보기 표시
+- 다중 Excel 파일 선택과 대표 파일 미리보기 표시
+- 파일명 정규식 기반 상단 데이터 preview/payload 구성
 - 매핑/검증/업로드/결과 화면 구성
 - upload worker를 통한 백그라운드 실행과 진행률 갱신
+- 항목별 로그/시간/총 건수 표시와 오류 다이얼로그 제공
+- 1080 높이 기준 내부 스크롤과 페이지 높이 상한 적용
 
 주요 모듈:
 - `src/gui/main_window.py`
@@ -156,59 +162,70 @@
 
 ```mermaid
 flowchart TD
-    A["CLI 시작"] --> B["프로젝트 선택"]
-    B --> C["트래커 선택"]
-    C --> D["Excel 파일 / 시트 선택"]
-    D --> E["summary 컬럼 결정"]
+    A["CLI 또는 GUI 시작"] --> B["온라인 모드 또는 테스트 모드 결정"]
+    B --> C["프로젝트 / 트래커 선택"]
+    C --> D["하나 이상의 Excel 파일 선택"]
+    D --> E["대표 파일 시트 / 헤더 / summary 결정"]
     E --> F["Tracker schema 조회"]
     F --> G["Excel 헤더와 schema 자동 매핑 확인"]
     G --> H["multipleValues=true 필드에 대응하는 list 컬럼 자동 선택"]
-    H --> I["Excel reader가 raw dataframe 생성"]
+    H --> I["Excel reader가 파일별 raw dataframe 생성 및 캐시"]
     I --> J["hierarchy processor가 멀티라인 병합"]
     J --> K["들여쓰기 기반 계층 생성"]
     K --> L["schema 비교 및 option-like 필드 분석"]
-    L --> M{"필드 종류 판별"}
-    M -->|정적 options| N["option 이름을 reference payload로 변환"]
-    M -->|사용자 선택 필드| O["user 이름 lookup"]
-    O --> P{"캐시에 있음?"}
-    P -->|예| Q["캐시된 userInfo / reference 재사용"]
-    P -->|아니오| R["findByName 후 필요시 user id fallback"]
-    R --> S["userInfo와 reference를 캐시에 저장"]
-    M -->|MemberField| T["USER/ROLE/GROUP 이름 매칭"]
-    M -->|TrackerItemChoiceField| U["tracker item ID 파싱"]
-    M -->|기타 reference| V["LOOKUP_REQUIRED 또는 unsupported 표시"]
-    N --> V["row별 payload cache 생성"]
-    Q --> V
-    S --> V
-    T --> V
-    U --> V
-    V --> W["preview는 cache된 payload 반환"]
-    W --> X["upload는 같은 payload cache 재사용"]
-    X --> Y["업로드 시점에만 parentItemId 결정"]
-    Y --> Z["성공 / 실패 / 미해결 / payload cache 저장"]
+    L --> M["상단 데이터 설정이 켜져 있으면 파일명 regex preview 생성"]
+    M --> N{"필드 종류 판별"}
+    N -->|정적 options| O["option 이름을 reference payload로 변환"]
+    N -->|사용자 선택 필드| P["user 이름 lookup"]
+    P --> Q{"캐시에 있음?"}
+    Q -->|예| R["캐시된 userInfo / reference 재사용"]
+    Q -->|아니오| S["findByName 후 필요시 user id fallback"]
+    S --> T["userInfo와 reference를 캐시에 저장"]
+    N -->|MemberField| U["USER/ROLE/GROUP 이름 매칭"]
+    N -->|TrackerItemChoiceField| V{"source tracker 있음?"}
+    V -->|예| W["파일 전체 값을 중복 제거 후 tracker item query 사전 조회"]
+    V -->|아니오| X["regex 기반 tracker item ID 파싱"]
+    N -->|기타 reference| Y["LOOKUP_REQUIRED 또는 unsupported 표시"]
+    O --> Z["row별 payload cache 생성"]
+    R --> Z
+    T --> Z
+    U --> Z
+    W --> Z
+    X --> Z
+    Y --> Z
+    Z --> AA["preview는 cache된 payload 반환"]
+    AA --> AB["upload는 같은 payload cache 재사용"]
+    AB --> AC{"파일별 상단 데이터 생성?"}
+    AC -->|예| AD["파일별 root item을 먼저 업로드"]
+    AC -->|아니오| AE["일반 row 업로드로 진행"]
+    AD --> AF["child row 의 parentItemId 결정"]
+    AE --> AF
+    AF --> AG["성공 / 실패 / 미해결 / payload cache 저장"]
 ```
 
 ## End-to-End 흐름
 
-1. 사용자가 `cli_main.py`를 실행합니다.
-2. CLI가 config, logger, client, mapper, wizard를 초기화합니다.
-3. 사용자가 project와 tracker를 선택합니다.
-4. CLI가 tracker schema를 먼저 조회합니다.
-5. Excel 헤더와 schema의 자동 매핑을 확인합니다.
-6. 매핑 결과와 schema의 `multipleValues`를 기준으로 list 컬럼을 자동 선택합니다.
-7. Excel reader가 raw dataframe을 만들고 `_excel_row`, `_summary_indent` 메타정보를 붙입니다.
-8. hierarchy processor가 `raw_df`, `merged_df`, `hierarchy_df`, `upload_df`를 생성합니다.
-9. CLI와 wizard가 schema 비교 결과를 준비합니다.
-10. mapping service가 field type을 해석하고 resolution 전략을 결정합니다.
-11. 정적 option은 reference dict로 해석합니다.
-12. 사용자 선택 필드는 사용자 이름으로 조회하고 필요시 숫자 입력에 한해 ID fallback 을 사용합니다.
-13. `MemberField` 는 `USER/ROLE/GROUP` 후보를 이름으로 찾아 mixed reference 로 변환합니다.
-14. tracker item 선택 필드는 입력값에서 tracker item ID를 파싱해 `TrackerItemReference` 로 변환합니다.
-15. user/member lookup 결과는 cache 에 저장해 다음 행에서 재사용합니다.
-16. wizard가 row별 payload를 먼저 계산해 `payload_df` cache에 저장합니다.
-17. preview는 `payload_df`를 재사용하고 upload는 같은 payload로 parent-first 업로드를 수행합니다.
-18. `Status` transition 후처리는 아직 TODO 입니다.
-19. state와 실행 결과를 `output/`에 저장합니다.
+1. 사용자가 `cli_main.py` 또는 `gui_main.py`를 실행합니다.
+2. 엔트리 포인트가 settings, logger, client/service, mapper, wizard를 초기화합니다.
+3. GUI라면 온라인 모드와 테스트 모드 중 하나를 고르고, 테스트 모드에서는 snapshot 기반 client를 사용합니다.
+4. 사용자가 project와 tracker를 선택합니다.
+5. tracker schema를 먼저 조회합니다.
+6. Excel 헤더와 schema의 자동 매핑을 확인합니다.
+7. 매핑 결과와 schema의 `multipleValues`를 기준으로 list 컬럼을 자동 선택합니다.
+8. Excel reader가 파일별 raw dataframe을 만들고 `_excel_row`, `_summary_indent` 메타정보를 붙입니다.
+9. hierarchy processor가 `raw_df`, `merged_df`, `hierarchy_df`, `upload_df`를 생성합니다.
+10. GUI라면 파일명 기반 상단 데이터 preview와 루트 필드 assignment를 계산합니다.
+11. mapping service가 field type을 해석하고 resolution 전략을 결정합니다.
+12. 정적 option은 reference dict로 해석합니다.
+13. 사용자 선택 필드는 사용자 이름으로 조회하고 필요시 숫자 입력에 한해 ID fallback 을 사용합니다.
+14. `MemberField` 는 `USER/ROLE/GROUP` 후보를 이름으로 찾아 mixed reference 로 변환합니다.
+15. `TrackerItemChoiceField` 는 configuration 에 source tracker 정보가 있으면 query lookup 후보를 모아 사전 조회하고, 아니면 regex로 `TrackerItemReference` 를 만듭니다.
+16. user/member/tracker item lookup 결과는 cache에 저장해 다음 행과 다음 파일에서 재사용합니다.
+17. wizard가 row별 payload를 먼저 계산해 `payload_df` cache에 저장합니다.
+18. preview는 `payload_df`를 재사용하고 upload는 같은 payload로 parent-first 업로드를 수행합니다.
+19. 상단 데이터가 켜져 있으면 파일별 root parent item을 먼저 업로드한 뒤 child row의 parent를 연결합니다.
+20. `Status` transition 후처리는 아직 TODO 입니다.
+21. state와 실행 결과를 `output/`에 저장합니다.
 
 ## 상태 모델
 
@@ -231,9 +248,9 @@ flowchart TD
 
 처리 흐름:
 1. schema flattening 단계에서 `TableField` 정의와 하위 컬럼 목록 식별
-2. wizard가 일치하는 Excel 컬럼 탐지
-3. row 값들을 `TableFieldValue` 구조로 묶음
-4. 업로드 전에 plain dict로 직렬화
+2. wizard가 `TableFieldName.ColumnName` 패턴으로 일치하는 Excel 컬럼 탐지
+3. 같은 table row에 속한 하위 셀 값을 field별로 묶어 nested `TableFieldValue` 구조 생성
+4. 업로드 전에 `{"fieldId", "name", "type", "values":[...]}` 형태의 plain dict로 직렬화
 
 ## Option 및 Reference 처리 방식
 
@@ -256,7 +273,11 @@ flowchart TD
 - 하나의 이름이 여러 후보와 겹치면 `MEMBER_LOOKUP_AMBIGUOUS` 로 실패
 
 tracker item 선택 필드 처리:
-- `TrackerItemChoiceField` 와 builtin `subjects` 는 lookup 없이 직접 파싱
+- `TrackerItemChoiceField` 는 tracker configuration 의 `fields` 목록에서 `referenceId == schema.field_id` 를 우선 매칭합니다.
+- matched configuration 이 `choiceOptionSetting`, `choiceConfigOptionsSetting`, `choiceConfigOptionsSetApi` 중 하나에 tracker `referenceFilters` 를 제공하면 query lookup 을 지원합니다.
+- query lookup 은 전체 파일에서 필요한 이름/summary 값을 중복 제거한 뒤 source tracker 기준으로 사전 조회합니다.
+- source tracker를 확인할 수 없거나 offline snapshot 만 사용하는 경우에는 regex ID 추출 경로만 사용합니다.
+- builtin `subjects` 는 현재 direct parse만 사용합니다.
 - 단일 값 또는 list 모두 허용
 - 각 값에서 `[:id]` 패턴을 먼저, 없으면 `[]` 안 첫 번째 integer를 추출
 - 결과는 `{id, type="TrackerItemReference"}` 형태로 변환

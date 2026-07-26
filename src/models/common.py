@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from enum import Enum
 from typing import Any
@@ -216,6 +217,13 @@ class TrackerItemResolutionMode(str, Enum):
     QUERY = "query"
 
 
+class TrackerItemQueryMatchStrategy(str, Enum):
+    FIRST = "first"
+    LAST = "last"
+    BEST = "best"
+    ERROR = "error"
+
+
 class UserLookupStatus(str, Enum):
     MEMBER_LOOKUP_AMBIGUOUS = "MEMBER_LOOKUP_AMBIGUOUS"
     MEMBER_LOOKUP_FAILED = "MEMBER_LOOKUP_FAILED"
@@ -255,6 +263,24 @@ class DomainModel:
     def to_dict(self) -> dict[str, Any]:
         """각 모델이 스스로를 dict로 바꾸도록 강제하는 공통 규약이다."""
         raise NotImplementedError
+
+
+def _normalize_scalar_value(value: Any) -> Any:
+    """payload에서 다루기 어려운 결측값만 정리하고 나머지 원래 값은 보존한다."""
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        if math.isnan(value):
+            return None
+    return value
+
+
+def _stringify_scalar(value: Any) -> str | None:
+    """문자열 필드 직렬화 전에 결측값만 정리하고 원래 표현은 유지한다."""
+    normalized = _normalize_scalar_value(value)
+    if normalized is None:
+        return None
+    return str(normalized)
 
 
 def _serialize_value(value: Any) -> Any:

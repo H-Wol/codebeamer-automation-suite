@@ -114,7 +114,8 @@ raw schema type을 그대로 코드 전역에 퍼뜨리지 말고,
 예시 질문:
 
 - `MemberField`를 `USER/ROLE/GROUP` mixed field로 볼 것인가
-- `TrackerItemChoiceField`를 lookup 없이 ID parse로 처리할 수 있는가
+- `TrackerItemChoiceField`를 configuration 기반 query lookup 으로 처리할 수 있는가
+- query lookup 이 불가능할 때 regex ID parse fallback 만 허용할 것인가
 - `referenceType`이 없을 때도 안전하게 결정 가능한가
 
 안전하게 결정할 수 없으면 이 단계에서 `unsupported`로 남겨야 합니다.
@@ -207,7 +208,7 @@ raw schema type을 그대로 코드 전역에 퍼뜨리지 말고,
 
 - `UserReference`, `UserChoiceField`는 사용자 이름 우선 resolver가 있으므로 지원
 - `MemberField`는 `USER/ROLE/GROUP` mixed resolver가 있으므로 지원
-- `TrackerItemChoiceField`는 tracker item ID parser가 있으므로 지원
+- `TrackerItemChoiceField`는 configuration 기반 query resolver 또는 tracker item ID parser가 있으므로 조건부 지원
 - `generic_reference`는 resolver가 없으므로 조기 실패
 - 모호한 필드는 text fallback으로 넘기지 않음
 
@@ -289,17 +290,25 @@ raw schema type을 그대로 코드 전역에 퍼뜨리지 말고,
 
 ## `TrackerItemChoiceField` 처리 규칙
 
-현재 구현은 `TrackerItemChoiceField` 를 tracker item ID direct parse로 지원합니다.
+현재 구현은 `TrackerItemChoiceField` 를 query 또는 direct parse 두 경로로 지원합니다.
 
 규칙:
 
-- lookup 없이 입력값에서 tracker item ID를 직접 추출합니다.
+- tracker configuration 의 `fields` 목록에서 `referenceId == schema.field_id` 를 우선 매칭합니다.
+- matched field 가 `choiceOptionSetting`, `choiceConfigOptionsSetting`, `choiceConfigOptionsSetApi` 중 하나에 tracker `referenceFilters` 를 제공하면 query lookup 을 지원합니다.
+- query lookup 은 전체 업로드 데이터에서 필요한 이름/summary 값을 먼저 모으고, 중복 제거 후 source tracker 기준으로 사전 조회합니다.
+- query lookup 이 불가능하면 입력값에서 tracker item ID를 직접 추출합니다.
 - 단일 값 또는 list 모두 허용합니다.
 - 각 값에서 `[:id]` 패턴을 먼저, 없으면 `[]` 안 첫 번째 integer를 사용합니다.
 - `dict` 입력이면 `id` 값을 우선 사용합니다.
 - 결과는 `TrackerItemReference(id=<int>, type="TrackerItemReference")` 로 변환합니다.
 
-builtin `subjects` 도 같은 규칙을 사용합니다.
+builtin `subjects` 는 현재 direct parse 규칙만 사용합니다.
+
+주의:
+
+- configuration 에 source tracker 정보가 없거나 tracker 외 다른 `domainType` 을 사용하면 현재 query lookup 을 지원하지 않습니다.
+- offline snapshot 만 사용하는 테스트 모드에서는 live `/item/query` 호출이 없으므로 query 모드를 지원하지 않습니다.
 
 ## `Status` 처리 규칙
 
