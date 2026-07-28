@@ -51,7 +51,7 @@ class GuiSettingsStoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             store = GuiSettingsStore(Path(tmp_dir))
             settings = GuiSettings(
-                theme_name="kepico",
+                theme_name="kefico",
                 window_width=1600,
                 window_height=920,
                 window_is_maximized=True,
@@ -80,6 +80,18 @@ class GuiSettingsStoreTest(unittest.TestCase):
             self.assertEqual(loaded.window_height, 920)
             self.assertTrue(loaded.window_is_maximized)
             self.assertFalse(loaded.window_is_fullscreen)
+
+    def test_load_legacy_kepico_theme_name_as_kefico_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = GuiSettingsStore(Path(tmp_dir))
+            store.settings_path.write_text(
+                json.dumps({"theme_name": "kepico", "password_encrypted": ""}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            loaded = store.load()
+
+            self.assertEqual(loaded.theme_name, DEFAULT_GUI_THEME)
 
     def test_save_and_load_workflow_preset_preserves_nested_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
