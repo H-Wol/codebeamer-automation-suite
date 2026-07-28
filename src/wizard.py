@@ -1023,6 +1023,85 @@ class CodebeamerUploadWizard:
 
         return work
 
+    def _option_processing_operation(
+        self,
+        row: pd.Series,
+        *,
+        upload_mode: str,
+        id_column_name: str | None,
+    ) -> str:
+        """옵션 검증 시 현재 행이 생성/수정 중 어느 흐름인지 판단한다."""
+        normalized_mode = self._normalize_upload_mode(upload_mode)
+        if normalized_mode == "update":
+            return "update"
+        if normalized_mode != "upsert":
+            return "create"
+        if not id_column_name or id_column_name not in row.index:
+            return "create"
+
+        try:
+            self._parse_update_item_id(row.get(id_column_name))
+        except ValueError as exc:
+            if str(exc) == "missing":
+                return "create"
+            return "update"
+        return "update"
+
+    def _mask_inapplicable_option_rows(
+        self,
+        upload_df: pd.DataFrame,
+        option_mapping: dict[str, str],
+    ) -> pd.DataFrame:
+        """행별 create/update 범위에 맞지 않는 옵션 값은 검증/lookup에서 제외한다."""
+        if upload_df.empty or not option_mapping:
+            return upload_df.copy()
+
+        work = upload_df.copy()
+        upload_mode = self._normalize_upload_mode(self.state.upload_mode)
+        id_column_name = self._update_item_id_column_name(work) if upload_mode == "upsert" else None
+        row_operations = [
+            self._option_processing_operation(
+                row,
+                upload_mode=upload_mode,
+                id_column_name=id_column_name,
+            )
+            for _, row in work.iterrows()
+        ]
+
+        for df_col in option_mapping.keys():
+            if df_col not in work.columns:
+                continue
+            scope = self.state.selected_mapping_modes.get(str(df_col).strip())
+            inactive_mask = pd.Series(
+                [
+                    not self._scope_applies_to_operation(
+                        scope,
+                        operation,
+                        upload_mode=upload_mode,
+                    )
+                    for operation in row_operations
+                ],
+                index=work.index,
+            )
+            if inactive_mask.any():
+                work.loc[inactive_mask, df_col] = ""
+
+        return work
+
+    @staticmethod
+    def _restore_option_source_columns(
+        processed_df: pd.DataFrame,
+        source_df: pd.DataFrame,
+        option_mapping: dict[str, str],
+    ) -> pd.DataFrame:
+        """검증용으로 마스킹한 원본 옵션 컬럼은 표시와 후속 처리용으로 복원한다."""
+        restored = processed_df.copy()
+        for df_col in option_mapping.keys():
+            if df_col not in restored.columns or df_col not in source_df.columns:
+                continue
+            restored[df_col] = source_df[df_col].tolist()
+        return restored
+
     def process_option_mapping(
         self,
         selected_mapping: dict[str, str],
@@ -1117,7 +1196,10 @@ class CodebeamerUploadWizard:
         option_maps = self._decorate_tracker_item_option_maps(option_maps)
         self.state.option_maps = option_maps
 
-        lookup_ready_df = self.state.upload_df.copy()
+        lookup_ready_df = self._mask_inapplicable_option_rows(
+            self.state.upload_df,
+            selected_option_mapping,
+        )
         if selected_option_mapping:
             lookup_ready_df = self._resolve_user_reference_fields(
                 upload_df=lookup_ready_df,
@@ -1161,10 +1243,15 @@ class CodebeamerUploadWizard:
         )
 
         if selected_option_mapping:
-            self.state.converted_upload_df = self.mapper.apply_option_resolution(
+            converted_upload_df = self.mapper.apply_option_resolution(
                 upload_df=lookup_ready_df,
                 option_mapping=selected_option_mapping,
                 option_maps=option_maps,
+            )
+            self.state.converted_upload_df = self._restore_option_source_columns(
+                converted_upload_df,
+                self.state.upload_df,
+                selected_option_mapping,
             )
         else:
             self.state.converted_upload_df = lookup_ready_df.copy()
