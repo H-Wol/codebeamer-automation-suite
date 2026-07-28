@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .page_common import *  # noqa: F403
 def create_mapping_page(on_validate_requested, on_error=None):
+    """`create_mapping_page` 화면을 구성한다."""
     qt = _require_qt()
     Qt = qt["Qt"]
     QColor = qt["QColor"]
@@ -112,10 +113,12 @@ def create_mapping_page(on_validate_requested, on_error=None):
     page._upload_preview_df = None
 
     def _mark_dirty() -> None:
+        """`mark_dirty` 상태를 표시한다."""
         page._mapping_validated = False
         next_button.setEnabled(False)
 
     def _tracker_item_candidates(mapping: dict[str, str]) -> list[dict[str, object]]:
+        """`tracker_item_candidates` 관련 처리를 수행한다."""
         candidates: list[dict[str, object]] = []
         for df_column, schema_field in mapping.items():
             schema_row = page._schema_rows_by_name.get(schema_field, {})
@@ -136,6 +139,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         return candidates
 
     def _tracker_item_query_strategy_options() -> list[tuple[str, str]]:
+        """`tracker_item_query_strategy_options` 관련 처리를 수행한다."""
         return [
             ("가장 비슷한 값", TrackerItemQueryMatchStrategy.BEST.value),
             ("첫 번째 결과", TrackerItemQueryMatchStrategy.FIRST.value),
@@ -144,6 +148,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         ]
 
     def _sync_tracker_item_controls(mode_combo, regex_edit, strategy_combo) -> None:
+        """`sync_tracker_item_controls` 상태를 동기화한다."""
         is_regex = mode_combo.currentData() == TrackerItemResolutionMode.REGEX.value
         regex_edit.setEnabled(is_regex)
         strategy_combo.setEnabled(not is_regex)
@@ -154,6 +159,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         )
 
     def _tracker_item_example_text(df_column: str, schema_field: str, mode: str, regex_pattern: str) -> str:
+        """`tracker_item_example_text` 관련 처리를 수행한다."""
         if mode != TrackerItemResolutionMode.REGEX.value:
             return "query 모드에서는 미사용"
         schema_row = page._schema_rows_by_name.get(schema_field, {})
@@ -165,6 +171,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         )
 
     def _refresh_tracker_item_example(row_index: int, df_column: str, schema_field: str, mode_combo, regex_edit) -> None:
+        """`refresh_tracker_item_example` 표시를 새로 고친다."""
         example_item = tracker_item_table.item(row_index, 5)
         if example_item is None:
             example_item = QTableWidgetItem("")
@@ -179,6 +186,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         )
 
     def _populate_tracker_item_table(mapping: dict[str, str], tracker_item_settings: dict[str, dict[str, object]]) -> None:
+        """`populate_tracker_item_table` 관련 처리를 수행한다."""
         page._tracker_item_settings = {
             str(schema_field): dict(setting)
             for schema_field, setting in (tracker_item_settings or {}).items()
@@ -272,6 +280,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
             tracker_item_help_label.setText("현재 매핑에는 별도 Tracker Item 처리 설정이 필요한 필드가 없습니다.")
 
     def _configure_default_value_widget(combo, candidate, selected_default: str) -> None:
+        """`configure_default_value_widget` 관련 처리를 수행한다."""
         combo.blockSignals(True)
         combo.clear()
         combo.setEditable(False)
@@ -292,6 +301,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         combo.blockSignals(False)
 
     def _bind_default_value_commit(combo) -> None:
+        """`bind_default_value_commit` 관련 처리를 수행한다."""
         line_edit = combo.lineEdit()
         if line_edit is None:
             return
@@ -301,6 +311,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         line_edit.editingFinished.connect(_mark_dirty)
 
     def _blend_colors(base_color, accent_color, ratio: float):
+        """`blend_colors` 값을 섞어 계산한다."""
         clamped_ratio = max(0.0, min(float(ratio), 1.0))
         inverse_ratio = 1.0 - clamped_ratio
         return QColor(
@@ -310,6 +321,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         )
 
     def _mapping_row_palette() -> dict[str, object]:
+        """`mapping_row_palette` 관련 처리를 수행한다."""
         palette = table.palette()
         base_color = palette.base().color()
         alternate_color = palette.alternateBase().color()
@@ -321,6 +333,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         }
 
     def _mapping_row_active(row_index: int) -> bool:
+        """`mapping_row_active` 관련 처리를 수행한다."""
         create_widget = table.cellWidget(row_index, 0)
         update_widget = table.cellWidget(row_index, 1)
         combo = table.cellWidget(row_index, 3)
@@ -331,6 +344,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         return bool(combo.currentText().strip())
 
     def _apply_mapping_row_highlight(row_index: int) -> None:
+        """`apply_mapping_row_highlight` 변경을 적용한다."""
         colors = _mapping_row_palette()
         is_active = _mapping_row_active(row_index)
         for column_index in (2, 4, 5, 6):
@@ -361,11 +375,13 @@ def create_mapping_page(on_validate_requested, on_error=None):
                 combo.setStyleSheet("")
 
     def _refresh_mapping_row(row_index: int) -> None:
+        """`refresh_mapping_row` 표시를 새로 고친다."""
         _apply_mapping_row_highlight(row_index)
         _populate_tracker_item_table(get_selected_mapping(), get_selected_tracker_item_settings())
         _mark_dirty()
 
     def _default_scope_for_upload_mode(upload_mode: str) -> dict[str, bool]:
+        """`default_scope_for_upload_mode` 기본값을 계산한다."""
         normalized_mode = normalize_gui_upload_mode(upload_mode)
         if normalized_mode == GUI_UPLOAD_MODE_UPDATE:
             return {"create": False, "update": True}
@@ -374,6 +390,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         return {"create": True, "update": False}
 
     def _normalize_scope(raw_scope: dict[str, object] | None, *, upload_mode: str) -> dict[str, bool]:
+        """`normalize_scope` 값을 정규화한다."""
         default_scope = _default_scope_for_upload_mode(upload_mode)
         payload = dict(raw_scope or {})
         return {
@@ -382,6 +399,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         }
 
     def _normalize_default_value_scope(raw_scope: dict[str, object] | None, *, upload_mode: str) -> dict[str, bool]:
+        """`normalize_default_value_scope` 값을 정규화한다."""
         payload = dict(raw_scope or {})
         if not payload:
             return _default_scope_for_upload_mode(upload_mode)
@@ -394,6 +412,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         return _default_scope_for_upload_mode(upload_mode) if bool(normalized_scope.get("create", False)) else {"create": False, "update": False}
 
     def _sync_mapping_scope_checkboxes(create_widget, update_widget, *, upload_mode: str) -> None:
+        """`sync_mapping_scope_checkboxes` 상태를 동기화한다."""
         normalized_mode = normalize_gui_upload_mode(upload_mode)
         if normalized_mode == GUI_UPLOAD_MODE_CREATE:
             create_widget.setEnabled(True)
@@ -420,6 +439,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         selected_tracker_item_settings: dict[str, dict[str, object]],
         upload_preview_df=None,
     ) -> None:
+        """`load_context` 데이터를 불러온다."""
         page._mapping_validated = False
         next_button.setEnabled(False)
         page._upload_preview_df = upload_preview_df
@@ -469,6 +489,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
             table.setItem(row_index, 6, QTableWidgetItem("yes" if schema_row.get("is_supported", True) else "no"))
 
             def _on_combo_changed(_text, row=row_index):
+                """`on_combo_changed` 이벤트를 처리한다."""
                 selected_name = table.cellWidget(row, 3).currentText().strip()
                 schema = page._schema_rows_by_name.get(selected_name, {})
                 table.setItem(row, 4, QTableWidgetItem(str(schema.get("field_type") or "")))
@@ -522,6 +543,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         status_label.setText("")
 
     def get_selected_mapping() -> dict[str, str]:
+        """`get_selected_mapping` 값을 반환한다."""
         mapping: dict[str, str] = {}
         for row_index in range(table.rowCount()):
             create_widget = table.cellWidget(row_index, 0)
@@ -541,6 +563,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         return mapping
 
     def get_selected_mapping_modes() -> dict[str, dict[str, bool]]:
+        """`get_selected_mapping_modes` 값을 반환한다."""
         mapping_modes: dict[str, dict[str, bool]] = {}
         for row_index in range(table.rowCount()):
             create_widget = table.cellWidget(row_index, 0)
@@ -565,6 +588,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         return mapping_modes
 
     def get_selected_default_values() -> dict[str, str]:
+        """`get_selected_default_values` 값을 반환한다."""
         default_values: dict[str, str] = {}
         for row_index in range(default_table.rowCount()):
             field_item = default_table.item(row_index, 1)
@@ -578,6 +602,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         return default_values
 
     def get_selected_default_value_modes() -> dict[str, dict[str, bool]]:
+        """`get_selected_default_value_modes` 값을 반환한다."""
         default_value_modes: dict[str, dict[str, bool]] = {}
         for row_index in range(default_table.rowCount()):
             field_item = default_table.item(row_index, 1)
@@ -600,6 +625,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         return default_value_modes
 
     def get_selected_tracker_item_settings() -> dict[str, dict[str, object]]:
+        """`get_selected_tracker_item_settings` 값을 반환한다."""
         settings: dict[str, dict[str, object]] = {}
         for row_index in range(tracker_item_table.rowCount()):
             source_item = tracker_item_table.item(row_index, 0)
@@ -623,6 +649,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
         return settings
 
     def _validate() -> None:
+        """`validate` 관련 처리를 수행한다."""
         mapping = get_selected_mapping()
         if not mapping:
             status_label.setText("최소 1개 이상의 컬럼을 매핑해야 합니다.")
@@ -664,6 +691,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
 
 
 def create_validation_page():
+    """`create_validation_page` 화면을 구성한다."""
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -708,6 +736,7 @@ def create_validation_page():
     page.has_blocking_issues = True
 
     def set_results(issue_df, has_blocking_issues: bool, summary_stats: dict | None = None) -> None:
+        """`set_results` 값을 설정한다."""
         rows: list[list[str]] = []
         if issue_df is not None and not issue_df.empty:
             for _, row in issue_df.iterrows():
@@ -764,6 +793,7 @@ def create_validation_page():
             status_label.setText("오류는 없고 업로드 전에 확인할 안내 항목만 남아 있습니다.")
 
     def _go_next():
+        """`go_next` 단계 이동을 처리한다."""
         if page.has_blocking_issues:
             status_label.setText("차단 이슈를 해결해야 다음 단계로 이동할 수 있습니다.")
             return
@@ -776,6 +806,7 @@ def create_validation_page():
 
 
 def create_upload_page(on_start_requested, on_pause_requested, on_resume_requested, on_cancel_requested):
+    """`create_upload_page` 화면을 구성한다."""
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -919,6 +950,7 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     page.result_button.clicked.connect(lambda: page.request_next())
 
     def _set_activity_cell(row_index: int, col_index: int, value: str) -> None:
+        """`set_activity_cell` 값을 설정한다."""
         item = page.activity_table.item(row_index, col_index)
         if item is None:
             item = QTableWidgetItem(value)
@@ -927,6 +959,7 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
         item.setText(value)
 
     def _ensure_activity_row(row_key: str, file_label: str, phase_name: str, item_name: str) -> int:
+        """`ensure_activity_row` 상태를 보장한다."""
         if row_key in page._activity_row_map:
             row_index = int(page._activity_row_map[row_key])
         else:
@@ -945,6 +978,7 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
         item_name: str,
         started_at: str,
     ) -> None:
+        """`record_activity_started` 기록을 남긴다."""
         row_index = _ensure_activity_row(row_key, file_label, phase_name, item_name)
         _set_activity_cell(row_index, 3, "진행 중")
         _set_activity_cell(row_index, 4, started_at)
@@ -965,6 +999,7 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
         duration_text: str,
         message: str,
     ) -> None:
+        """`record_activity_finished` 기록을 남긴다."""
         row_index = _ensure_activity_row(row_key, file_label, phase_name, item_name)
         _set_activity_cell(row_index, 3, status)
         if not page.activity_table.item(row_index, 4):
@@ -976,6 +1011,7 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
         page.activity_table.scrollToBottom()
 
     def reset(total_count: int) -> None:
+        """`reset` 관련 처리를 수행한다."""
         page.progress_bar.setMaximum(max(total_count, 1))
         page.progress_bar.setValue(0)
         page.progress_bar.setFormat("0 / 0 (0.0%)" if total_count <= 0 else f"0 / {total_count} (0.0%)")
@@ -1006,6 +1042,7 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
 
 
 def create_result_page():
+    """`create_result_page` 화면을 구성한다."""
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -1057,6 +1094,7 @@ def create_result_page():
     layout.addLayout(buttons)
 
     def set_results(upload_result: dict) -> None:
+        """`set_results` 값을 설정한다."""
         for key, table in page.tables.items():
             df = upload_result.get(key)
             if df is None or getattr(df, "empty", True):

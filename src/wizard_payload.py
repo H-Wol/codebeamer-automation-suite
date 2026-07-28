@@ -1145,6 +1145,7 @@ class WizardPayloadMixin:
 
     @classmethod
     def _default_operation_scope(cls, upload_mode: Any) -> dict[str, bool]:
+        """`default_operation_scope` 기본값을 계산한다."""
         normalized_mode = cls._normalize_upload_mode(upload_mode)
         if normalized_mode == "update":
             return {"create": False, "update": True}
@@ -1159,6 +1160,7 @@ class WizardPayloadMixin:
         *,
         upload_mode: Any,
     ) -> dict[str, bool]:
+        """`normalize_operation_scope` 값을 정규화한다."""
         default_scope = cls._default_operation_scope(upload_mode)
         scope_payload = dict(raw_scope) if isinstance(raw_scope, dict) else {}
         return {
@@ -1168,6 +1170,7 @@ class WizardPayloadMixin:
 
     @classmethod
     def _scope_applies_to_operation(cls, raw_scope: Any, operation: str, *, upload_mode: Any) -> bool:
+        """`scope_applies_to_operation` 적용 범위를 판정한다."""
         scope = cls._normalize_operation_scope(raw_scope, upload_mode=upload_mode)
         normalized_operation = str(operation or "create").strip().lower()
         if normalized_operation == "update":
@@ -1176,6 +1179,7 @@ class WizardPayloadMixin:
 
     @classmethod
     def _scope_applies_to_upload_mode(cls, raw_scope: Any, upload_mode: Any) -> bool:
+        """`scope_applies_to_upload_mode` 적용 범위를 판정한다."""
         normalized_mode = cls._normalize_upload_mode(upload_mode)
         scope = cls._normalize_operation_scope(raw_scope, upload_mode=upload_mode)
         if normalized_mode == "update":
@@ -1326,6 +1330,7 @@ class WizardPayloadMixin:
         }
 
         def _has_new_ancestor(row_id: int) -> bool:
+            """`has_new_ancestor` 관련 처리를 수행한다."""
             current_parent_id = parent_by_row_id.get(int(row_id))
             while current_parent_id is not None:
                 parent_index = row_index_by_row_id.get(int(current_parent_id))
@@ -1485,6 +1490,7 @@ class WizardPayloadMixin:
 
     @staticmethod
     def _normalize_root_item_name(root_item_name: str | None) -> str | None:
+        """`normalize_root_item_name` 값을 정규화한다."""
         if root_item_name is None:
             return None
         normalized = str(root_item_name).strip()
@@ -1516,6 +1522,7 @@ class WizardPayloadMixin:
 
     @staticmethod
     def _unresolved_parent_error(parent_row_id: Any, *, root_item_name: str | None = None) -> str:
+        """`unresolved_parent_error` 관련 처리를 수행한다."""
         if parent_row_id is None or pd.isna(parent_row_id):
             if root_item_name:
                 return f"Top-level parent {root_item_name!r} is unavailable."
@@ -1527,6 +1534,7 @@ class WizardPayloadMixin:
         cls,
         top_level_parent_specs: list[dict[str, Any]] | None,
     ) -> tuple[list[dict[str, Any]], dict[int, str]]:
+        """`normalize_top_level_parent_specs` 값을 정규화한다."""
         normalized_specs: list[dict[str, Any]] = []
         parent_name_by_row_id: dict[int, str] = {}
         for raw_spec in top_level_parent_specs or []:

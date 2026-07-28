@@ -75,6 +75,7 @@ class WizardDataPreparationMixin:
         self.load_raw_dataframe(raw_df, list_cols=list_cols)
 
     def _payload_source_df(self) -> pd.DataFrame:
+        """`payload_source_df` 관련 처리를 수행한다."""
         if self.state.converted_upload_df is not None:
             return self.state.converted_upload_df
         if self.state.upload_df is not None:

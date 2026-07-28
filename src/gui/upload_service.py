@@ -189,6 +189,7 @@ class GuiUploadPipelineService:
         excel_service: GuiExcelService | None = None,
         reader_cls=ExcelReader,
     ) -> None:
+        """필요한 의존성과 상태를 초기화한다."""
         self.logger = logger
         self.mapper = MappingService(logger=logger)
         self.client_factory = client_factory
@@ -197,6 +198,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _default_operation_scope(upload_mode: str | None) -> dict[str, bool]:
+        """`default_operation_scope` 기본값을 계산한다."""
         normalized_mode = normalize_gui_upload_mode(upload_mode)
         if normalized_mode == GUI_UPLOAD_MODE_UPDATE:
             return {"create": False, "update": True}
@@ -211,6 +213,7 @@ class GuiUploadPipelineService:
         *,
         upload_mode: str | None,
     ) -> dict[str, bool]:
+        """`normalize_operation_scope` 값을 정규화한다."""
         default_scope = cls._default_operation_scope(upload_mode)
         scope_payload = dict(raw_scope) if isinstance(raw_scope, dict) else {}
         return {
@@ -220,6 +223,7 @@ class GuiUploadPipelineService:
 
     @classmethod
     def _scope_applies_to_upload_mode(cls, raw_scope: Any, *, upload_mode: str | None) -> bool:
+        """`scope_applies_to_upload_mode` 적용 범위를 판정한다."""
         normalized_mode = normalize_gui_upload_mode(upload_mode)
         scope = cls._normalize_operation_scope(raw_scope, upload_mode=upload_mode)
         if normalized_mode == GUI_UPLOAD_MODE_UPDATE:
@@ -236,6 +240,7 @@ class GuiUploadPipelineService:
         *,
         upload_mode: str | None,
     ) -> dict[str, dict[str, bool]]:
+        """`normalize_mapping_modes` 값을 정규화한다."""
         normalized_modes: dict[str, dict[str, bool]] = {}
         for df_column in selected_mapping.keys():
             normalized_column = str(df_column).strip()
@@ -255,6 +260,7 @@ class GuiUploadPipelineService:
         *,
         upload_mode: str | None,
     ) -> dict[str, dict[str, bool]]:
+        """`normalize_default_value_modes` 값을 정규화한다."""
         normalized_modes: dict[str, dict[str, bool]] = {}
         default_scope = cls._default_operation_scope(upload_mode)
         for schema_field in selected_default_values.keys():
@@ -267,6 +273,7 @@ class GuiUploadPipelineService:
         return normalized_modes
 
     def create_wizard(self, settings) -> CodebeamerUploadWizard:
+        """`create_wizard` 화면을 구성한다."""
         client = _build_gui_client(settings, self.client_factory, self.logger)
         reader = self.reader_cls(
             header_row=settings.excel_header_row,
@@ -290,6 +297,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _is_gui_excluded_schema_field(row: pd.Series | dict[str, Any]) -> bool:
+        """`is_gui_excluded_schema_field` 관련 처리를 수행한다."""
         field_name = str((row.get("field_name") if isinstance(row, dict) else row.get("field_name")) or "").strip().lower()
         tracker_item_field = str(
             (row.get("tracker_item_field") if isinstance(row, dict) else row.get("tracker_item_field")) or ""
@@ -298,6 +306,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _gui_upload_columns(upload_df: pd.DataFrame) -> list[str]:
+        """`gui_upload_columns` 관련 처리를 수행한다."""
         columns: list[str] = []
         for column in upload_df.columns:
             if column in GUI_EXCLUDED_MAPPING_COLUMNS:
@@ -309,6 +318,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _gui_visible_comparison_df(comparison_df: pd.DataFrame) -> pd.DataFrame:
+        """`gui_visible_comparison_df` 관련 처리를 수행한다."""
         if comparison_df is None or comparison_df.empty:
             return comparison_df
         work = comparison_df.copy()
@@ -320,6 +330,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _is_hidden_user_column(column_name: Any) -> bool:
+        """`is_hidden_user_column` 관련 처리를 수행한다."""
         text = str(column_name or "").strip()
         if not text:
             return False
@@ -335,6 +346,7 @@ class GuiUploadPipelineService:
         self,
         schema_df: pd.DataFrame,
     ) -> list[DefaultValueCandidate]:
+        """`build_default_value_candidates` 결과를 구성한다."""
         if schema_df.empty:
             return []
 
@@ -394,11 +406,13 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _normalize_lookup_text(value: Any) -> str:
+        """`normalize_lookup_text` 값을 정규화한다."""
         text = str(value or "").strip()
         return "" if text.lower() == "nan" else text
 
     @staticmethod
     def _normalize_configuration_reference_id(value: Any) -> int | None:
+        """`normalize_configuration_reference_id` 값을 정규화한다."""
         if value is None or value == "":
             return None
         try:
@@ -408,10 +422,12 @@ class GuiUploadPipelineService:
 
     @classmethod
     def _extract_configuration_field_records(cls, payload: Any) -> list[dict[str, Any]]:
+        """`extract_configuration_field_records` 관련 처리를 수행한다."""
         records: list[dict[str, Any]] = []
         seen_nodes: set[int] = set()
 
         def _looks_like_field_record(node: Any) -> bool:
+            """`looks_like_field_record` 관련 처리를 수행한다."""
             if not isinstance(node, dict):
                 return False
             if "referenceId" in node:
@@ -429,6 +445,7 @@ class GuiUploadPipelineService:
             return any(key in node for key in ("label", "name", "title"))
 
         def _append_record(node: dict[str, Any]) -> None:
+            """`append_record` 관련 처리를 수행한다."""
             node_id = id(node)
             if node_id in seen_nodes:
                 return
@@ -436,6 +453,7 @@ class GuiUploadPipelineService:
             records.append(node)
 
         def _walk(node: Any) -> None:
+            """`walk` 관련 처리를 수행한다."""
             if isinstance(node, list):
                 for item in node:
                     _walk(item)
@@ -465,6 +483,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _tracker_item_query_support_from_config(field_config: dict[str, Any]) -> tuple[list[int], str]:
+        """`tracker_item_query_support_from_config` 관련 처리를 수행한다."""
         if not isinstance(field_config, dict):
             return [], TRACKER_ITEM_QUERY_STATUS_UNAVAILABLE
 
@@ -515,6 +534,7 @@ class GuiUploadPipelineService:
         schema_df: pd.DataFrame,
         tracker_configuration: Any,
     ) -> pd.DataFrame:
+        """`enrich_schema_df_with_tracker_configuration` 관련 처리를 수행한다."""
         if schema_df is None or schema_df.empty:
             return schema_df
 
@@ -526,6 +546,7 @@ class GuiUploadPipelineService:
             return work
 
         def _normalized_candidates(payload: dict[str, Any]) -> set[str]:
+            """`normalized_candidates` 관련 처리를 수행한다."""
             values = {
                 cls._normalize_lookup_text(payload.get("label")).casefold(),
                 cls._normalize_lookup_text(payload.get("name")).casefold(),
@@ -578,6 +599,7 @@ class GuiUploadPipelineService:
         schema_df: pd.DataFrame,
         selected_mapping: dict[str, str],
     ) -> list[TrackerItemFieldCandidate]:
+        """`build_tracker_item_field_candidates` 결과를 구성한다."""
         candidates: list[TrackerItemFieldCandidate] = []
         if schema_df is None or schema_df.empty:
             return candidates
@@ -613,6 +635,7 @@ class GuiUploadPipelineService:
         cls,
         tracker_item_candidates: list[TrackerItemFieldCandidate],
     ) -> dict[str, dict[str, Any]]:
+        """`default_tracker_item_settings` 기본값을 계산한다."""
         settings: dict[str, dict[str, Any]] = {}
         for candidate in tracker_item_candidates:
             settings[candidate.schema_field] = {
@@ -634,6 +657,7 @@ class GuiUploadPipelineService:
         selected_mapping: dict[str, str],
         tracker_item_settings: dict[str, dict[str, Any]] | None,
     ) -> tuple[list[TrackerItemFieldCandidate], dict[str, dict[str, Any]]]:
+        """`normalize_tracker_item_settings` 값을 정규화한다."""
         candidates = cls._build_tracker_item_field_candidates(schema_df, selected_mapping)
         default_settings = cls._default_tracker_item_settings(candidates)
         normalized_settings = dict(default_settings)
@@ -677,6 +701,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _root_regex_target_options() -> list[tuple[str, str]]:
+        """`root_regex_target_options` 관련 처리를 수행한다."""
         return [
             (ROOT_REGEX_TARGET_FILE_STEM, "파일명(확장자 제외)"),
             (ROOT_REGEX_TARGET_FILE_NAME, "전체 파일명"),
@@ -684,6 +709,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _normalize_root_mode(value: Any) -> str:
+        """`normalize_root_mode` 값을 정규화한다."""
         normalized = str(value or ROOT_ITEM_MODE_FILE).strip()
         if normalized in {ROOT_ITEM_MODE_FILE, ROOT_ITEM_MODE_GROUP_BY_COLUMN}:
             return normalized
@@ -691,6 +717,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _root_group_column_options(mapping_context: MappingContext) -> list[str]:
+        """`root_group_column_options` 관련 처리를 수행한다."""
         return [
             str(column).strip()
             for column in mapping_context.upload_columns
@@ -699,6 +726,7 @@ class GuiUploadPipelineService:
 
     @classmethod
     def _root_group_source_label(cls, group_by_column: str) -> str:
+        """`root_group_source_label` 관련 처리를 수행한다."""
         normalized = str(group_by_column or "").strip()
         if not normalized:
             return cls._root_source_label(ROOT_SOURCE_GROUP_VALUE)
@@ -706,6 +734,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _root_source_label(source_key: str) -> str:
+        """`root_source_label` 관련 처리를 수행한다."""
         if source_key == ROOT_SOURCE_FILE_STEM:
             return "파일명(확장자 제외)"
         if source_key == ROOT_SOURCE_FILE_NAME:
@@ -720,6 +749,7 @@ class GuiUploadPipelineService:
 
     @classmethod
     def _root_parse_target_text(cls, file_path: str, regex_target: str) -> str:
+        """`root_parse_target_text` 관련 처리를 수행한다."""
         if regex_target == ROOT_REGEX_TARGET_FILE_NAME:
             return Path(file_path).name
         return Path(file_path).stem
@@ -729,6 +759,7 @@ class GuiUploadPipelineService:
         mapping_context: MappingContext,
         file_path: str,
     ) -> pd.DataFrame:
+        """`root_upload_df_for_file` 관련 처리를 수행한다."""
         representative = str(mapping_context.representative_file_path or "").strip()
         if (
             representative
@@ -764,6 +795,7 @@ class GuiUploadPipelineService:
         *,
         allowed_row_ids: set[int] | None = None,
     ) -> pd.DataFrame:
+        """`top_level_upload_df` 관련 처리를 수행한다."""
         if upload_df is None or upload_df.empty:
             return pd.DataFrame()
 
@@ -785,6 +817,7 @@ class GuiUploadPipelineService:
         regex_target: str,
         allowed_row_ids: set[int] | None = None,
     ) -> tuple[list[dict[str, Any]], list[str], str | None]:
+        """`build_root_source_rows` 결과를 구성한다."""
         file_sources, matched, regex_error = self._root_sources_for_file(
             file_path,
             regex_pattern=regex_pattern,
@@ -850,6 +883,7 @@ class GuiUploadPipelineService:
         mode: str,
         value: str,
     ) -> dict[str, Any]:
+        """`root_assignment` 관련 처리를 수행한다."""
         normalized_mode = str(mode or ROOT_ASSIGNMENT_MODE_FILE_SOURCE).strip()
         if normalized_mode not in {
             ROOT_ASSIGNMENT_MODE_FILE_SOURCE,
@@ -867,6 +901,7 @@ class GuiUploadPipelineService:
         cls,
         field_assignments: dict[str, dict[str, Any]],
     ) -> dict[str, str]:
+        """`root_file_source_assignments` 관련 처리를 수행한다."""
         field_sources: dict[str, str] = {}
         for schema_field, assignment in field_assignments.items():
             if not isinstance(assignment, dict):
@@ -882,6 +917,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _name_schema_field(schema_df: pd.DataFrame) -> str | None:
+        """`name_schema_field` 관련 처리를 수행한다."""
         if schema_df is None or schema_df.empty:
             return None
         matched = schema_df[schema_df["tracker_item_field"].astype(str) == "name"]
@@ -890,6 +926,7 @@ class GuiUploadPipelineService:
         return str(matched.iloc[0]["field_name"])
 
     def _default_root_item_config(self, schema_df: pd.DataFrame) -> dict[str, Any]:
+        """`default_root_item_config` 기본값을 계산한다."""
         field_assignments: dict[str, dict[str, Any]] = {}
         name_schema_field = self._name_schema_field(schema_df)
         if name_schema_field:
@@ -917,6 +954,7 @@ class GuiUploadPipelineService:
         *,
         default_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """`normalize_root_item_config` 값을 정규화한다."""
         config = dict(default_config or {})
         if root_item_config:
             config.update(root_item_config)
@@ -1008,6 +1046,7 @@ class GuiUploadPipelineService:
         }
 
     def _root_field_candidates(self, schema_df: pd.DataFrame) -> list[RootFieldCandidate]:
+        """`root_field_candidates` 관련 처리를 수행한다."""
         option_maps = self.mapper.build_option_maps_from_schema(schema_df)
         candidates: list[RootFieldCandidate] = []
 
@@ -1080,6 +1119,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _compiled_root_regex(regex_pattern: str) -> tuple[re.Pattern[str] | None, str | None]:
+        """`compiled_root_regex` 관련 처리를 수행한다."""
         pattern = str(regex_pattern or "").strip()
         if not pattern:
             return None, None
@@ -1090,6 +1130,7 @@ class GuiUploadPipelineService:
 
     @classmethod
     def _root_regex_group_keys(cls, compiled_pattern: re.Pattern[str] | None) -> list[str]:
+        """`root_regex_group_keys` 관련 처리를 수행한다."""
         if compiled_pattern is None:
             return []
         if compiled_pattern.groupindex:
@@ -1104,6 +1145,7 @@ class GuiUploadPipelineService:
         regex_pattern: str,
         regex_target: str,
     ) -> tuple[dict[str, str], bool, str | None]:
+        """`root_sources_for_file` 관련 처리를 수행한다."""
         sources = {
             ROOT_SOURCE_FILE_NAME: Path(file_path).name,
             ROOT_SOURCE_FILE_STEM: Path(file_path).stem,
@@ -1136,6 +1178,7 @@ class GuiUploadPipelineService:
         mapping_context: MappingContext,
         root_item_config: dict[str, Any] | None = None,
     ) -> RootItemPreviewContext:
+        """`build_root_item_preview_context` 결과를 구성한다."""
         default_config = self._default_root_item_config(mapping_context.schema_df)
         normalized = self._normalize_root_item_config(
             mapping_context.schema_df,
@@ -1344,6 +1387,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _normalize_file_paths(file_state: dict[str, Any]) -> list[str]:
+        """`normalize_file_paths` 값을 정규화한다."""
         raw_paths = file_state.get("file_paths")
         normalized: list[str] = []
 
@@ -1361,6 +1405,7 @@ class GuiUploadPipelineService:
 
     @classmethod
     def _representative_file_path(cls, file_state: dict[str, Any]) -> str:
+        """`representative_file_path` 관련 처리를 수행한다."""
         file_paths = cls._normalize_file_paths(file_state)
         if not file_paths:
             return ""
@@ -1379,6 +1424,7 @@ class GuiUploadPipelineService:
         header_row: int,
         summary_column: str,
     ) -> PreviewData | None:
+        """`cached_preview_data` 관련 처리를 수행한다."""
         preview_data = file_state.get("preview_data")
         if not isinstance(preview_data, PreviewData):
             return None
@@ -1394,6 +1440,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _preview_raw_df_map(preview_data: PreviewData | None) -> dict[str, pd.DataFrame]:
+        """`preview_raw_df_map` 미리보기를 계산한다."""
         if preview_data is None:
             return {}
 
@@ -1417,10 +1464,12 @@ class GuiUploadPipelineService:
         preview_data: PreviewData | None,
         file_path: str,
     ) -> pd.DataFrame | None:
+        """`cached_raw_df_for_file` 관련 처리를 수행한다."""
         return cls._preview_raw_df_map(preview_data).get(str(file_path).strip())
 
     @staticmethod
     def _visible_headers_from_raw_df(raw_df: pd.DataFrame) -> list[str]:
+        """`visible_headers_from_raw_df` 관련 처리를 수행한다."""
         return [
             str(column)
             for column in raw_df.columns
@@ -1435,6 +1484,7 @@ class GuiUploadPipelineService:
         header_row: int,
         summary_col: str,
     ) -> list[str]:
+        """`visible_headers_for_file` 관련 처리를 수행한다."""
         reader = self.reader_cls(
             header_row=header_row,
             summary_col=summary_col,
@@ -1454,6 +1504,7 @@ class GuiUploadPipelineService:
         summary_col: str,
         preview_data: PreviewData | None = None,
     ) -> None:
+        """`validate_batch_headers` 입력을 검증한다."""
         for file_path in file_paths:
             if file_path == representative_file_path:
                 continue
@@ -1483,6 +1534,7 @@ class GuiUploadPipelineService:
         list_cols: list[str],
         preview_data: PreviewData | None = None,
     ) -> int:
+        """`count_upload_rows_for_file` 건수를 계산한다."""
         cached_raw_df = self._cached_raw_df_for_file(preview_data, file_path)
         if cached_raw_df is not None:
             processor = HierarchyProcessor(
@@ -1519,6 +1571,7 @@ class GuiUploadPipelineService:
         *,
         list_cols: list[str],
     ) -> int:
+        """`count_batch_upload_rows` 건수를 계산한다."""
         total_rows = 0
         for file_path in mapping_context.file_paths:
             cached_raw_df = self._cached_raw_df_for_file(mapping_context.preview_data, file_path)
@@ -1546,6 +1599,7 @@ class GuiUploadPipelineService:
         return total_rows
 
     def _create_validation_wizard(self, mapping_context: MappingContext) -> CodebeamerUploadWizard:
+        """`create_validation_wizard` 관련 처리를 수행한다."""
         base_wizard = mapping_context.wizard
         reader = self.reader_cls(
             header_row=mapping_context.header_row,
@@ -1583,6 +1637,7 @@ class GuiUploadPipelineService:
         file_label: str,
         file_path: str,
     ) -> pd.DataFrame:
+        """`annotate_source_frame` 관련 처리를 수행한다."""
         if df is None or getattr(df, "empty", True):
             return pd.DataFrame()
 
@@ -1603,6 +1658,7 @@ class GuiUploadPipelineService:
         target_wizard: CodebeamerUploadWizard,
         source_wizard: CodebeamerUploadWizard,
     ) -> None:
+        """`sync_validation_wizard_caches` 상태를 동기화한다."""
         target_wizard.state.user_lookup_cache = dict(source_wizard.state.user_lookup_cache)
         target_wizard.state.member_lookup_cache = dict(source_wizard.state.member_lookup_cache)
         target_wizard.state.group_lookup_cache = dict(source_wizard.state.group_lookup_cache)
@@ -1614,6 +1670,7 @@ class GuiUploadPipelineService:
         mapping_context: MappingContext,
         file_path: str,
     ) -> pd.DataFrame:
+        """`raw_df_for_file` 관련 처리를 수행한다."""
         cached_raw_df = self._cached_raw_df_for_file(mapping_context.preview_data, file_path)
         if cached_raw_df is not None:
             return cached_raw_df.copy()
@@ -1635,6 +1692,7 @@ class GuiUploadPipelineService:
         file_path: str,
         list_cols: list[str],
     ) -> pd.DataFrame:
+        """`upload_df_for_file` 관련 처리를 수행한다."""
         raw_df = self._raw_df_for_file(mapping_context, file_path)
         processor = HierarchyProcessor(
             header_row=mapping_context.header_row,
@@ -1652,6 +1710,7 @@ class GuiUploadPipelineService:
         *,
         file_upload_dfs: dict[str, pd.DataFrame],
     ) -> tuple[set[int], pd.DataFrame]:
+        """`build_batch_update_duplicate_issue_df` 결과를 구성한다."""
         issue_columns = [
             "severity",
             "category",
@@ -1741,6 +1800,7 @@ class GuiUploadPipelineService:
         *,
         payload_df: pd.DataFrame,
     ) -> pd.DataFrame:
+        """`build_upsert_root_item_issue_df` 결과를 구성한다."""
         del mapping_context, payload_df
         return pd.DataFrame(columns=[
             "severity",
@@ -1758,6 +1818,7 @@ class GuiUploadPipelineService:
         ])
 
     def prepare_mapping_context(self, settings, file_state: dict[str, Any]) -> MappingContext:
+        """`prepare_mapping_context` 관련 처리를 수행한다."""
         file_paths = self._normalize_file_paths(file_state)
         representative_file_path = self._representative_file_path(file_state)
         if not file_paths or not representative_file_path:
@@ -1998,6 +2059,7 @@ class GuiUploadPipelineService:
         selected_mapping_modes: dict[str, dict[str, bool]] | None = None,
         selected_default_value_modes: dict[str, dict[str, bool]] | None = None,
     ) -> ValidationContext:
+        """`validate_mapping` 입력을 검증한다."""
         wizard = mapping_context.wizard
         list_cols = self.mapper.get_list_columns_for_mapping(selected_mapping, mapping_context.schema_df)
         representative_file_path = mapping_context.representative_file_path
@@ -2198,10 +2260,12 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _display_text(value: Any) -> str:
+        """`display_text` 관련 처리를 수행한다."""
         return gui_display_text(value)
 
     @staticmethod
     def _to_row_key(value: Any) -> str:
+        """`to_row_key` 관련 처리를 수행한다."""
         if value is None:
             return ""
         if isinstance(value, float):
@@ -2226,6 +2290,7 @@ class GuiUploadPipelineService:
 
     @classmethod
     def _scoped_row_key(cls, row_id: Any, source_file_path: Any = None) -> str:
+        """`scoped_row_key` 관련 처리를 수행한다."""
         normalized_row_key = cls._to_row_key(row_id)
         if not normalized_row_key:
             return ""
@@ -2236,6 +2301,7 @@ class GuiUploadPipelineService:
 
     @classmethod
     def _build_row_label(cls, row: pd.Series) -> str:
+        """`build_row_label` 결과를 구성한다."""
         start_row = cls._to_row_key(row.get("_start_excel_row"))
         end_row = cls._to_row_key(row.get("_end_excel_row"))
         excel_row = cls._to_row_key(row.get("_excel_row"))
@@ -2253,6 +2319,7 @@ class GuiUploadPipelineService:
 
     @classmethod
     def _build_row_context_map(cls, row_context_df: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
+        """`build_row_context_map` 결과를 구성한다."""
         if row_context_df is None or row_context_df.empty:
             return {}
 
@@ -2303,6 +2370,7 @@ class GuiUploadPipelineService:
         *,
         fallback_item_name: str = "",
     ) -> dict[str, str]:
+        """`row_context` 관련 처리를 수행한다."""
         context = row_context_map.get(row_key, {})
         return {
             "row_id": row_key,
@@ -2314,6 +2382,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _root_assignment_target_kind(preview_context: RootItemPreviewContext) -> str:
+        """`root_assignment_target_kind` 관련 처리를 수행한다."""
         return "group_root" if bool(preview_context.group_enabled and preview_context.group_by_column) else "file_root"
 
     @classmethod
@@ -2324,6 +2393,7 @@ class GuiUploadPipelineService:
         *,
         name_schema_field: str | None = None,
     ) -> dict[str, Any]:
+        """`root_field_values_for_source_row` 관련 처리를 수행한다."""
         row_kind = str(source_row.get("kind") or "")
         sources = dict(source_row.get("sources") or {})
         root_field_values: dict[str, Any] = {}
@@ -2363,6 +2433,7 @@ class GuiUploadPipelineService:
         wizard: CodebeamerUploadWizard,
         file_path: str,
     ) -> list[RootItemUploadSpec]:
+        """`build_root_item_payload_specs` 결과를 구성한다."""
         preview_context = self.build_root_item_preview_context(mapping_context, mapping_context.root_item_config)
         if not bool(preview_context.enabled) and not bool(preview_context.group_enabled):
             return []
@@ -2439,6 +2510,7 @@ class GuiUploadPipelineService:
         mapping_context: MappingContext,
         file_path: str,
     ) -> tuple[str | None, dict[str, Any]]:
+        """`build_root_item_payload_spec` 결과를 구성한다."""
         preview_context = self.build_root_item_preview_context(mapping_context, mapping_context.root_item_config)
         if not bool(preview_context.enabled) and not bool(preview_context.group_enabled):
             return None, {}
@@ -2480,6 +2552,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _tracker_item_query_mapping(mapping_context: MappingContext) -> dict[str, str]:
+        """`tracker_item_query_mapping` 관련 처리를 수행한다."""
         query_mapping: dict[str, str] = {}
         for df_column, schema_field in mapping_context.selected_mapping.items():
             scope = dict((mapping_context.selected_mapping_modes or {}).get(str(df_column).strip()) or {})
@@ -2499,6 +2572,7 @@ class GuiUploadPipelineService:
         settings,
         mapping_context: MappingContext,
     ) -> None:
+        """`prime_tracker_item_lookup_cache_for_batch` 관련 처리를 수행한다."""
         query_mapping = self._tracker_item_query_mapping(mapping_context)
         if not query_mapping:
             return
@@ -2549,6 +2623,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _batch_output_dir(output_dir: str, file_path: str, index: int) -> str:
+        """`batch_output_dir` 관련 처리를 수행한다."""
         safe_name = Path(file_path).stem.strip() or f"file_{index:03d}"
         return str(Path(output_dir) / f"{index:03d}_{safe_name}")
 
@@ -2557,6 +2632,7 @@ class GuiUploadPipelineService:
         wizard: CodebeamerUploadWizard,
         root_item_specs: list[RootItemUploadSpec] | None = None,
     ) -> int:
+        """`ready_upload_count` 관련 처리를 수행한다."""
         insert_count, update_count = GuiUploadPipelineService._phase_ready_counts(
             wizard,
             root_item_specs=root_item_specs,
@@ -2568,6 +2644,7 @@ class GuiUploadPipelineService:
         wizard: CodebeamerUploadWizard,
         root_item_specs: list[RootItemUploadSpec] | None = None,
     ) -> tuple[int, int]:
+        """`phase_ready_counts` 관련 처리를 수행한다."""
         payload_df = wizard.state.payload_df if wizard.state.payload_df is not None else wizard.build_payloads()
         if payload_df is None or payload_df.empty:
             return (0, 0)
@@ -2604,6 +2681,7 @@ class GuiUploadPipelineService:
         file_label: str,
         file_path: str,
     ) -> pd.DataFrame:
+        """`annotate_batch_result_frame` 관련 처리를 수행한다."""
         return GuiUploadPipelineService._annotate_source_frame(
             df,
             file_label=file_label,
@@ -2620,6 +2698,7 @@ class GuiUploadPipelineService:
         header_row: int,
         summary_col: str,
     ) -> CodebeamerUploadWizard:
+        """`prepare_wizard_for_file` 관련 처리를 수행한다."""
         wizard = self.create_wizard(settings)
         wizard.select_project(int(settings.default_project_id))
         wizard.select_tracker(int(settings.default_tracker_id))
@@ -2690,6 +2769,7 @@ class GuiUploadPipelineService:
         cancel_requested=None,
         pause_requested=None,
     ) -> dict[str, Any]:
+        """`run_batch_upload` 관련 처리를 수행한다."""
         file_paths = mapping_context.file_paths or self._normalize_file_paths(file_state)
         if not file_paths:
             raise ValueError("업로드할 Excel 파일이 없습니다.")
@@ -2720,10 +2800,12 @@ class GuiUploadPipelineService:
         }
 
         def _emit(event: dict[str, Any]) -> None:
+            """`emit` 관련 처리를 수행한다."""
             if event_callback is not None:
                 event_callback(event)
 
         def _sync_control() -> None:
+            """`sync_control` 상태를 동기화한다."""
             while pause_requested is not None and pause_requested():
                 time.sleep(0.1)
             if cancel_requested is not None and cancel_requested():
@@ -2803,6 +2885,7 @@ class GuiUploadPipelineService:
             })
 
             def _forward_event(event: dict[str, Any]) -> None:
+                """`forward_event` 관련 처리를 수행한다."""
                 forwarded = dict(event)
                 forwarded["source_file"] = job.file_label
                 forwarded["source_file_path"] = job.file_path
@@ -2931,6 +3014,7 @@ class GuiUploadPipelineService:
         column_name: str,
         row_context_map: dict[str, dict[str, Any]],
     ) -> str:
+        """`raw_value_from_row_context` 관련 처리를 수행한다."""
         if not row_key or not column_name:
             return ""
         context = row_context_map.get(row_key, {})
@@ -2941,6 +3025,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _message_from_option_status(row: pd.Series) -> tuple[str, str, str]:
+        """`message_from_option_status` 관련 처리를 수행한다."""
         status = str(row.get("status") or "")
         field_name = str(row.get("schema_field") or "")
         df_column = str(row.get("df_column") or "")
@@ -3059,6 +3144,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _parse_payload_error(payload_error: str) -> dict[str, str]:
+        """`parse_payload_error` 값을 파싱한다."""
         work = str(payload_error or "").strip()
         parsed = {
             "code": "",
@@ -3098,6 +3184,7 @@ class GuiUploadPipelineService:
 
     @classmethod
     def _message_from_payload_error(cls, row: pd.Series) -> tuple[str, str, str, str]:
+        """`message_from_payload_error` 관련 처리를 수행한다."""
         payload_error = str(row.get("payload_error") or "").strip()
         parsed = cls._parse_payload_error(payload_error)
         code = parsed["code"]
@@ -3203,6 +3290,7 @@ class GuiUploadPipelineService:
         issue_df: pd.DataFrame,
         row_context_df: pd.DataFrame | None,
     ) -> dict[str, int]:
+        """`build_summary_stats` 결과를 구성한다."""
         total_rows = 0
         if row_context_df is not None and not row_context_df.empty and "_row_id" in row_context_df.columns:
             total_rows = len({
@@ -3262,6 +3350,7 @@ class GuiUploadPipelineService:
         row_context_df: pd.DataFrame | None = None,
         selected_default_values: dict[str, str] | None = None,
     ) -> pd.DataFrame:
+        """`build_user_issue_df` 결과를 구성한다."""
         row_context_map = cls._build_row_context_map(row_context_df)
         issue_columns = [
             "severity",
@@ -3368,6 +3457,7 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _finalize_issue_df(issue_df: pd.DataFrame) -> pd.DataFrame:
+        """`finalize_issue_df` 관련 처리를 수행한다."""
         if issue_df.empty:
             return issue_df
         issue_df = issue_df.drop_duplicates().reset_index(drop=True)

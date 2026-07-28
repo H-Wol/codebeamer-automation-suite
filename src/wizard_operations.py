@@ -181,6 +181,7 @@ class WizardOperationMixin:
         ]
 
         def _finalize(unresolved_df: pd.DataFrame) -> dict[str, Any]:
+            """`finalize` 관련 처리를 수행한다."""
             self.state.upload_result = {
                 "root_item_id": root_item_id,
                 "created_map": created_map,
@@ -191,6 +192,7 @@ class WizardOperationMixin:
             return self.state.upload_result
 
         def _build_unresolved_df(row_df: pd.DataFrame) -> pd.DataFrame:
+            """`build_unresolved_df` 결과를 구성한다."""
             unresolved_df = row_df.copy()
             if unresolved_df.empty:
                 return unresolved_df
@@ -563,6 +565,7 @@ class WizardOperationMixin:
         ]
 
         def _finalize(unresolved_df: pd.DataFrame) -> dict[str, Any]:
+            """`finalize` 관련 처리를 수행한다."""
             self.state.upload_result = {
                 "root_item_id": None,
                 "created_map": {},
@@ -717,6 +720,7 @@ class WizardOperationMixin:
         phase_results: dict[str, dict[str, int]] = {}
 
         def _emit_phase_started(phase: str, total: int) -> None:
+            """`emit_phase_started` 관련 처리를 수행한다."""
             if event_callback is None:
                 return
             event_callback({
@@ -726,6 +730,7 @@ class WizardOperationMixin:
             })
 
         def _emit_phase_finished(phase: str, result: dict[str, Any]) -> None:
+            """`emit_phase_finished` 관련 처리를 수행한다."""
             success_count = self._result_count(result.get("success_df"))
             failed_count = self._result_count(result.get("failed_df"))
             unresolved_count = self._result_count(result.get("unresolved_df"))

@@ -5,6 +5,7 @@ from .window_support import *  # noqa: F403
 
 class WindowUploadMixin:
     def _start_upload(self) -> None:
+        """`start_upload` 관련 처리를 수행한다."""
         if self.session_state.mapping_context is None:
             self.upload_page.status_label.setText("업로드 컨텍스트가 없습니다.")
             return
@@ -54,6 +55,7 @@ class WindowUploadMixin:
         self.upload_worker.start()
 
     def _pause_upload(self) -> None:
+        """`pause_upload` 관련 처리를 수행한다."""
         if self.upload_worker is not None:
             self.upload_worker.request_pause()
             self.upload_page.pause_button.setEnabled(False)
@@ -61,6 +63,7 @@ class WindowUploadMixin:
             self.upload_page.status_label.setText("일시정지 요청됨")
 
     def _resume_upload(self) -> None:
+        """`resume_upload` 관련 처리를 수행한다."""
         if self.upload_worker is not None:
             self.upload_worker.request_resume()
             self.upload_page.pause_button.setEnabled(True)
@@ -68,20 +71,24 @@ class WindowUploadMixin:
             self.upload_page.status_label.setText("업로드 재개")
 
     def _cancel_upload(self) -> None:
+        """`cancel_upload` 관련 처리를 수행한다."""
         if self.upload_worker is not None:
             self.upload_worker.request_cancel()
             self.upload_page.status_label.setText("중단 요청됨")
 
     @staticmethod
     def _format_clock(timestamp: float | None = None) -> str:
+        """`format_clock` 표시 문자열을 만든다."""
         return _format_clock_text(timestamp)
 
     @staticmethod
     def _format_duration(seconds: float | None) -> str:
+        """`format_duration` 표시 문자열을 만든다."""
         return _format_duration_text(seconds)
 
     @staticmethod
     def _upload_event_key(event: dict[str, object]) -> str:
+        """`upload_event_key` 관련 처리를 수행한다."""
         source_file_path = str(event.get("source_file_path") or "").strip()
         row_id = event.get("row_id")
         if row_id is None:
@@ -90,6 +97,7 @@ class WindowUploadMixin:
 
     @staticmethod
     def _display_item_name(file_label: str, upload_name: str) -> str:
+        """`display_item_name` 관련 처리를 수행한다."""
         prefix = f"[{file_label}] "
         if file_label and upload_name.startswith(prefix):
             return upload_name[len(prefix):].strip() or upload_name
@@ -97,6 +105,7 @@ class WindowUploadMixin:
 
     @staticmethod
     def _normalize_phase_key(phase: object) -> str:
+        """`normalize_phase_key` 값을 정규화한다."""
         normalized = str(phase or "").strip().lower()
         if normalized == "create":
             return "insert"
@@ -104,6 +113,7 @@ class WindowUploadMixin:
 
     @classmethod
     def _phase_display_name(cls, phase: object) -> str:
+        """`phase_display_name` 관련 처리를 수행한다."""
         phase_key = cls._normalize_phase_key(phase)
         if phase_key == "insert":
             return "생성"
@@ -113,18 +123,21 @@ class WindowUploadMixin:
 
     @staticmethod
     def _count_phase_rows(df, phase: str) -> int:
+        """`count_phase_rows` 건수를 계산한다."""
         if df is None or getattr(df, "empty", True) or "phase" not in df.columns:
             return 0
         phase_series = df["phase"].fillna("").astype(str).str.lower()
         return int(phase_series.eq(phase).sum())
 
     def _append_timestamped_log(self, message: str) -> None:
+        """`append_timestamped_log` 관련 처리를 수행한다."""
         text = str(message or "").strip()
         if not text:
             return
         self.upload_page.log_view.appendPlainText(f"{self._format_clock()} | {text}")
 
     def _update_upload_counter(self) -> None:
+        """`update_upload_counter` 상태를 갱신한다."""
         self.upload_page.counter_label.setText(
             f"성공 {self.upload_success_count} / 실패 {self.upload_failed_count} / 재시도 {self.upload_retry_count}"
         )
@@ -146,6 +159,7 @@ class WindowUploadMixin:
         )
 
     def _update_upload_progress_widgets(self) -> None:
+        """`update_upload_progress_widgets` 상태를 갱신한다."""
         total = max(int(self._upload_progress_total), 0)
         completed = max(int(self._upload_progress_current), 0)
         clamped_completed = min(completed, total) if total > 0 else 0
@@ -156,6 +170,7 @@ class WindowUploadMixin:
         self.upload_page.progress_bar.setFormat(progress_text.replace("진행률 ", ""))
 
     def _update_upload_time_label(self) -> None:
+        """`update_upload_time_label` 상태를 갱신한다."""
         if self._upload_batch_started_at is None:
             self.upload_page.time_label.setText("배치 시간: -")
             self.upload_page.eta_label.setText("예상 종료: -")
@@ -174,6 +189,7 @@ class WindowUploadMixin:
         )
 
     def _on_upload_event(self, event: dict) -> None:
+        """`on_upload_event` 이벤트를 처리한다."""
         event_type = str(event.get("type") or "")
         message = str(event.get("message") or "").strip()
         raw_item_name = str(event.get("upload_name") or "-").strip() or "-"
@@ -283,6 +299,7 @@ class WindowUploadMixin:
         self._append_timestamped_log(f"{phase_name} {status_text} | {message}")
 
     def _on_upload_progress(self, current: int, total: int, upload_name: str) -> None:
+        """`on_upload_progress` 이벤트를 처리한다."""
         self._upload_progress_current = max(int(current), 0)
         self._upload_progress_total = max(int(total), 0)
         self._update_upload_progress_widgets()
@@ -294,6 +311,7 @@ class WindowUploadMixin:
         self._update_upload_time_label()
 
     def _on_upload_finished(self, result: dict) -> None:
+        """`on_upload_finished` 이벤트를 처리한다."""
         self.session_state.upload_result = result
         self.upload_worker = None
         success_df = result.get("success_df")
@@ -343,6 +361,7 @@ class WindowUploadMixin:
             )
 
     def _on_upload_failed(self, message: str) -> None:
+        """`on_upload_failed` 이벤트를 처리한다."""
         self.upload_worker = None
         self.upload_page.status_label.setText(message)
         self._update_upload_time_label()

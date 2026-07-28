@@ -87,6 +87,7 @@ class WizardTrackerItemLookupMixin:
 
     @staticmethod
     def _tracker_item_candidate_similarity(lookup_text: str, candidate_name: Any) -> tuple[int, int, int, float, int]:
+        """`tracker_item_candidate_similarity` 관련 처리를 수행한다."""
         normalized_lookup = str(lookup_text or "").strip().casefold()
         normalized_candidate = str(candidate_name or "").strip().casefold()
         if not normalized_candidate:
@@ -104,6 +105,7 @@ class WizardTrackerItemLookupMixin:
         candidates: list[dict[str, Any]],
         option_info: dict[str, Any],
     ) -> TrackerItemLookupCacheEntry:
+        """`select_tracker_item_query_candidate` 관련 처리를 수행한다."""
         strategy = str(
             option_info.get("tracker_item_query_match_strategy")
             or TrackerItemQueryMatchStrategy.BEST.value

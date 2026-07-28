@@ -7,6 +7,7 @@ def create_settings_page(
     on_settings_changed,
     on_theme_changed=None,
 ):
+    """`create_settings_page` 화면을 구성한다."""
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -198,6 +199,7 @@ def create_settings_page(
     layout.addStretch(1)
 
     def _update_next_button_state() -> None:
+        """`update_next_button_state` 상태를 갱신한다."""
         blocks_offline_mode = gui_upload_mode_supports_update(upload_mode_combo.currentData())
         if mode_toggle.isChecked():
             next_button.setEnabled(
@@ -207,6 +209,7 @@ def create_settings_page(
         next_button.setEnabled(bool(base_url.text().strip() and username.text().strip() and password.text()))
 
     def _request_settings_reflow() -> None:
+        """`request_settings_reflow` 요청을 수행한다."""
         request_content_reflow = getattr(page, "request_content_reflow", None)
         if callable(request_content_reflow):
             request_content_reflow(
@@ -218,6 +221,7 @@ def create_settings_page(
             )
 
     def _sync_offline_mode_state() -> None:
+        """`sync_offline_mode_state` 상태를 동기화한다."""
         is_offline = bool(mode_toggle.isChecked())
         mode_toggle.setText(_settings_mode_toggle_text(is_offline))
         mode_badge.setVisible(is_offline)
@@ -236,6 +240,7 @@ def create_settings_page(
         _request_settings_reflow()
 
     def _collect_settings():
+        """`collect_settings` 정보를 수집한다."""
         current_settings = getattr(page, "_current_settings", initial_settings)
         return type(initial_settings)(
             theme_name=normalize_gui_theme_name(theme_combo.currentData()),
@@ -263,11 +268,13 @@ def create_settings_page(
         )
 
     def _set_status(message: str) -> None:
+        """`set_status` 값을 설정한다."""
         status_label.setVisible(bool(message))
         status_label.setText(message)
         _request_settings_reflow()
 
     def _apply_settings(loaded) -> None:
+        """`apply_settings` 변경을 적용한다."""
         page._current_settings = loaded
         base_url.setText(loaded.base_url)
         username.setText(loaded.username)
@@ -287,6 +294,7 @@ def create_settings_page(
         _sync_offline_mode_state()
 
     def _select_theme(theme_name: str) -> None:
+        """`select_theme` 관련 처리를 수행한다."""
         normalized_theme = normalize_gui_theme_name(theme_name)
         index = theme_combo.findData(normalized_theme)
         if index < 0:
@@ -294,6 +302,7 @@ def create_settings_page(
         theme_combo.setCurrentIndex(index)
 
     def _select_upload_mode(upload_mode: str) -> None:
+        """`select_upload_mode` 관련 처리를 수행한다."""
         normalized_mode = normalize_gui_upload_mode(upload_mode)
         index = upload_mode_combo.findData(normalized_mode)
         if index < 0:
@@ -301,10 +310,12 @@ def create_settings_page(
         upload_mode_combo.setCurrentIndex(index)
 
     def _preview_theme() -> None:
+        """`preview_theme` 미리보기를 계산한다."""
         if callable(on_theme_changed):
             on_theme_changed(normalize_gui_theme_name(theme_combo.currentData()))
 
     def _choose_snapshot_path(target_widget, *, title: str) -> None:
+        """`choose_snapshot_path` 선택 동작을 처리한다."""
         start_path = target_widget.text().strip() or str(getattr(page, "_current_settings", initial_settings).last_file_path or "")
         selected, _ = QFileDialog.getOpenFileName(
             page,
@@ -316,12 +327,14 @@ def create_settings_page(
             target_widget.setText(str(selected))
 
     def _load():
+        """`load` 관련 처리를 수행한다."""
         loaded = settings_store.load()
         _apply_settings(loaded)
         on_settings_changed(loaded)
         _set_status("설정을 불러왔습니다.")
 
     def _save():
+        """`save` 관련 처리를 수행한다."""
         current = _collect_settings()
         page._current_settings = current
         settings_store.save(current)
@@ -329,6 +342,7 @@ def create_settings_page(
         _set_status("설정을 저장했습니다.")
 
     def _go_next():
+        """`go_next` 단계 이동을 처리한다."""
         current = _collect_settings()
         if current.offline_mode:
             if gui_upload_mode_supports_update(current.upload_mode):
@@ -394,6 +408,7 @@ def create_project_selection_page(
     on_project_selected,
     on_error=None,
 ):
+    """`create_project_selection_page` 화면을 구성한다."""
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -449,9 +464,11 @@ def create_project_selection_page(
     layout.addStretch(1)
 
     def _update_next_button_state() -> None:
+        """`update_next_button_state` 상태를 갱신한다."""
         next_button.setEnabled(bool(page.selected_project_id and page.selected_tracker_id))
 
     def _clear_combo_items() -> None:
+        """`clear_combo_items` 상태를 비운다."""
         project_combo.blockSignals(True)
         tracker_combo.blockSignals(True)
         project_combo.clear()
@@ -463,6 +480,7 @@ def create_project_selection_page(
         _update_next_button_state()
 
     def _set_items(combo, items: list[dict], selected_id: str) -> None:
+        """`set_items` 값을 설정한다."""
         combo.blockSignals(True)
         combo.clear()
         for item in items:
@@ -475,10 +493,12 @@ def create_project_selection_page(
         combo.blockSignals(False)
 
     def _current_settings():
+        """`current_settings` 관련 처리를 수행한다."""
         settings = on_settings_changed(None)
         return settings
 
     def _sync_from_settings(*, auto_load: bool = False) -> None:
+        """`sync_from_settings` 상태를 동기화한다."""
         settings = _current_settings()
         is_offline = bool(getattr(settings, "offline_mode", False))
         refresh_button.setText(_project_selection_refresh_button_text(is_offline))
@@ -497,6 +517,7 @@ def create_project_selection_page(
             _refresh_projects()
 
     def _refresh_projects() -> None:
+        """`refresh_projects` 표시를 새로 고친다."""
         settings = _current_settings()
         try:
             projects = on_connection_test(settings)
@@ -524,10 +545,12 @@ def create_project_selection_page(
             _handle_project_changed(selected_index)
 
     def _refresh_projects_for_current_settings() -> None:
+        """`refresh_projects_for_current_settings` 표시를 새로 고친다."""
         _sync_from_settings(auto_load=False)
         _refresh_projects()
 
     def _handle_project_changed(index: int) -> None:
+        """`handle_project_changed` 관련 처리를 수행한다."""
         project_id = project_combo.itemData(index)
         if project_id in (None, ""):
             tracker_combo.clear()
@@ -562,6 +585,7 @@ def create_project_selection_page(
             status_label.setText(f"프로젝트 {project_combo.currentText()}의 트래커를 불러왔습니다.")
 
     def _handle_tracker_changed(index: int) -> None:
+        """`handle_tracker_changed` 관련 처리를 수행한다."""
         tracker_id = tracker_combo.itemData(index)
         if tracker_id not in (None, ""):
             page.selected_tracker_id = str(tracker_id)
@@ -570,6 +594,7 @@ def create_project_selection_page(
         _update_next_button_state()
 
     def _go_next() -> None:
+        """`go_next` 단계 이동을 처리한다."""
         if not page.selected_project_id or not page.selected_tracker_id:
             status_label.setText("프로젝트와 트래커를 모두 선택해야 합니다.")
             return
@@ -586,6 +611,7 @@ def create_project_selection_page(
     tracker_combo.currentIndexChanged.connect(_handle_tracker_changed)
 
     def _load_selection(project_id: str, tracker_id: str) -> None:
+        """`load_selection` 관련 처리를 수행한다."""
         page.selected_project_id = str(project_id or "")
         page.selected_tracker_id = str(tracker_id or "")
         if page.selected_project_id.isdigit() and project_combo.count() > 0:
@@ -599,6 +625,7 @@ def create_project_selection_page(
         _update_next_button_state()
 
     def _get_selection() -> dict[str, str]:
+        """`get_selection` 관련 처리를 수행한다."""
         return {
             "project_id": str(page.selected_project_id or ""),
             "tracker_id": str(page.selected_tracker_id or ""),
@@ -612,6 +639,7 @@ def create_project_selection_page(
 
 
 def create_file_selection_page(initial_settings, on_file_state_changed, on_file_preview_requested, on_error=None):
+    """`create_file_selection_page` 화면을 구성한다."""
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -708,9 +736,11 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     page._preview_data = None
 
     def _update_next_button_state() -> None:
+        """`update_next_button_state` 상태를 갱신한다."""
         next_button.setEnabled(bool(page._selected_file_paths) and page._preview_ready)
 
     def _selected_preview_file_path() -> str:
+        """`selected_preview_file_path` 관련 처리를 수행한다."""
         preview_path = str(preview_file.currentData() or "").strip()
         if preview_path:
             return preview_path
@@ -719,6 +749,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         return ""
 
     def _update_file_display() -> None:
+        """`update_file_display` 상태를 갱신한다."""
         selected_count = len(page._selected_file_paths)
         if selected_count <= 0:
             file_path.setText("")
@@ -730,6 +761,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         file_path.setText(f"{selected_count}개 파일 선택됨 ({first_name} 외)")
 
     def _set_preview_file_items(selected_file_paths: list[str], selected_path: str | None = None) -> None:
+        """`set_preview_file_items` 값을 설정한다."""
         preview_file.blockSignals(True)
         preview_file.clear()
         for current_path in selected_file_paths:
@@ -742,6 +774,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         preview_file.blockSignals(False)
 
     def _collect_state():
+        """`collect_state` 정보를 수집한다."""
         state = {
             "file_path": _selected_preview_file_path(),
             "file_paths": list(page._selected_file_paths),
@@ -755,6 +788,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         return state
 
     def _set_preview(headers: list[str], rows: list[list[str]], resolved_summary: str) -> None:
+        """`set_preview` 값을 설정한다."""
         preview_table.clear()
         preview_table.setColumnCount(len(headers))
         preview_table.setRowCount(len(rows))
@@ -771,11 +805,13 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
             summary_column.blockSignals(False)
 
     def _clear_preview() -> None:
+        """`clear_preview` 상태를 비운다."""
         preview_table.clear()
         preview_table.setColumnCount(0)
         preview_table.setRowCount(0)
 
     def _mark_preview_dirty(*, clear_sheet_names: bool = False, message: str | None = None) -> None:
+        """`mark_preview_dirty` 상태를 표시한다."""
         page._preview_ready = False
         page._preview_data = None
         _clear_preview()
@@ -793,6 +829,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         status_label.setText("Excel 파일과 옵션을 정한 뒤 '데이터 불러오기'를 누르세요.")
 
     def _set_sheet_names(names: list[str], selected_name: str) -> None:
+        """`set_sheet_names` 값을 설정한다."""
         sheet_name.blockSignals(True)
         sheet_name.clear()
         for name in names:
@@ -803,6 +840,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         sheet_name.blockSignals(False)
 
     def _refresh_preview() -> None:
+        """`refresh_preview` 표시를 새로 고친다."""
         state = _collect_state()
         page._preview_ready = False
         _update_next_button_state()
@@ -832,6 +870,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
         on_file_state_changed(_collect_state())
 
     def _choose_files():
+        """`choose_files` 선택 동작을 처리한다."""
         dialog_path = page._selected_file_paths[0] if page._selected_file_paths else initial_settings.last_file_path
         selected, _ = QFileDialog.getOpenFileNames(
             page,
@@ -852,9 +891,11 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
             )
 
     def _go_previous():
+        """`go_previous` 단계 이동을 처리한다."""
         page.request_previous()
 
     def _go_next():
+        """`go_next` 단계 이동을 처리한다."""
         state = _collect_state()
         if not state["file_paths"]:
             status_label.setText("Excel 파일을 하나 이상 선택해야 합니다.")
@@ -878,6 +919,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     _update_file_display()
 
     def _load_state(state: dict[str, object]) -> None:
+        """`load_state` 관련 처리를 수행한다."""
         loaded_state = dict(state or {})
         loaded_file_paths = [
             str(path).strip()
@@ -929,6 +971,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
 
 
 def create_root_item_page(on_preview_requested, *, page_mode: str = "structure"):
+    """`create_root_item_page` 화면을 구성한다."""
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -1047,6 +1090,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
     field_table.setVisible(is_field_page)
 
     def _sync_root_enabled_state(file_root_enabled: bool, group_enabled: bool) -> None:
+        """`sync_root_enabled_state` 상태를 동기화한다."""
         has_any_root = file_root_enabled or group_enabled
         group_by_column.setEnabled(group_enabled)
         regex_target.setEnabled(has_any_root)
@@ -1063,6 +1107,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
             field_label.setText("상단 데이터 필드 매핑")
 
     def _current_field_assignments() -> dict[str, dict[str, object]]:
+        """`current_field_assignments` 관련 처리를 수행한다."""
         field_assignments: dict[str, dict[str, object]] = {}
         for row_index in range(field_table.rowCount()):
             enabled_widget = field_table.cellWidget(row_index, 0)
@@ -1084,6 +1129,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
         return field_assignments
 
     def _legacy_field_sources(field_assignments: dict[str, dict[str, object]]) -> dict[str, str]:
+        """`legacy_field_sources` 관련 처리를 수행한다."""
         field_sources: dict[str, str] = {}
         for schema_field, assignment in field_assignments.items():
             if not bool(assignment.get("enabled")):
@@ -1096,6 +1142,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
         return field_sources
 
     def get_config() -> dict[str, object]:
+        """`get_config` 값을 반환한다."""
         field_assignments = _current_field_assignments()
         if not field_assignments and page._current_preview_context is not None:
             field_assignments = {
@@ -1116,6 +1163,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
         }
 
     def _column_label(column_name: str, source_options) -> str:
+        """`column_label` 관련 처리를 수행한다."""
         if column_name == "file_name":
             return "파일"
         if column_name == "parse_target":
@@ -1126,6 +1174,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
         return source_lookup.get(column_name, column_name)
 
     def _mode_options(candidate) -> list[tuple[str, str]]:
+        """`mode_options` 관련 처리를 수행한다."""
         options: list[tuple[str, str]] = []
         if bool(candidate.allows_file_source):
             options.append(("소스 값", ROOT_ASSIGNMENT_MODE_FILE_SOURCE))
@@ -1137,6 +1186,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
         return options
 
     def _populate_value_combo(value_combo, candidate, preview_context, mode_key: str, selected_value: str) -> None:
+        """`populate_value_combo` 관련 처리를 수행한다."""
         value_combo.blockSignals(True)
         value_combo.clear()
         value_combo.setEditable(False)
@@ -1164,6 +1214,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
         value_combo.blockSignals(False)
 
     def _bind_editable_combo_commit(combo, callback) -> None:
+        """`bind_editable_combo_commit` 관련 처리를 수행한다."""
         line_edit = combo.lineEdit()
         if line_edit is None:
             return
@@ -1173,12 +1224,14 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
         line_edit.editingFinished.connect(callback)
 
     def _sync_row_enabled_state(enabled_widget, mode_combo, value_combo, *, candidate) -> None:
+        """`sync_row_enabled_state` 상태를 동기화한다."""
         row_enabled = bool(enabled_widget.isChecked()) and bool(candidate.supported)
         has_mode_choice = mode_combo.count() > 0 and str(mode_combo.itemData(0) or "").strip() != ""
         mode_combo.setEnabled(row_enabled and has_mode_choice)
         value_combo.setEnabled(row_enabled and has_mode_choice)
 
     def _refresh_preview() -> None:
+        """`refresh_preview` 표시를 새로 고친다."""
         if not page._loaded or page._refreshing:
             return
         page._refreshing = True
@@ -1189,6 +1242,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
             page._refreshing = False
 
     def load_context(preview_context) -> None:
+        """`load_context` 데이터를 불러온다."""
         page._current_preview_context = preview_context
         page._loaded = False
 
@@ -1294,6 +1348,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
             )
 
             def _on_enabled_toggled(_checked, *, checkbox=enabled_widget, mode_widget=mode_combo, value_widget=value_combo, row_candidate=candidate):
+                """`on_enabled_toggled` 이벤트를 처리한다."""
                 _sync_row_enabled_state(
                     checkbox,
                     mode_widget,
@@ -1303,6 +1358,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
                 _refresh_preview()
 
             def _on_mode_changed(_index, *, mode_widget=mode_combo, value_widget=value_combo, row_candidate=candidate):
+                """`on_mode_changed` 이벤트를 처리한다."""
                 _populate_value_combo(
                     value_widget,
                     row_candidate,
@@ -1314,6 +1370,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
                 _refresh_preview()
 
             def _on_value_changed(_text, *, value_widget=value_combo):
+                """`on_value_changed` 이벤트를 처리한다."""
                 if bool(value_widget.isEditable()):
                     return
                 _refresh_preview()
@@ -1351,6 +1408,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
 
 
 def create_placeholder_page(title_text: str, description: str):
+    """`create_placeholder_page` 화면을 구성한다."""
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]

@@ -49,6 +49,7 @@ class PreviewData:
 
 
 def gui_display_text(value: Any) -> str:
+    """`gui_display_text` 관련 처리를 수행한다."""
     if value is None:
         return ""
     if isinstance(value, float) and pd.isna(value):
@@ -70,6 +71,7 @@ DEFAULT_OFFLINE_TRACKER_NAME = "Offline Tracker"
 
 
 def _normalize_offline_id(value: Any, default_value: int) -> int:
+    """`normalize_offline_id` 값을 정규화한다."""
     try:
         normalized = int(value)
     except Exception:
@@ -78,6 +80,7 @@ def _normalize_offline_id(value: Any, default_value: int) -> int:
 
 
 def _load_json_snapshot(path_value: Any, *, label: str) -> Any:
+    """`load_json_snapshot` 관련 처리를 수행한다."""
     path_text = str(path_value or "").strip()
     if not path_text:
         raise ValueError(f"{label} 경로가 비어 있습니다.")
@@ -104,6 +107,7 @@ class OfflineGuiClient:
         project_id: int = DEFAULT_OFFLINE_PROJECT_ID,
         tracker_id: int = DEFAULT_OFFLINE_TRACKER_ID,
     ) -> None:
+        """필요한 의존성과 상태를 초기화한다."""
         self.schema = dict(schema or {})
         self.schema_path = str(schema_path)
         self.tracker_configuration = tracker_configuration
@@ -118,6 +122,7 @@ class OfflineGuiClient:
 
     @classmethod
     def from_settings(cls, settings) -> "OfflineGuiClient":
+        """`from_settings` 관련 처리를 수행한다."""
         schema_path = str(getattr(settings, "offline_schema_path", "") or "").strip()
         schema = _load_json_snapshot(schema_path, label="테스트 schema")
         tracker_configuration = None
@@ -144,53 +149,66 @@ class OfflineGuiClient:
         )
 
     def get_projects(self) -> list[dict[str, Any]]:
+        """`get_projects` 값을 반환한다."""
         return [{"id": self.project_id, "name": self.project_name}]
 
     def get_trackers(self, project_id: int) -> list[dict[str, Any]]:
+        """`get_trackers` 값을 반환한다."""
         del project_id
         return [{"id": self.tracker_id, "name": self.tracker_name}]
 
     def get_tracker_schema(self, tracker_id: int) -> dict[str, Any]:
+        """`get_tracker_schema` 값을 반환한다."""
         del tracker_id
         return self.schema
 
     def get_tracker_configuration(self, tracker_id: int) -> Any:
+        """`get_tracker_configuration` 값을 반환한다."""
         del tracker_id
         if self.tracker_configuration is None:
             raise RuntimeError("offline tracker configuration snapshot is not configured")
         return self.tracker_configuration
 
     def create_item(self, tracker_id: int, payload: dict[str, Any], parent_item_id: int | None = None) -> dict[str, Any]:
+        """`create_item` 화면을 구성한다."""
         del tracker_id, payload, parent_item_id
         raise RuntimeError("테스트 모드에서는 실제 업로드를 실행할 수 없습니다. Dry Run만 사용해야 합니다.")
 
     def update_item(self, item_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """`update_item` 상태를 갱신한다."""
         del item_id, payload
         raise RuntimeError("테스트 모드에서는 업데이트를 실행할 수 없습니다. Dry Run만 사용해야 합니다.")
 
     def get_item(self, item_id: int) -> dict[str, Any]:
+        """`get_item` 값을 반환한다."""
         raise RuntimeError(f"offline snapshot does not provide item lookup by id: {item_id}")
 
     def get_user(self, user_id: int):
+        """`get_user` 값을 반환한다."""
         raise RuntimeError(f"offline snapshot does not provide user lookup by id: {user_id}")
 
     def get_user_by_name(self, name: str):
+        """`get_user_by_name` 값을 반환한다."""
         raise RuntimeError(f"offline snapshot does not provide user lookup by name: {name}")
 
     def get_user_groups(self):
+        """`get_user_groups` 값을 반환한다."""
         raise RuntimeError("offline snapshot does not provide user groups")
 
     def get_tracker_field_permissions(self, tracker_id: int, field_id: int):
+        """`get_tracker_field_permissions` 값을 반환한다."""
         raise RuntimeError(
             f"offline snapshot does not provide field permissions: {tracker_id}/{field_id}"
         )
 
     def search_tracker_items_by_name(self, *, tracker_id: int, name: str, **kwargs):
+        """`search_tracker_items_by_name` 관련 처리를 수행한다."""
         del tracker_id, name, kwargs
         raise RuntimeError("offline snapshot does not provide tracker item lookup")
 
 
 def _build_gui_client(settings, client_factory, logger=None):
+    """`build_gui_client` 결과를 구성한다."""
     if bool(getattr(settings, "offline_mode", False)):
         return OfflineGuiClient.from_settings(settings)
     return client_factory(
@@ -207,14 +225,17 @@ class GuiCodebeamerService:
     """GUI 에서 사용하는 최소 Codebeamer 조회 기능을 제공한다."""
 
     def __init__(self, client_factory=CodebeamerClient, logger=None) -> None:
+        """필요한 의존성과 상태를 초기화한다."""
         self.client_factory = client_factory
         self.logger = logger
 
     def _build_client(self, settings):
+        """`build_client` 결과를 구성한다."""
         return _build_gui_client(settings, self.client_factory, self.logger)
 
     @staticmethod
     def _normalize_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """`normalize_items` 값을 정규화한다."""
         normalized: list[dict[str, Any]] = []
         for item in items:
             if not isinstance(item, dict):
@@ -226,10 +247,12 @@ class GuiCodebeamerService:
         return normalized
 
     def test_connection_and_load_projects(self, settings) -> list[dict[str, Any]]:
+        """`test_connection_and_load_projects` 관련 처리를 수행한다."""
         projects = self._build_client(settings).get_projects()
         return self._normalize_items(projects)
 
     def load_trackers(self, settings, project_id: int) -> list[dict[str, Any]]:
+        """`load_trackers` 데이터를 불러온다."""
         trackers = self._build_client(settings).get_trackers(project_id)
         return self._normalize_items(trackers)
 
@@ -238,11 +261,13 @@ class GuiExcelService:
     """GUI 파일 선택 화면에서 사용하는 Excel 메타데이터와 미리보기를 제공한다."""
 
     def __init__(self, logger=None, *, reader_cls=ExcelReader) -> None:
+        """필요한 의존성과 상태를 초기화한다."""
         self.logger = logger
         self.reader_cls = reader_cls
 
     @staticmethod
     def _normalize_headers(values: list[Any]) -> list[str]:
+        """`normalize_headers` 값을 정규화한다."""
         headers: list[str] = []
         for index, value in enumerate(values):
             if value is None:
@@ -253,6 +278,7 @@ class GuiExcelService:
 
     @staticmethod
     def _suggest_summary(headers: list[str]) -> str:
+        """`suggest_summary` 관련 처리를 수행한다."""
         for header in headers:
             if header.lower() == "summary":
                 return header
@@ -271,6 +297,7 @@ class GuiExcelService:
         summary_column: str | None = None,
         max_preview_rows: int = 10,
     ) -> PreviewData:
+        """`load_preview` 데이터를 불러온다."""
         if header_row < 1:
             raise ValueError("header_row 는 1 이상이어야 합니다.")
 
