@@ -726,6 +726,50 @@ class WizardPayloadResolutionTest(unittest.TestCase):
         self.assertEqual(option_check_df.iloc[0]["schema_field"], "Status")
         self.assertEqual(option_check_df.iloc[0]["status"], "OPTION_NOT_FOUND")
 
+    def test_process_option_mapping_skips_update_only_option_validation_for_upsert_create_rows(self) -> None:
+        """upsert에서는 수정 전용 옵션 필드가 생성 행에서 검증되지 않아야 한다."""
+        self.wizard.state.upload_mode = "upsert"
+        self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
+            {
+                "id": 1,
+                "name": "Summary",
+                "type": "TextField",
+                "trackerItemField": "name",
+                "valueModel": "TextFieldValue",
+            },
+            {
+                "id": 2,
+                "name": "Status",
+                "type": "OptionChoiceField",
+                "trackerItemField": "status",
+                "options": [{"id": 11, "name": "Open"}],
+                "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+            },
+        ])
+        self.wizard.state.selected_mapping = {
+            "summary": "Summary",
+            "status": "Status",
+        }
+        self.wizard.state.upload_df = pd.DataFrame([
+            {"_row_id": 1, "upload_name": "REQ-1", "summary": "REQ-1", "status": "Missing"},
+            {"_row_id": 2, "upload_name": "REQ-2", "id": 101, "summary": "REQ-2", "status": "Open"},
+        ])
+
+        _, option_check_df = self.wizard.process_option_mapping(
+            self.wizard.state.selected_mapping,
+            selected_mapping_modes={
+                "status": {"create": False, "update": True},
+            },
+        )
+
+        self.assertNotIn("OPTION_NOT_FOUND", option_check_df["status"].tolist())
+        self.assertEqual(option_check_df["_row_id"].dropna().tolist(), [])
+        converted = self.wizard.state.converted_upload_df
+        self.assertIsNotNone(converted)
+        self.assertEqual(converted.iloc[0]["status"], "Missing")
+        self.assertIsNone(converted.iloc[0]["status__resolved"])
+        self.assertEqual(converted.iloc[1]["status__resolved"]["name"], "Open")
+
     def test_preview_payload_builds_tracker_item_choice_field_from_bracket_text(self) -> None:
         """TrackerItemChoiceField는 입력 문자열에서 item id를 직접 파싱해야 한다."""
         self.wizard.state.schema_df = self.mapper.flatten_schema_fields([

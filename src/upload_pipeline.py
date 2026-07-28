@@ -102,7 +102,9 @@ def prepare_upload_dataframe(
 def run_validation_pipeline(
     wizard: CodebeamerUploadWizard,
     selected_mapping: dict[str, str],
+    selected_mapping_modes: dict[str, dict[str, bool]] | None = None,
     selected_default_values: dict[str, Any] | None = None,
+    selected_default_value_modes: dict[str, dict[str, bool]] | None = None,
     selected_tracker_item_settings: dict[str, dict[str, Any]] | None = None,
     *,
     fetch_existing_items: bool = True,
@@ -111,7 +113,9 @@ def run_validation_pipeline(
     comparison_df = wizard.load_schema_and_compare(selected_mapping)
     selected_option_mapping, option_check_df = wizard.process_option_mapping(
         selected_mapping,
+        selected_mapping_modes=selected_mapping_modes,
         selected_default_values=selected_default_values,
+        selected_default_value_modes=selected_default_value_modes,
         selected_tracker_item_settings=selected_tracker_item_settings,
     )
     payload_df = wizard.build_payloads(

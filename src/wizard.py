@@ -1023,11 +1023,92 @@ class CodebeamerUploadWizard:
 
         return work
 
+    def _option_processing_operation(
+        self,
+        row: pd.Series,
+        *,
+        upload_mode: str,
+        id_column_name: str | None,
+    ) -> str:
+        """옵션 검증 시 현재 행이 생성/수정 중 어느 흐름인지 판단한다."""
+        normalized_mode = self._normalize_upload_mode(upload_mode)
+        if normalized_mode == "update":
+            return "update"
+        if normalized_mode != "upsert":
+            return "create"
+        if not id_column_name or id_column_name not in row.index:
+            return "create"
+
+        try:
+            self._parse_update_item_id(row.get(id_column_name))
+        except ValueError as exc:
+            if str(exc) == "missing":
+                return "create"
+            return "update"
+        return "update"
+
+    def _mask_inapplicable_option_rows(
+        self,
+        upload_df: pd.DataFrame,
+        option_mapping: dict[str, str],
+    ) -> pd.DataFrame:
+        """행별 create/update 범위에 맞지 않는 옵션 값은 검증/lookup에서 제외한다."""
+        if upload_df.empty or not option_mapping:
+            return upload_df.copy()
+
+        work = upload_df.copy()
+        upload_mode = self._normalize_upload_mode(self.state.upload_mode)
+        id_column_name = self._update_item_id_column_name(work) if upload_mode == "upsert" else None
+        row_operations = [
+            self._option_processing_operation(
+                row,
+                upload_mode=upload_mode,
+                id_column_name=id_column_name,
+            )
+            for _, row in work.iterrows()
+        ]
+
+        for df_col in option_mapping.keys():
+            if df_col not in work.columns:
+                continue
+            scope = self.state.selected_mapping_modes.get(str(df_col).strip())
+            inactive_mask = pd.Series(
+                [
+                    not self._scope_applies_to_operation(
+                        scope,
+                        operation,
+                        upload_mode=upload_mode,
+                    )
+                    for operation in row_operations
+                ],
+                index=work.index,
+            )
+            if inactive_mask.any():
+                work.loc[inactive_mask, df_col] = ""
+
+        return work
+
+    @staticmethod
+    def _restore_option_source_columns(
+        processed_df: pd.DataFrame,
+        source_df: pd.DataFrame,
+        option_mapping: dict[str, str],
+    ) -> pd.DataFrame:
+        """검증용으로 마스킹한 원본 옵션 컬럼은 표시와 후속 처리용으로 복원한다."""
+        restored = processed_df.copy()
+        for df_col in option_mapping.keys():
+            if df_col not in restored.columns or df_col not in source_df.columns:
+                continue
+            restored[df_col] = source_df[df_col].tolist()
+        return restored
+
     def process_option_mapping(
         self,
         selected_mapping: dict[str, str],
         selected_option_mapping: dict[str, str] | None = None,
+        selected_mapping_modes: dict[str, dict[str, bool]] | None = None,
         selected_default_values: dict[str, Any] | None = None,
+        selected_default_value_modes: dict[str, dict[str, bool]] | None = None,
         selected_tracker_item_settings: dict[str, dict[str, Any]] | None = None,
     ) -> tuple[dict[str, str], pd.DataFrame]:
         """옵션/참조형 필드를 찾아 lookup과 검증을 한 번에 수행한다."""
@@ -1038,13 +1119,38 @@ class CodebeamerUploadWizard:
 
         option_fields = self.mapper.get_option_field_candidates(self.state.schema_df)
         self.state.option_candidates_df = option_fields
+        upload_mode = self._normalize_upload_mode(self.state.upload_mode)
+        normalized_mapping_modes = {
+            str(df_column).strip(): self._normalize_operation_scope(
+                (selected_mapping_modes or {}).get(str(df_column).strip()),
+                upload_mode=upload_mode,
+            )
+            for df_column in selected_mapping.keys()
+            if str(df_column).strip()
+        }
+        self.state.selected_mapping_modes = normalized_mapping_modes
+
+        effective_selected_mapping = {
+            excel_col: schema_field
+            for excel_col, schema_field in selected_mapping.items()
+            if self._scope_applies_to_upload_mode(
+                normalized_mapping_modes.get(str(excel_col).strip()),
+                upload_mode,
+            )
+        }
 
         if selected_option_mapping is None:
             selected_option_mapping = {}
             option_field_names = set(option_fields["field_name"].dropna().astype(str))
-            for excel_col, schema_field in selected_mapping.items():
+            for excel_col, schema_field in effective_selected_mapping.items():
                 if schema_field in option_field_names:
                     selected_option_mapping[excel_col] = schema_field
+        else:
+            selected_option_mapping = {
+                excel_col: schema_field
+                for excel_col, schema_field in selected_option_mapping.items()
+                if excel_col in effective_selected_mapping
+            }
 
         normalized_default_values: dict[str, Any] = {}
         for schema_field, raw_value in (selected_default_values or {}).items():
@@ -1053,6 +1159,22 @@ class CodebeamerUploadWizard:
             normalized_default_values[str(schema_field).strip()] = raw_value
 
         self.state.selected_default_values = normalized_default_values
+        normalized_default_value_modes = {
+            schema_field: self._normalize_operation_scope(
+                (selected_default_value_modes or {}).get(schema_field),
+                upload_mode=upload_mode,
+            )
+            for schema_field in normalized_default_values.keys()
+        }
+        self.state.selected_default_value_modes = normalized_default_value_modes
+        effective_default_values = {
+            schema_field: raw_value
+            for schema_field, raw_value in normalized_default_values.items()
+            if self._scope_applies_to_upload_mode(
+                normalized_default_value_modes.get(schema_field),
+                upload_mode,
+            )
+        }
         if selected_tracker_item_settings is not None:
             self.state.selected_tracker_item_settings = {
                 str(schema_field).strip(): dict(setting)
@@ -1061,7 +1183,7 @@ class CodebeamerUploadWizard:
             }
         self.state.resolved_default_values = {}
 
-        if not selected_option_mapping and not normalized_default_values:
+        if not selected_option_mapping and not effective_default_values:
             self.state.selected_option_mapping = {}
             self.state.option_maps = {}
             self.state.option_check_df = pd.DataFrame()
@@ -1074,7 +1196,10 @@ class CodebeamerUploadWizard:
         option_maps = self._decorate_tracker_item_option_maps(option_maps)
         self.state.option_maps = option_maps
 
-        lookup_ready_df = self.state.upload_df.copy()
+        lookup_ready_df = self._mask_inapplicable_option_rows(
+            self.state.upload_df,
+            selected_option_mapping,
+        )
         if selected_option_mapping:
             lookup_ready_df = self._resolve_user_reference_fields(
                 upload_df=lookup_ready_df,
@@ -1101,7 +1226,7 @@ class CodebeamerUploadWizard:
             )
 
         default_value_check_df, resolved_default_values = self._resolve_default_field_values(
-            normalized_default_values,
+            effective_default_values,
             option_maps,
         )
         self.state.resolved_default_values = resolved_default_values
@@ -1118,10 +1243,15 @@ class CodebeamerUploadWizard:
         )
 
         if selected_option_mapping:
-            self.state.converted_upload_df = self.mapper.apply_option_resolution(
+            converted_upload_df = self.mapper.apply_option_resolution(
                 upload_df=lookup_ready_df,
                 option_mapping=selected_option_mapping,
                 option_maps=option_maps,
+            )
+            self.state.converted_upload_df = self._restore_option_source_columns(
+                converted_upload_df,
+                self.state.upload_df,
+                selected_option_mapping,
             )
         else:
             self.state.converted_upload_df = lookup_ready_df.copy()
@@ -1806,6 +1936,7 @@ class CodebeamerUploadWizard:
         item: TrackerItemBase,
         *,
         row_id: int,
+        operation: str,
         applied_schema_fields: set[str],
     ) -> None:
         """행 값이 없는 필드에 공통 기본값을 보충한다."""
@@ -1816,6 +1947,12 @@ class CodebeamerUploadWizard:
             if schema_field in applied_schema_fields:
                 continue
             if not self._has_configured_value(raw_value):
+                continue
+            if not self._scope_applies_to_operation(
+                self.state.selected_default_value_modes.get(schema_field),
+                operation,
+                upload_mode=self.state.upload_mode,
+            ):
                 continue
 
             matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
@@ -1921,6 +2058,7 @@ class CodebeamerUploadWizard:
         row_id: int,
         *,
         default_name: str | None,
+        operation: str,
     ) -> TrackerItemBase:
         """행 값과 기본값을 반영한 TrackerItem 조립 결과를 만든다."""
         item = TrackerItemBase()
@@ -1929,6 +2067,12 @@ class CodebeamerUploadWizard:
         applied_schema_fields: set[str] = set()
 
         for df_col, schema_field in self.state.selected_mapping.items():
+            if not self._scope_applies_to_operation(
+                self.state.selected_mapping_modes.get(df_col),
+                operation,
+                upload_mode=self.state.upload_mode,
+            ):
+                continue
             matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
             if matched.empty:
                 continue
@@ -1970,6 +2114,7 @@ class CodebeamerUploadWizard:
         self._apply_default_field_values(
             item,
             row_id=row_id,
+            operation=operation,
             applied_schema_fields=applied_schema_fields,
         )
         table_custom_fields = self._build_table_custom_fields(row)
@@ -1979,12 +2124,13 @@ class CodebeamerUploadWizard:
 
         return item
 
-    def _build_row_payload(self, row: pd.Series, row_id: int) -> dict[str, Any]:
+    def _build_row_payload(self, row: pd.Series, row_id: int, *, operation: str = "create") -> dict[str, Any]:
         """단일 생성 행에서 순수 item payload만 계산한다."""
         item = self._build_row_item(
             row,
             row_id,
             default_name=str(row.get("upload_name", "")),
+            operation=operation,
         )
         payload = item.create_new_item_payload()
         return self._serialize_payload_value(payload)
@@ -2002,6 +2148,60 @@ class CodebeamerUploadWizard:
             if normalized.casefold() == "id" and exact_match is None:
                 exact_match = normalized
         return exact_match
+
+    @staticmethod
+    def _normalize_upload_mode(upload_mode: Any) -> str:
+        """내부 업로드 모드 이름을 create/update/upsert 중 하나로 정규화한다."""
+        normalized = str(upload_mode or "create").strip().lower()
+        if normalized in {"update", "upsert"}:
+            return normalized
+        return "create"
+
+    @classmethod
+    def _upload_mode_supports_update(cls, upload_mode: Any) -> bool:
+        """현재 모드가 기존 item ID 기반 수정 경로를 포함하는지 돌려준다."""
+        return cls._normalize_upload_mode(upload_mode) in {"update", "upsert"}
+
+    @classmethod
+    def _default_operation_scope(cls, upload_mode: Any) -> dict[str, bool]:
+        normalized_mode = cls._normalize_upload_mode(upload_mode)
+        if normalized_mode == "update":
+            return {"create": False, "update": True}
+        if normalized_mode == "upsert":
+            return {"create": True, "update": True}
+        return {"create": True, "update": False}
+
+    @classmethod
+    def _normalize_operation_scope(
+        cls,
+        raw_scope: Any,
+        *,
+        upload_mode: Any,
+    ) -> dict[str, bool]:
+        default_scope = cls._default_operation_scope(upload_mode)
+        scope_payload = dict(raw_scope) if isinstance(raw_scope, dict) else {}
+        return {
+            "create": bool(scope_payload.get("create", default_scope["create"])),
+            "update": bool(scope_payload.get("update", default_scope["update"])),
+        }
+
+    @classmethod
+    def _scope_applies_to_operation(cls, raw_scope: Any, operation: str, *, upload_mode: Any) -> bool:
+        scope = cls._normalize_operation_scope(raw_scope, upload_mode=upload_mode)
+        normalized_operation = str(operation or "create").strip().lower()
+        if normalized_operation == "update":
+            return bool(scope.get("update", False))
+        return bool(scope.get("create", False))
+
+    @classmethod
+    def _scope_applies_to_upload_mode(cls, raw_scope: Any, upload_mode: Any) -> bool:
+        normalized_mode = cls._normalize_upload_mode(upload_mode)
+        scope = cls._normalize_operation_scope(raw_scope, upload_mode=upload_mode)
+        if normalized_mode == "update":
+            return bool(scope.get("update", False))
+        if normalized_mode == "upsert":
+            return bool(scope.get("create", False) or scope.get("update", False))
+        return bool(scope.get("create", False))
 
     @staticmethod
     def _parse_update_item_id(raw_value: Any) -> int:
@@ -2035,6 +2235,144 @@ class CodebeamerUploadWizard:
             if normalized > 0:
                 return normalized
         raise ValueError(f"invalid: {raw_value!r}")
+
+    def _resolve_update_target_item_id(
+        self,
+        row: pd.Series,
+        row_id: int,
+        *,
+        id_column_name: str,
+        duplicate_item_ids: set[int],
+        allow_missing: bool,
+    ) -> int | None:
+        """행의 id 셀을 update 대상 item id로 해석한다."""
+        if id_column_name not in row.index:
+            if allow_missing:
+                return None
+            self._raise_payload_error(
+                "UPDATE_ITEM_ID_COLUMN_MISSING",
+                schema_field="id",
+                df_col="id",
+                row_id=row_id,
+                detail="update mode requires an Excel 'id' column",
+            )
+
+        raw_item_id = row.get(id_column_name)
+        try:
+            target_item_id = self._parse_update_item_id(raw_item_id)
+        except ValueError as exc:
+            if str(exc) == "missing":
+                if allow_missing:
+                    return None
+                self._raise_payload_error(
+                    "UPDATE_ITEM_ID_MISSING",
+                    schema_field="id",
+                    df_col=id_column_name,
+                    row_id=row_id,
+                    detail="update target item id is empty",
+                )
+            self._raise_payload_error(
+                "UPDATE_ITEM_ID_INVALID",
+                schema_field="id",
+                df_col=id_column_name,
+                row_id=row_id,
+                detail=f"value={raw_item_id!r}",
+            )
+
+        if target_item_id in duplicate_item_ids:
+            self._raise_payload_error(
+                "UPDATE_ITEM_ID_DUPLICATE",
+                schema_field="id",
+                df_col=id_column_name,
+                row_id=row_id,
+                detail=f"item_id={target_item_id}",
+            )
+
+        return int(target_item_id)
+
+    @staticmethod
+    def _filter_payload_rows(
+        payload_df: pd.DataFrame,
+        include_row_ids: set[int] | None,
+    ) -> pd.DataFrame:
+        """지정된 row_id 집합에 해당하는 payload 행만 남긴다."""
+        if include_row_ids is None:
+            return payload_df.copy()
+        normalized_row_ids = {int(row_id) for row_id in include_row_ids}
+        if not normalized_row_ids:
+            return payload_df.iloc[0:0].copy()
+        return payload_df[payload_df["_row_id"].isin(sorted(normalized_row_ids))].copy()
+
+    @staticmethod
+    def _concat_result_frames(frames: list[pd.DataFrame | None]) -> pd.DataFrame:
+        """업로드 결과 프레임을 비어 있지 않은 것만 합친다."""
+        valid_frames = [frame for frame in frames if isinstance(frame, pd.DataFrame) and not frame.empty]
+        if not valid_frames:
+            return pd.DataFrame()
+        return pd.concat(valid_frames, ignore_index=True)
+
+    @staticmethod
+    def _result_count(frame: pd.DataFrame | None) -> int:
+        """결과 DataFrame 행 수를 안전하게 계산한다."""
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            return 0
+        return int(len(frame))
+
+    def _apply_upsert_hierarchy_validation(
+        self,
+        payload_df: pd.DataFrame,
+        source_df: pd.DataFrame,
+    ) -> None:
+        """계층형 upsert에서 신규 조상 아래의 update 행을 차단한다."""
+        if payload_df.empty or source_df.empty:
+            return
+
+        parent_by_row_id: dict[int, int | None] = {}
+        for _, source_row in source_df.iterrows():
+            row_id = int(source_row["_row_id"])
+            parent_row_id = source_row.get("parent_row_id")
+            normalized_parent_id: int | None = None
+            if parent_row_id is not None and not pd.isna(parent_row_id):
+                try:
+                    normalized_parent_id = int(parent_row_id)
+                except Exception:
+                    normalized_parent_id = None
+            parent_by_row_id[row_id] = normalized_parent_id
+
+        row_index_by_row_id = {
+            int(row_id): index
+            for index, row_id in enumerate(payload_df["_row_id"].tolist())
+        }
+
+        def _has_new_ancestor(row_id: int) -> bool:
+            current_parent_id = parent_by_row_id.get(int(row_id))
+            while current_parent_id is not None:
+                parent_index = row_index_by_row_id.get(int(current_parent_id))
+                if parent_index is None:
+                    current_parent_id = parent_by_row_id.get(int(current_parent_id))
+                    continue
+                parent_row = payload_df.iloc[parent_index]
+                if str(parent_row.get("_operation") or "").strip().lower() == "create":
+                    return True
+                current_parent_id = parent_by_row_id.get(int(current_parent_id))
+            return False
+
+        for index, row in payload_df.iterrows():
+            if row.get("payload_status") != PayloadStatus.READY.value:
+                continue
+            if str(row.get("_operation") or "").strip().lower() != "update":
+                continue
+
+            row_id = int(row["_row_id"])
+            if not _has_new_ancestor(row_id):
+                continue
+
+            payload_df.at[index, "payload_json"] = None
+            payload_df.at[index, "payload_status"] = PayloadStatus.FAILED.value
+            payload_df.at[index, "payload_error"] = (
+                f"[UPSERT_UPDATE_WITH_NEW_ANCESTOR] field='id' df_column='id' _row_id={row_id} "
+                "upsert update rows cannot have newly inserted ancestor rows in the same hierarchy"
+            )
 
     def _existing_item(self, item_id: int, *, row_id: int, df_col: str) -> dict[str, Any]:
         """기존 item payload를 조회하고 캐시에 보관한다."""
@@ -2121,50 +2459,23 @@ class CodebeamerUploadWizard:
         id_column_name: str,
         duplicate_item_ids: set[int],
         fetch_existing_item: bool,
+        target_item_id: int | None = None,
     ) -> tuple[int, dict[str, Any]]:
         """단일 업데이트 행의 대상 id와 PUT payload를 계산한다."""
-        if id_column_name not in row.index:
-            self._raise_payload_error(
-                "UPDATE_ITEM_ID_COLUMN_MISSING",
-                schema_field="id",
-                df_col="id",
-                row_id=row_id,
-                detail="update mode requires an Excel 'id' column",
-            )
-
-        raw_item_id = row.get(id_column_name)
-        try:
-            target_item_id = self._parse_update_item_id(raw_item_id)
-        except ValueError as exc:
-            if str(exc) == "missing":
-                self._raise_payload_error(
-                    "UPDATE_ITEM_ID_MISSING",
-                    schema_field="id",
-                    df_col=id_column_name,
-                    row_id=row_id,
-                    detail="update target item id is empty",
-                )
-            self._raise_payload_error(
-                "UPDATE_ITEM_ID_INVALID",
-                schema_field="id",
-                df_col=id_column_name,
-                row_id=row_id,
-                detail=f"value={raw_item_id!r}",
-            )
-
-        if target_item_id in duplicate_item_ids:
-            self._raise_payload_error(
-                "UPDATE_ITEM_ID_DUPLICATE",
-                schema_field="id",
-                df_col=id_column_name,
-                row_id=row_id,
-                detail=f"item_id={target_item_id}",
+        if target_item_id is None:
+            target_item_id = self._resolve_update_target_item_id(
+                row,
+                row_id,
+                id_column_name=id_column_name,
+                duplicate_item_ids=duplicate_item_ids,
+                allow_missing=False,
             )
 
         partial_item = self._build_row_item(
             row,
             row_id,
             default_name=None,
+            operation="update",
         )
         partial_payload = self._serialize_payload_value(partial_item.to_dict())
 
@@ -2217,6 +2528,7 @@ class CodebeamerUploadWizard:
         self._apply_default_field_values(
             item,
             row_id=-1,
+            operation="create",
             applied_schema_fields=applied_schema_fields,
         )
         return self._serialize_payload_value(item.create_new_item_payload())
@@ -2279,11 +2591,11 @@ class CodebeamerUploadWizard:
 
         source_df = self._payload_source_df()
         payload_rows: list[dict[str, Any]] = []
-        upload_mode = str(self.state.upload_mode or "create").strip().lower() or "create"
+        upload_mode = self._normalize_upload_mode(self.state.upload_mode)
         id_column_name = None
         duplicate_item_ids: set[int] = set()
 
-        if upload_mode == "update":
+        if self._upload_mode_supports_update(upload_mode):
             id_column_name = self._update_item_id_column_name(source_df)
             if id_column_name is not None:
                 item_id_counts: dict[int, int] = {}
@@ -2301,10 +2613,12 @@ class CodebeamerUploadWizard:
 
         for _, row in source_df.iterrows():
             row_id = int(row["_row_id"])
+            operation = "create"
+            target_item_id = None
             try:
                 payload_json = None
-                target_item_id = None
                 if upload_mode == "update":
+                    operation = "update"
                     if id_column_name is None:
                         self._raise_payload_error(
                             "UPDATE_ITEM_ID_COLUMN_MISSING",
@@ -2320,6 +2634,29 @@ class CodebeamerUploadWizard:
                         duplicate_item_ids=duplicate_item_ids,
                         fetch_existing_item=fetch_existing_items,
                     )
+                elif upload_mode == "upsert":
+                    if id_column_name is None:
+                        payload_json = self._build_row_payload(row, row_id)
+                    else:
+                        target_item_id = self._resolve_update_target_item_id(
+                            row,
+                            row_id,
+                            id_column_name=id_column_name,
+                            duplicate_item_ids=duplicate_item_ids,
+                            allow_missing=True,
+                        )
+                        if target_item_id is None:
+                            payload_json = self._build_row_payload(row, row_id)
+                        else:
+                            operation = "update"
+                            target_item_id, payload_json = self._build_update_row_payload(
+                                row,
+                                row_id,
+                                id_column_name=id_column_name,
+                                duplicate_item_ids=duplicate_item_ids,
+                                fetch_existing_item=fetch_existing_items,
+                                target_item_id=target_item_id,
+                            )
                 else:
                     payload_json = self._build_row_payload(row, row_id)
                 payload_rows.append({
@@ -2327,6 +2664,7 @@ class CodebeamerUploadWizard:
                     "parent_row_id": row.get("parent_row_id"),
                     "upload_name": row.get("upload_name"),
                     "_target_item_id": target_item_id,
+                    "_operation": operation,
                     "payload_json": payload_json,
                     "payload_status": PayloadStatus.READY.value,
                     "payload_error": None,
@@ -2336,13 +2674,16 @@ class CodebeamerUploadWizard:
                     "_row_id": row_id,
                     "parent_row_id": row.get("parent_row_id"),
                     "upload_name": row.get("upload_name"),
-                    "_target_item_id": None,
+                    "_target_item_id": target_item_id,
+                    "_operation": operation,
                     "payload_json": None,
                     "payload_status": PayloadStatus.FAILED.value,
                     "payload_error": str(exc),
                 })
 
         self.state.payload_df = pd.DataFrame(payload_rows)
+        if upload_mode == "upsert" and not self.state.payload_df.empty:
+            self._apply_upsert_hierarchy_validation(self.state.payload_df, source_df)
         return self.state.payload_df
 
     def preview_payload(self, row_id: int) -> dict:
@@ -2363,9 +2704,12 @@ class CodebeamerUploadWizard:
         dry_run: bool = False,
         continue_on_error: bool = True,
         *,
+        phase_name: str = "insert",
         root_item_name: str | None = None,
         root_field_values: dict[str, Any] | None = None,
         top_level_parent_specs: list[dict[str, Any]] | None = None,
+        include_row_ids: set[int] | None = None,
+        existing_row_item_ids: dict[int, Any] | None = None,
         event_callback=None,
         cancel_requested=None,
         pause_requested=None,
@@ -2379,8 +2723,9 @@ class CodebeamerUploadWizard:
             top_level_parent_specs
         )
         payload_df = self.build_payloads()
-        ready_df = payload_df[payload_df["payload_status"] == PayloadStatus.READY.value].copy()
-        payload_failed_df = payload_df[payload_df["payload_status"] == PayloadStatus.FAILED.value].copy()
+        filtered_payload_df = self._filter_payload_rows(payload_df, include_row_ids)
+        ready_df = filtered_payload_df[filtered_payload_df["payload_status"] == PayloadStatus.READY.value].copy()
+        payload_failed_df = filtered_payload_df[filtered_payload_df["payload_status"] == PayloadStatus.FAILED.value].copy()
         should_create_root_item = (
             root_item_name is not None
             and not ready_df.empty
@@ -2388,7 +2733,10 @@ class CodebeamerUploadWizard:
         )
 
         pending = set(ready_df["_row_id"].tolist())
-        created_map = {}
+        created_map = {
+            int(row_id): item_id
+            for row_id, item_id in dict(existing_row_item_ids or {}).items()
+        }
         root_item_id = None
         top_level_parent_item_ids: dict[int, Any] = {}
         success_logs = []
@@ -2397,6 +2745,7 @@ class CodebeamerUploadWizard:
                 "_row_id": int(row["_row_id"]),
                 "parent_row_id": row.get("parent_row_id"),
                 "upload_name": row.get("upload_name"),
+                "phase": phase_name,
                 "error": row.get("payload_error"),
                 "status": PayloadStatus.FAILED.value,
             }
@@ -2418,6 +2767,7 @@ class CodebeamerUploadWizard:
             if unresolved_df.empty:
                 return unresolved_df
             unresolved_df["status"] = UploadStatus.UNRESOLVED_PARENT.value
+            unresolved_df["phase"] = phase_name
             unresolved_df["error"] = unresolved_df.apply(
                 lambda row: self._unresolved_parent_error(
                     row.get("parent_row_id"),
@@ -2440,6 +2790,7 @@ class CodebeamerUploadWizard:
             if event_callback is not None:
                 event_callback({
                     "type": "row_started",
+                    "phase": phase_name,
                     "row_id": None,
                     "upload_name": root_item_name,
                 })
@@ -2460,6 +2811,7 @@ class CodebeamerUploadWizard:
                     "_row_id": None,
                     "parent_row_id": None,
                     "upload_name": root_item_name,
+                    "phase": phase_name,
                     "created_item_id": root_item_id,
                     "status": UploadStatus.SUCCESS.value,
                 })
@@ -2468,6 +2820,7 @@ class CodebeamerUploadWizard:
                 if event_callback is not None:
                     event_callback({
                         "type": "row_success",
+                        "phase": phase_name,
                         "row_id": None,
                         "upload_name": root_item_name,
                         "item_id": root_item_id,
@@ -2482,6 +2835,7 @@ class CodebeamerUploadWizard:
                     "_row_id": None,
                     "parent_row_id": None,
                     "upload_name": root_item_name,
+                    "phase": phase_name,
                     "error_status_code": error_status_code,
                     "error_response_json": error_response_json,
                     "error": error_message,
@@ -2490,6 +2844,7 @@ class CodebeamerUploadWizard:
                 if event_callback is not None:
                     event_callback({
                         "type": "row_failed",
+                        "phase": phase_name,
                         "row_id": None,
                         "upload_name": root_item_name,
                         "message": error_message,
@@ -2526,6 +2881,7 @@ class CodebeamerUploadWizard:
                     if event_callback is not None:
                         event_callback({
                             "type": "row_started",
+                            "phase": phase_name,
                             "row_id": None,
                             "upload_name": parent_name,
                         })
@@ -2552,6 +2908,7 @@ class CodebeamerUploadWizard:
                             "_row_id": None,
                             "parent_row_id": None,
                             "upload_name": parent_name,
+                            "phase": phase_name,
                             "created_item_id": parent_item_id,
                             "status": UploadStatus.SUCCESS.value,
                         })
@@ -2560,6 +2917,7 @@ class CodebeamerUploadWizard:
                         if event_callback is not None:
                             event_callback({
                                 "type": "row_success",
+                                "phase": phase_name,
                                 "row_id": None,
                                 "upload_name": parent_name,
                                 "item_id": parent_item_id,
@@ -2575,6 +2933,7 @@ class CodebeamerUploadWizard:
                             "_row_id": None,
                             "parent_row_id": None,
                             "upload_name": parent_name,
+                            "phase": phase_name,
                             "error_status_code": error_status_code,
                             "error_response_json": error_response_json,
                             "error": error_message,
@@ -2583,6 +2942,7 @@ class CodebeamerUploadWizard:
                         if event_callback is not None:
                             event_callback({
                                 "type": "row_failed",
+                                "phase": phase_name,
                                 "row_id": None,
                                 "upload_name": parent_name,
                                 "message": error_message,
@@ -2606,12 +2966,14 @@ class CodebeamerUploadWizard:
                         "_row_id": None,
                         "parent_row_id": None,
                         "upload_name": parent_spec["name"],
+                        "phase": phase_name,
                         "error": error_message,
                         "status": UploadStatus.UNRESOLVED_PARENT.value,
                     })
                     if event_callback is not None:
                         event_callback({
                             "type": "row_failed",
+                            "phase": phase_name,
                             "row_id": None,
                             "upload_name": parent_spec["name"],
                             "message": error_message,
@@ -2653,6 +3015,7 @@ class CodebeamerUploadWizard:
                     if event_callback is not None:
                         event_callback({
                             "type": "row_started",
+                            "phase": phase_name,
                             "row_id": row_id,
                             "upload_name": row["upload_name"],
                         })
@@ -2674,6 +3037,7 @@ class CodebeamerUploadWizard:
                         "_row_id": row_id,
                         "parent_row_id": row["parent_row_id"],
                         "upload_name": row["upload_name"],
+                        "phase": phase_name,
                         "created_item_id": result["id"],
                         "status": UploadStatus.SUCCESS.value,
                     })
@@ -2682,6 +3046,7 @@ class CodebeamerUploadWizard:
                     if event_callback is not None:
                         event_callback({
                             "type": "row_success",
+                            "phase": phase_name,
                             "row_id": row_id,
                             "upload_name": row["upload_name"],
                             "item_id": result["id"],
@@ -2701,6 +3066,7 @@ class CodebeamerUploadWizard:
                         "_row_id": row_id,
                         "parent_row_id": row["parent_row_id"],
                         "upload_name": row["upload_name"],
+                        "phase": phase_name,
                         "error_status_code": error_status_code,
                         "error_response_json": error_response_json,
                         "error": error_message,
@@ -2709,6 +3075,7 @@ class CodebeamerUploadWizard:
                     if event_callback is not None:
                         event_callback({
                             "type": "row_failed",
+                            "phase": phase_name,
                             "row_id": row_id,
                             "upload_name": row["upload_name"],
                             "message": error_message,
@@ -2734,6 +3101,9 @@ class CodebeamerUploadWizard:
         dry_run: bool = False,
         continue_on_error: bool = True,
         *,
+        phase_name: str = "update",
+        include_row_ids: set[int] | None = None,
+        fetch_existing_items: bool = True,
         event_callback=None,
         cancel_requested=None,
         pause_requested=None,
@@ -2742,9 +3112,13 @@ class CodebeamerUploadWizard:
         if self.state.tracker_id is None:
             raise ValueError("tracker_id is not set.")
 
-        payload_df = self.build_payloads(force=True, fetch_existing_items=True)
-        ready_df = payload_df[payload_df["payload_status"] == PayloadStatus.READY.value].copy()
-        payload_failed_df = payload_df[payload_df["payload_status"] == PayloadStatus.FAILED.value].copy()
+        payload_df = self.build_payloads(
+            force=bool(fetch_existing_items),
+            fetch_existing_items=fetch_existing_items,
+        )
+        filtered_payload_df = self._filter_payload_rows(payload_df, include_row_ids)
+        ready_df = filtered_payload_df[filtered_payload_df["payload_status"] == PayloadStatus.READY.value].copy()
+        payload_failed_df = filtered_payload_df[filtered_payload_df["payload_status"] == PayloadStatus.FAILED.value].copy()
 
         success_logs: list[dict[str, Any]] = []
         failed_logs = [
@@ -2752,6 +3126,7 @@ class CodebeamerUploadWizard:
                 "_row_id": int(row["_row_id"]),
                 "parent_row_id": row.get("parent_row_id"),
                 "upload_name": row.get("upload_name"),
+                "phase": phase_name,
                 "target_item_id": row.get("_target_item_id"),
                 "error": row.get("payload_error"),
                 "status": PayloadStatus.FAILED.value,
@@ -2785,6 +3160,7 @@ class CodebeamerUploadWizard:
                 if event_callback is not None:
                     event_callback({
                         "type": "row_started",
+                        "phase": phase_name,
                         "row_id": row_id,
                         "upload_name": row["upload_name"],
                         "item_id": target_item_id,
@@ -2802,6 +3178,7 @@ class CodebeamerUploadWizard:
                     "_row_id": row_id,
                     "parent_row_id": row.get("parent_row_id"),
                     "upload_name": row.get("upload_name"),
+                    "phase": phase_name,
                     "target_item_id": target_item_id,
                     "updated_item_id": result.get("id", target_item_id),
                     "status": UploadStatus.SUCCESS.value,
@@ -2810,6 +3187,7 @@ class CodebeamerUploadWizard:
                 if event_callback is not None:
                     event_callback({
                         "type": "row_success",
+                        "phase": phase_name,
                         "row_id": row_id,
                         "upload_name": row["upload_name"],
                         "item_id": target_item_id,
@@ -2824,6 +3202,7 @@ class CodebeamerUploadWizard:
                     "_row_id": row_id,
                     "parent_row_id": row.get("parent_row_id"),
                     "upload_name": row.get("upload_name"),
+                    "phase": phase_name,
                     "target_item_id": target_item_id,
                     "error_status_code": error_status_code,
                     "error_response_json": error_response_json,
@@ -2833,6 +3212,7 @@ class CodebeamerUploadWizard:
                 if event_callback is not None:
                     event_callback({
                         "type": "row_failed",
+                        "phase": phase_name,
                         "row_id": row_id,
                         "upload_name": row["upload_name"],
                         "item_id": target_item_id,
@@ -2844,16 +3224,168 @@ class CodebeamerUploadWizard:
                 if not continue_on_error:
                     unresolved_df = ready_df.iloc[current_index + 1 :].copy()
                     if not unresolved_df.empty:
+                        unresolved_df["phase"] = phase_name
                         unresolved_df["status"] = UploadStatus.UNRESOLVED_PARENT.value
                         unresolved_df["error"] = "이전 업데이트 실패로 실행이 중단되었습니다."
                     return _finalize(unresolved_df)
 
         unresolved_df = ready_df[ready_df["_row_id"].isin(pending_row_ids)].copy()
         if not unresolved_df.empty:
+            unresolved_df["phase"] = phase_name
             unresolved_df["status"] = UploadStatus.UNRESOLVED_PARENT.value
             unresolved_df["error"] = "업데이트가 완료되지 않았습니다."
 
         return _finalize(unresolved_df)
+
+    def upsert_items(
+        self,
+        dry_run: bool = False,
+        continue_on_error: bool = True,
+        *,
+        top_level_parent_specs: list[dict[str, Any]] | None = None,
+        event_callback=None,
+        cancel_requested=None,
+        pause_requested=None,
+    ) -> dict[str, Any]:
+        """id가 있는 행은 update, 없는 행은 create로 나누어 한 번에 실행한다."""
+        if self.state.tracker_id is None:
+            raise ValueError("tracker_id is not set.")
+
+        payload_df = self.build_payloads(force=True, fetch_existing_items=False)
+        if payload_df.empty:
+            self.state.upload_result = {
+                "root_item_id": None,
+                "created_map": {},
+                "success_df": pd.DataFrame(),
+                "failed_df": pd.DataFrame(),
+                "unresolved_df": pd.DataFrame(),
+                "phase_results": {},
+            }
+            return self.state.upload_result
+
+        operation_series = payload_df.get("_operation", pd.Series(dtype=object)).fillna("").astype(str)
+        create_row_ids = {
+            int(row_id)
+            for row_id in payload_df[operation_series.eq("create")]["_row_id"].tolist()
+        }
+        update_row_ids = {
+            int(row_id)
+            for row_id in payload_df[operation_series.eq("update")]["_row_id"].tolist()
+        }
+        seeded_existing_row_item_ids = {
+            int(row["_row_id"]): int(row["_target_item_id"])
+            for _, row in payload_df[
+                payload_df["payload_status"].eq(PayloadStatus.READY.value)
+                & operation_series.eq("update")
+                & payload_df["_target_item_id"].notna()
+            ].iterrows()
+        }
+
+        root_item_id = None
+        created_map = dict(seeded_existing_row_item_ids)
+        success_frames: list[pd.DataFrame | None] = []
+        failed_frames: list[pd.DataFrame | None] = []
+        unresolved_frames: list[pd.DataFrame | None] = []
+        phase_results: dict[str, dict[str, int]] = {}
+
+        def _emit_phase_started(phase: str, total: int) -> None:
+            if event_callback is None:
+                return
+            event_callback({
+                "type": "phase_started",
+                "phase": phase,
+                "total": int(max(total, 0)),
+            })
+
+        def _emit_phase_finished(phase: str, result: dict[str, Any]) -> None:
+            success_count = self._result_count(result.get("success_df"))
+            failed_count = self._result_count(result.get("failed_df"))
+            unresolved_count = self._result_count(result.get("unresolved_df"))
+            phase_results[phase] = {
+                "total": success_count + failed_count + unresolved_count,
+                "success": success_count,
+                "failed": failed_count,
+                "unresolved": unresolved_count,
+            }
+            if event_callback is None:
+                return
+            event_callback({
+                "type": "phase_finished",
+                "phase": phase,
+                "total": phase_results[phase]["total"],
+                "success": success_count,
+                "failed": failed_count,
+                "unresolved": unresolved_count,
+            })
+
+        create_result: dict[str, Any] | None = None
+        if create_row_ids:
+            _emit_phase_started("insert", len(create_row_ids))
+            create_result = self.upload(
+                dry_run=dry_run,
+                continue_on_error=continue_on_error,
+                phase_name="insert",
+                top_level_parent_specs=top_level_parent_specs,
+                include_row_ids=create_row_ids,
+                existing_row_item_ids=seeded_existing_row_item_ids,
+                event_callback=event_callback,
+                cancel_requested=cancel_requested,
+                pause_requested=pause_requested,
+            )
+            _emit_phase_finished("insert", create_result)
+            root_item_id = create_result.get("root_item_id")
+            created_map.update(create_result.get("created_map", {}))
+            success_frames.append(create_result.get("success_df"))
+            failed_frames.append(create_result.get("failed_df"))
+            unresolved_frames.append(create_result.get("unresolved_df"))
+
+            create_failed_df = create_result.get("failed_df")
+            create_unresolved_df = create_result.get("unresolved_df")
+            if (
+                not continue_on_error
+                and isinstance(create_failed_df, pd.DataFrame)
+                and not create_failed_df.empty
+            ) or (
+                not continue_on_error
+                and isinstance(create_unresolved_df, pd.DataFrame)
+                and not create_unresolved_df.empty
+            ):
+                self.state.upload_result = {
+                    "root_item_id": root_item_id,
+                    "created_map": created_map,
+                    "success_df": self._concat_result_frames(success_frames),
+                    "failed_df": self._concat_result_frames(failed_frames),
+                    "unresolved_df": self._concat_result_frames(unresolved_frames),
+                    "phase_results": phase_results,
+                }
+                return self.state.upload_result
+
+        if update_row_ids:
+            _emit_phase_started("update", len(update_row_ids))
+            update_result = self.update_items(
+                dry_run=dry_run,
+                continue_on_error=continue_on_error,
+                phase_name="update",
+                include_row_ids=update_row_ids,
+                fetch_existing_items=True,
+                event_callback=event_callback,
+                cancel_requested=cancel_requested,
+                pause_requested=pause_requested,
+            )
+            _emit_phase_finished("update", update_result)
+            success_frames.append(update_result.get("success_df"))
+            failed_frames.append(update_result.get("failed_df"))
+            unresolved_frames.append(update_result.get("unresolved_df"))
+
+        self.state.upload_result = {
+            "root_item_id": root_item_id,
+            "created_map": created_map,
+            "success_df": self._concat_result_frames(success_frames),
+            "failed_df": self._concat_result_frames(failed_frames),
+            "unresolved_df": self._concat_result_frames(unresolved_frames),
+            "phase_results": phase_results,
+        }
+        return self.state.upload_result
 
     def save_state(self, output_dir: str) -> None:
         """현재 세션의 DataFrame, schema, 결과를 파일로 저장한다."""
@@ -2893,9 +3425,21 @@ class CodebeamerUploadWizard:
             with open(out / "option_maps.json", "w", encoding="utf-8") as file:
                 json.dump(self.state.option_maps, file, ensure_ascii=False, indent=2)
 
+        if self.state.selected_mapping:
+            with open(out / "selected_mapping.json", "w", encoding="utf-8") as file:
+                json.dump(self.state.selected_mapping, file, ensure_ascii=False, indent=2)
+
+        if self.state.selected_mapping_modes:
+            with open(out / "selected_mapping_modes.json", "w", encoding="utf-8") as file:
+                json.dump(self.state.selected_mapping_modes, file, ensure_ascii=False, indent=2)
+
         if self.state.selected_default_values:
             with open(out / "selected_default_values.json", "w", encoding="utf-8") as file:
                 json.dump(self.state.selected_default_values, file, ensure_ascii=False, indent=2)
+
+        if self.state.selected_default_value_modes:
+            with open(out / "selected_default_value_modes.json", "w", encoding="utf-8") as file:
+                json.dump(self.state.selected_default_value_modes, file, ensure_ascii=False, indent=2)
 
         if self.state.resolved_default_values:
             with open(out / "resolved_default_values.json", "w", encoding="utf-8") as file:

@@ -12,6 +12,8 @@ from .services import ROOT_ITEM_MODE_GROUP_BY_COLUMN
 from .services import gui_display_text
 from .settings_store import GUI_UPLOAD_MODE_CREATE
 from .settings_store import GUI_UPLOAD_MODE_UPDATE
+from .settings_store import GUI_UPLOAD_MODE_UPSERT
+from .settings_store import gui_upload_mode_supports_update
 from .settings_store import normalize_gui_upload_mode
 from .styles import GUI_THEME_CHOICES
 from .styles import normalize_gui_theme_name
@@ -34,6 +36,23 @@ USER_HIDDEN_TABLE_COLUMNS = {
     "source_file_path",
 }
 
+PAGE_MARGIN = 4
+PAGE_SPACING = 6
+SECTION_SPACING = 6
+CARD_HORIZONTAL_MARGIN = 8
+CARD_VERTICAL_MARGIN = 6
+FORM_HORIZONTAL_SPACING = 8
+FORM_VERTICAL_SPACING = 4
+DEFAULT_FORM_FIELD_MIN_WIDTH = 210
+FORM_PANEL_MAX_WIDTH = 760
+WIDE_FORM_PANEL_MAX_WIDTH = 860
+PREVIEW_TABLE_MIN_HEIGHT = 180
+PRIMARY_TABLE_MIN_HEIGHT = 240
+SECONDARY_TABLE_MIN_HEIGHT = 220
+DETAIL_PANE_MIN_HEIGHT = 110
+UPLOAD_DETAIL_TABS_MIN_HEIGHT = 220
+ACTIVITY_TABLE_MIN_HEIGHT = 160
+
 
 def _is_hidden_user_table_column(column_name: object) -> bool:
     text = str(column_name or "").strip()
@@ -54,8 +73,9 @@ def _settings_mode_toggle_text(is_offline: bool) -> str:
 
 def _settings_upload_mode_choices() -> list[tuple[str, str]]:
     return [
-        (GUI_UPLOAD_MODE_CREATE, "업로드"),
-        (GUI_UPLOAD_MODE_UPDATE, "업데이트"),
+        (GUI_UPLOAD_MODE_CREATE, "신규 생성"),
+        (GUI_UPLOAD_MODE_UPDATE, "기존 수정"),
+        (GUI_UPLOAD_MODE_UPSERT, "혼합 처리"),
     ]
 
 
@@ -180,6 +200,7 @@ def _build_tracker_item_regex_preview_text(
 def _require_qt():
     try:
         from PySide6.QtCore import Qt
+        from PySide6.QtGui import QColor
         from PySide6.QtWidgets import QCheckBox
         from PySide6.QtWidgets import QComboBox
         from PySide6.QtWidgets import QDoubleSpinBox
@@ -206,6 +227,7 @@ def _require_qt():
 
     return {
         "Qt": Qt,
+        "QColor": QColor,
         "QCheckBox": QCheckBox,
         "QComboBox": QComboBox,
         "QDoubleSpinBox": QDoubleSpinBox,
@@ -248,6 +270,30 @@ def _configure_table_columns(table, minimum_widths: list[int]) -> None:
         header.setSectionResizeMode(table.columnCount() - 1, QHeaderView.Stretch)
 
 
+def _configure_page_layout(layout, *, top_align: bool = False) -> None:
+    qt = _require_qt()
+    Qt = qt["Qt"]
+    layout.setContentsMargins(PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN)
+    layout.setSpacing(PAGE_SPACING)
+    if top_align:
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+
+def _configure_card_layout(layout) -> None:
+    layout.setContentsMargins(
+        CARD_HORIZONTAL_MARGIN,
+        CARD_VERTICAL_MARGIN,
+        CARD_HORIZONTAL_MARGIN,
+        CARD_VERTICAL_MARGIN,
+    )
+    layout.setSpacing(SECTION_SPACING)
+
+
+def _configure_inline_layout(layout, *, spacing: int = SECTION_SPACING) -> None:
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(spacing)
+
+
 def _configure_form_layout(form) -> None:
     qt = _require_qt()
     Qt = qt["Qt"]
@@ -260,17 +306,37 @@ def _configure_form_layout(form) -> None:
     form.setLabelAlignment(
         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
     )
-    form.setHorizontalSpacing(14)
-    form.setVerticalSpacing(8)
+    form.setHorizontalSpacing(FORM_HORIZONTAL_SPACING)
+    form.setVerticalSpacing(FORM_VERTICAL_SPACING)
 
 
-def _configure_form_field(widget, *, minimum_width: int = 240) -> None:
+def _configure_form_field(widget, *, minimum_width: int = DEFAULT_FORM_FIELD_MIN_WIDTH) -> None:
     qt = _require_qt()
     QSizePolicy = qt["QSizePolicy"]
     widget.setMinimumWidth(minimum_width)
     widget.setSizePolicy(
         QSizePolicy.Policy.Expanding,
         QSizePolicy.Policy.Fixed,
+    )
+
+
+def _configure_constrained_panel(widget, *, max_width: int = FORM_PANEL_MAX_WIDTH) -> None:
+    qt = _require_qt()
+    QSizePolicy = qt["QSizePolicy"]
+    widget.setMaximumWidth(max_width)
+    widget.setSizePolicy(
+        QSizePolicy.Policy.Preferred,
+        QSizePolicy.Policy.Maximum,
+    )
+
+
+def _configure_data_table(widget, *, minimum_height: int) -> None:
+    qt = _require_qt()
+    QSizePolicy = qt["QSizePolicy"]
+    widget.setMinimumHeight(minimum_height)
+    widget.setSizePolicy(
+        QSizePolicy.Policy.Expanding,
+        QSizePolicy.Policy.Expanding,
     )
 
 
@@ -300,9 +366,7 @@ def create_settings_page(
     page = QWidget()
     page.setObjectName("settings_page")
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
-    layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+    _configure_page_layout(layout, top_align=True)
 
     form = QFormLayout()
     _configure_form_layout(form)
@@ -322,8 +386,7 @@ def create_settings_page(
     mode_badge.hide()
     mode_row_widget = QWidget()
     mode_row = QHBoxLayout(mode_row_widget)
-    mode_row.setContentsMargins(0, 0, 0, 0)
-    mode_row.setSpacing(8)
+    _configure_inline_layout(mode_row)
     mode_row.addStretch(1)
     mode_row.addWidget(mode_badge, 0, Qt.AlignmentFlag.AlignVCenter)
     mode_row.addWidget(mode_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -364,15 +427,13 @@ def create_settings_page(
 
     offline_schema_row_widget = QWidget()
     offline_schema_row = QHBoxLayout(offline_schema_row_widget)
-    offline_schema_row.setContentsMargins(0, 0, 0, 0)
-    offline_schema_row.setSpacing(8)
+    _configure_inline_layout(offline_schema_row)
     offline_schema_row.addWidget(offline_schema_path, 1)
     offline_schema_row.addWidget(offline_schema_button)
 
     offline_config_row_widget = QWidget()
     offline_config_row = QHBoxLayout(offline_config_row_widget)
-    offline_config_row.setContentsMargins(0, 0, 0, 0)
-    offline_config_row.setSpacing(8)
+    _configure_inline_layout(offline_config_row)
     offline_config_row.addWidget(offline_config_path, 1)
     offline_config_row.addWidget(offline_config_button)
 
@@ -383,13 +444,16 @@ def create_settings_page(
     form.addRow("작업 모드", upload_mode_combo)
     form.addRow("테마", theme_combo)
     form.addRow("", mode_row_widget)
-    layout.addLayout(form)
+    form_container = QWidget()
+    form_container.setLayout(form)
+    _configure_constrained_panel(form_container, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
+    layout.addWidget(form_container)
 
     offline_card = QFrame()
     offline_card.setObjectName("advanced_card")
+    _configure_constrained_panel(offline_card, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     offline_layout = QVBoxLayout(offline_card)
-    offline_layout.setContentsMargins(14, 12, 14, 12)
-    offline_layout.setSpacing(8)
+    _configure_card_layout(offline_layout)
     offline_description = QLabel("테스트 모드에서만 사용하는 snapshot 경로입니다.")
     offline_description.setObjectName("section_label")
     offline_layout.addWidget(offline_description)
@@ -414,9 +478,9 @@ def create_settings_page(
     advanced_card = QFrame()
     advanced_card.setObjectName("advanced_card")
     advanced_card.hide()
+    _configure_constrained_panel(advanced_card, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     advanced_layout = QVBoxLayout(advanced_card)
-    advanced_layout.setContentsMargins(14, 12, 14, 12)
-    advanced_layout.setSpacing(8)
+    _configure_card_layout(advanced_layout)
 
     advanced_description = QLabel("자주 바꾸지 않는 업로드 옵션입니다.")
     advanced_description.setObjectName("section_label")
@@ -448,10 +512,12 @@ def create_settings_page(
     status_label = QLabel("")
     status_label.setObjectName("status_label")
     status_label.hide()
+    _configure_constrained_panel(status_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(status_label)
     page._current_settings = initial_settings
 
     buttons = QHBoxLayout()
+    _configure_inline_layout(buttons)
     load_button = QPushButton("불러오기")
     save_button = QPushButton("저장")
     next_button = QPushButton("다음")
@@ -460,7 +526,7 @@ def create_settings_page(
         bool(
             getattr(initial_settings, "offline_mode", False)
             and str(getattr(initial_settings, "offline_schema_path", "") or "").strip()
-            and normalize_gui_upload_mode(getattr(initial_settings, "upload_mode", None)) != GUI_UPLOAD_MODE_UPDATE
+            and not gui_upload_mode_supports_update(getattr(initial_settings, "upload_mode", None))
         ) or bool(initial_settings.base_url and initial_settings.username and initial_settings.password)
     )
     buttons.addWidget(load_button)
@@ -471,10 +537,10 @@ def create_settings_page(
     layout.addStretch(1)
 
     def _update_next_button_state() -> None:
-        is_update_mode = normalize_gui_upload_mode(upload_mode_combo.currentData()) == GUI_UPLOAD_MODE_UPDATE
+        blocks_offline_mode = gui_upload_mode_supports_update(upload_mode_combo.currentData())
         if mode_toggle.isChecked():
             next_button.setEnabled(
-                bool(Path(offline_schema_path.text().strip()).is_file()) and not is_update_mode
+                bool(Path(offline_schema_path.text().strip()).is_file()) and not blocks_offline_mode
             )
             return
         next_button.setEnabled(bool(base_url.text().strip() and username.text().strip() and password.text()))
@@ -604,8 +670,8 @@ def create_settings_page(
     def _go_next():
         current = _collect_settings()
         if current.offline_mode:
-            if current.upload_mode == GUI_UPLOAD_MODE_UPDATE:
-                _set_status("테스트 모드에서는 업데이트 작업을 지원하지 않습니다.")
+            if gui_upload_mode_supports_update(current.upload_mode):
+                _set_status("테스트 모드에서는 기존 수정 또는 혼합 처리를 지원하지 않습니다.")
                 return
             if not current.offline_schema_path:
                 _set_status("테스트 모드에서는 schema snapshot JSON 경로가 필요합니다.")
@@ -682,9 +748,7 @@ def create_project_selection_page(
     page.selected_tracker_id = initial_settings.default_tracker_id
 
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
-    layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+    _configure_page_layout(layout, top_align=True)
 
     form = QFormLayout()
     _configure_form_layout(form)
@@ -696,13 +760,18 @@ def create_project_selection_page(
     _configure_form_field(tracker_combo)
     form.addRow("프로젝트", project_combo)
     form.addRow("트래커", tracker_combo)
-    layout.addLayout(form)
+    form_container = QWidget()
+    form_container.setLayout(form)
+    _configure_constrained_panel(form_container)
+    layout.addWidget(form_container)
 
     status_label = QLabel(_project_selection_status_text(bool(getattr(initial_settings, "offline_mode", False))))
     status_label.setObjectName("status_label")
+    _configure_constrained_panel(status_label)
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
+    _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
     refresh_button = QPushButton(
         _project_selection_refresh_button_text(bool(getattr(initial_settings, "offline_mode", False)))
@@ -899,8 +968,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     page = QWidget()
     page.setObjectName("file_selection_page")
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
+    _configure_page_layout(layout)
 
     form = QFormLayout()
     _configure_form_layout(form)
@@ -909,8 +977,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     file_button = QPushButton("파일 선택")
     file_row_widget = QWidget()
     file_row = QHBoxLayout(file_row_widget)
-    file_row.setContentsMargins(0, 0, 0, 0)
-    file_row.setSpacing(8)
+    _configure_inline_layout(file_row)
     file_row.addWidget(file_path)
     file_row.addWidget(file_button)
     preview_file = QComboBox()
@@ -936,7 +1003,10 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     form.addRow("시트", sheet_name)
     form.addRow("헤더 행", header_row)
     form.addRow("Summary 컬럼", summary_column)
-    layout.addLayout(form)
+    form_container = QWidget()
+    form_container.setLayout(form)
+    _configure_constrained_panel(form_container, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
+    layout.addWidget(form_container)
 
     preview_label = QLabel("미리보기")
     preview_label.setObjectName("section_label")
@@ -948,14 +1018,18 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     preview_table.setItem(0, 1, QTableWidgetItem("담당자"))
     preview_table.setItem(1, 0, QTableWidgetItem("REQ-001"))
     preview_table.setItem(1, 1, QTableWidgetItem("홍길동"))
+    _configure_data_table(preview_table, minimum_height=PREVIEW_TABLE_MIN_HEIGHT)
     _configure_table_columns(preview_table, [180, 180, 160, 160])
-    layout.addWidget(preview_table)
+    page.preview_table = preview_table
+    layout.addWidget(preview_table, 1)
 
     status_label = QLabel("Excel 파일과 옵션을 정한 뒤 '데이터 불러오기'를 누르세요.")
     status_label.setObjectName("status_label")
+    _configure_constrained_panel(status_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
+    _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
     load_button = QPushButton("데이터 불러오기")
     next_button = QPushButton("다음")
@@ -1212,8 +1286,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
+    _configure_page_layout(layout)
 
     description_label = QLabel(
         (
@@ -1225,6 +1298,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
     )
     description_label.setWordWrap(True)
     description_label.setObjectName("section_label")
+    _configure_constrained_panel(description_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(description_label)
 
     enable_root_item = QCheckBox("파일별 최상단 폴더 생성")
@@ -1238,6 +1312,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
     structure_summary_label = QLabel("")
     structure_summary_label.setWordWrap(True)
     structure_summary_label.setObjectName("status_label")
+    _configure_constrained_panel(structure_summary_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(structure_summary_label)
 
     form = QFormLayout()
@@ -1257,6 +1332,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
     form.addRow("정규식", regex_pattern)
     form_container = QWidget()
     form_container.setLayout(form)
+    _configure_constrained_panel(form_container, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(form_container)
 
     preview_label = QLabel("상단 데이터 소스 미리보기" if is_structure_page else "상단 폴더 미리보기")
@@ -1265,7 +1341,9 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
 
     preview_table = QTableWidget(0, 0)
     preview_table.setAlternatingRowColors(True)
-    layout.addWidget(preview_table)
+    _configure_data_table(preview_table, minimum_height=PREVIEW_TABLE_MIN_HEIGHT)
+    page.preview_table = preview_table
+    layout.addWidget(preview_table, 1)
 
     field_label = QLabel("상단 폴더 필드 매핑")
     field_label.setObjectName("section_label")
@@ -1274,14 +1352,18 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
     field_table = QTableWidget(0, 6)
     field_table.setHorizontalHeaderLabels(["사용", "Codebeamer 필드", "타입", "필수", "값 방식", "값"])
     field_table.setAlternatingRowColors(True)
+    _configure_data_table(field_table, minimum_height=PRIMARY_TABLE_MIN_HEIGHT)
     _configure_table_columns(field_table, [80, 240, 180, 90, 160, 240])
-    layout.addWidget(field_table)
+    page.field_table = field_table
+    layout.addWidget(field_table, 2)
 
     status_label = QLabel("")
     status_label.setObjectName("status_label")
+    _configure_constrained_panel(status_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
+    _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
     next_button = QPushButton("다음")
     next_button.setObjectName("primary_button")
@@ -1618,15 +1700,15 @@ def create_placeholder_page(title_text: str, description: str):
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
+    _configure_page_layout(layout)
 
     body = QPlainTextEdit()
     body.setReadOnly(True)
     body.setPlainText(description)
-    layout.addWidget(body)
+    layout.addWidget(body, 1)
 
     buttons = QHBoxLayout()
+    _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
     next_button = QPushButton("다음")
     buttons.addWidget(previous_button)
@@ -1642,6 +1724,7 @@ def create_placeholder_page(title_text: str, description: str):
 def create_mapping_page(on_validate_requested, on_error=None):
     qt = _require_qt()
     Qt = qt["Qt"]
+    QColor = qt["QColor"]
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
     QHBoxLayout = qt["QHBoxLayout"]
@@ -1652,56 +1735,85 @@ def create_mapping_page(on_validate_requested, on_error=None):
     QCheckBox = qt["QCheckBox"]
     QComboBox = qt["QComboBox"]
     QLineEdit = qt["QLineEdit"]
+    QTabWidget = qt["QTabWidget"]
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
+    _configure_page_layout(layout)
     info_label = QLabel("")
     info_label.setObjectName("section_label")
+    _configure_constrained_panel(info_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(info_label)
 
-    table = QTableWidget(0, 6)
-    table.setHorizontalHeaderLabels(["사용", "Excel 컬럼", "Codebeamer 필드", "타입", "다중값", "지원 여부"])
-    table.setAlternatingRowColors(True)
-    _configure_table_columns(table, [90, 240, 240, 180, 100, 100])
-    layout.addWidget(table)
+    mapping_tabs = QTabWidget()
+    mapping_tabs.setDocumentMode(True)
 
+    mapping_tab = QWidget()
+    mapping_tab_layout = QVBoxLayout(mapping_tab)
+    _configure_inline_layout(mapping_tab_layout)
+    table = QTableWidget(0, 7)
+    table.setHorizontalHeaderLabels(["생성", "수정", "Excel 컬럼", "Codebeamer 필드", "타입", "다중값", "지원 여부"])
+    table.setAlternatingRowColors(True)
+    _configure_data_table(table, minimum_height=PRIMARY_TABLE_MIN_HEIGHT)
+    _configure_table_columns(table, [70, 70, 220, 220, 170, 90, 90])
+    page.mapping_table = table
+    mapping_tab_layout.addWidget(table, 1)
+    mapping_tabs.addTab(mapping_tab, "컬럼 매핑")
+
+    defaults_tab = QWidget()
+    defaults_tab_layout = QVBoxLayout(defaults_tab)
+    _configure_inline_layout(defaults_tab_layout)
     default_label = QLabel("공통 기본값")
     default_label.setObjectName("section_label")
-    layout.addWidget(default_label)
+    defaults_tab_layout.addWidget(default_label)
 
     default_help_label = QLabel("행 값이 있으면 행 값이 우선하고, 비어 있으면 아래 기본값을 사용합니다.")
     default_help_label.setWordWrap(True)
-    layout.addWidget(default_help_label)
+    _configure_constrained_panel(default_help_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
+    defaults_tab_layout.addWidget(default_help_label)
 
-    default_table = QTableWidget(0, 4)
-    default_table.setHorizontalHeaderLabels(["Codebeamer 필드", "타입", "기본값", "필수"])
+    default_table = QTableWidget(0, 5)
+    default_table.setHorizontalHeaderLabels(["적용", "Codebeamer 필드", "타입", "기본값", "필수"])
     default_table.setAlternatingRowColors(True)
-    _configure_table_columns(default_table, [240, 180, 240, 90])
-    layout.addWidget(default_table)
+    _configure_data_table(default_table, minimum_height=SECONDARY_TABLE_MIN_HEIGHT)
+    _configure_table_columns(default_table, [70, 220, 170, 240, 90])
+    page.default_table = default_table
+    defaults_tab_layout.addWidget(default_table, 1)
+    mapping_tabs.addTab(defaults_tab, "기본값")
 
+    tracker_tab = QWidget()
+    tracker_tab_layout = QVBoxLayout(tracker_tab)
+    _configure_inline_layout(tracker_tab_layout)
     tracker_item_label = QLabel("Tracker Item 처리")
     tracker_item_label.setObjectName("section_label")
-    layout.addWidget(tracker_item_label)
+    tracker_tab_layout.addWidget(tracker_item_label)
 
     tracker_item_help_label = QLabel(
         "TrackerItemChoiceField 는 정규식으로 ID를 추출하거나, configuration 기반 source tracker에서 이름으로 미리 조회할 수 있습니다."
     )
     tracker_item_help_label.setWordWrap(True)
-    layout.addWidget(tracker_item_help_label)
+    _configure_constrained_panel(tracker_item_help_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
+    tracker_tab_layout.addWidget(tracker_item_help_label)
 
     tracker_item_table = QTableWidget(0, 7)
     tracker_item_table.setHorizontalHeaderLabels(["Excel 컬럼", "Codebeamer 필드", "방식", "다건 결과", "정규식", "예시", "조회 소스"])
     tracker_item_table.setAlternatingRowColors(True)
+    _configure_data_table(tracker_item_table, minimum_height=SECONDARY_TABLE_MIN_HEIGHT)
     _configure_table_columns(tracker_item_table, [220, 220, 140, 160, 260, 320, 200])
-    layout.addWidget(tracker_item_table)
+    page.tracker_item_table = tracker_item_table
+    tracker_tab_layout.addWidget(tracker_item_table, 1)
+    mapping_tabs.addTab(tracker_tab, "Tracker Item")
+
+    page.mapping_tabs = mapping_tabs
+    layout.addWidget(mapping_tabs, 1)
 
     status_label = QLabel("")
     status_label.setObjectName("status_label")
+    _configure_constrained_panel(status_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
+    _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
     validate_button = QPushButton("검증 실행")
     next_button = QPushButton("다음")
@@ -1908,18 +2020,131 @@ def create_mapping_page(on_validate_requested, on_error=None):
         line_edit.setProperty("_codex_default_dirty_bound", True)
         line_edit.editingFinished.connect(_mark_dirty)
 
+    def _blend_colors(base_color, accent_color, ratio: float):
+        clamped_ratio = max(0.0, min(float(ratio), 1.0))
+        inverse_ratio = 1.0 - clamped_ratio
+        return QColor(
+            int(base_color.red() * inverse_ratio + accent_color.red() * clamped_ratio),
+            int(base_color.green() * inverse_ratio + accent_color.green() * clamped_ratio),
+            int(base_color.blue() * inverse_ratio + accent_color.blue() * clamped_ratio),
+        )
+
+    def _mapping_row_palette() -> dict[str, object]:
+        palette = table.palette()
+        base_color = palette.base().color()
+        alternate_color = palette.alternateBase().color()
+        highlight_color = palette.highlight().color()
+        return {
+            "row_background": _blend_colors(alternate_color, highlight_color, 0.18),
+            "combo_background": _blend_colors(base_color, highlight_color, 0.20),
+            "combo_border": _blend_colors(base_color, highlight_color, 0.48),
+        }
+
+    def _mapping_row_active(row_index: int) -> bool:
+        create_widget = table.cellWidget(row_index, 0)
+        update_widget = table.cellWidget(row_index, 1)
+        combo = table.cellWidget(row_index, 3)
+        if create_widget is None or update_widget is None or combo is None:
+            return False
+        if not (bool(create_widget.isChecked()) or bool(update_widget.isChecked())):
+            return False
+        return bool(combo.currentText().strip())
+
+    def _apply_mapping_row_highlight(row_index: int) -> None:
+        colors = _mapping_row_palette()
+        is_active = _mapping_row_active(row_index)
+        for column_index in (2, 4, 5, 6):
+            item = table.item(row_index, column_index)
+            if item is None:
+                continue
+            item.setData(
+                Qt.ItemDataRole.BackgroundRole,
+                colors["row_background"] if is_active else None,
+            )
+        column_item = table.item(row_index, 2)
+        if column_item is not None:
+            font = column_item.font()
+            font.setBold(is_active)
+            column_item.setFont(font)
+
+        combo = table.cellWidget(row_index, 3)
+        if combo is not None:
+            if is_active:
+                combo.setStyleSheet(
+                    "QComboBox {"
+                    f" background-color: {colors['combo_background'].name()};"
+                    f" border: 1px solid {colors['combo_border'].name()};"
+                    " font-weight: 600;"
+                    "}"
+                )
+            else:
+                combo.setStyleSheet("")
+
+    def _refresh_mapping_row(row_index: int) -> None:
+        _apply_mapping_row_highlight(row_index)
+        _populate_tracker_item_table(get_selected_mapping(), get_selected_tracker_item_settings())
+        _mark_dirty()
+
+    def _default_scope_for_upload_mode(upload_mode: str) -> dict[str, bool]:
+        normalized_mode = normalize_gui_upload_mode(upload_mode)
+        if normalized_mode == GUI_UPLOAD_MODE_UPDATE:
+            return {"create": False, "update": True}
+        if normalized_mode == GUI_UPLOAD_MODE_UPSERT:
+            return {"create": True, "update": True}
+        return {"create": True, "update": False}
+
+    def _normalize_scope(raw_scope: dict[str, object] | None, *, upload_mode: str) -> dict[str, bool]:
+        default_scope = _default_scope_for_upload_mode(upload_mode)
+        payload = dict(raw_scope or {})
+        return {
+            "create": bool(payload.get("create", default_scope["create"])),
+            "update": bool(payload.get("update", default_scope["update"])),
+        }
+
+    def _normalize_default_value_scope(raw_scope: dict[str, object] | None, *, upload_mode: str) -> dict[str, bool]:
+        payload = dict(raw_scope or {})
+        if not payload:
+            return _default_scope_for_upload_mode(upload_mode)
+        normalized_scope = _normalize_scope(payload, upload_mode=upload_mode)
+        normalized_mode = normalize_gui_upload_mode(upload_mode)
+        if normalized_mode == GUI_UPLOAD_MODE_UPDATE:
+            return _default_scope_for_upload_mode(upload_mode) if bool(normalized_scope.get("update", False)) else {"create": False, "update": False}
+        if normalized_mode == GUI_UPLOAD_MODE_UPSERT:
+            return _default_scope_for_upload_mode(upload_mode) if bool(normalized_scope.get("create", False) or normalized_scope.get("update", False)) else {"create": False, "update": False}
+        return _default_scope_for_upload_mode(upload_mode) if bool(normalized_scope.get("create", False)) else {"create": False, "update": False}
+
+    def _sync_mapping_scope_checkboxes(create_widget, update_widget, *, upload_mode: str) -> None:
+        normalized_mode = normalize_gui_upload_mode(upload_mode)
+        if normalized_mode == GUI_UPLOAD_MODE_CREATE:
+            create_widget.setEnabled(True)
+            update_widget.setChecked(False)
+            update_widget.setEnabled(False)
+            return
+        if normalized_mode == GUI_UPLOAD_MODE_UPDATE:
+            create_widget.setChecked(False)
+            create_widget.setEnabled(False)
+            update_widget.setEnabled(True)
+            return
+        create_widget.setEnabled(True)
+        update_widget.setEnabled(True)
+
     def load_context(
+        upload_mode: str,
         upload_columns: list[str],
         schema_df,
         selected_mapping: dict[str, str],
+        selected_mapping_modes: dict[str, dict[str, bool]],
         default_value_candidates: list,
         selected_default_values: dict[str, str],
+        selected_default_value_modes: dict[str, dict[str, bool]],
         selected_tracker_item_settings: dict[str, dict[str, object]],
         upload_preview_df=None,
     ) -> None:
         page._mapping_validated = False
         next_button.setEnabled(False)
         page._upload_preview_df = upload_preview_df
+        normalized_upload_mode = normalize_gui_upload_mode(upload_mode)
+        page._mapping_upload_mode = normalized_upload_mode
         page._schema_rows_by_name = {
             str(row["field_name"]): row
             for _, row in schema_df.iterrows()
@@ -1928,63 +2153,90 @@ def create_mapping_page(on_validate_requested, on_error=None):
         schema_field_names = sorted(page._schema_rows_by_name.keys())
         table.setRowCount(len(upload_columns))
         for row_index, column_name in enumerate(upload_columns):
-            enabled_widget = QCheckBox()
-            enabled_widget.setChecked(column_name in selected_mapping)
-            table.setCellWidget(row_index, 0, enabled_widget)
-            table.setItem(row_index, 1, QTableWidgetItem(column_name))
+            create_widget = QCheckBox()
+            update_widget = QCheckBox()
+            is_selected = column_name in selected_mapping
+            scope = (
+                _normalize_scope(
+                    (selected_mapping_modes or {}).get(column_name),
+                    upload_mode=normalized_upload_mode,
+                )
+                if is_selected
+                else {"create": False, "update": False}
+            )
+            create_widget.setChecked(bool(scope.get("create", False)))
+            update_widget.setChecked(bool(scope.get("update", False)))
+            _sync_mapping_scope_checkboxes(
+                create_widget,
+                update_widget,
+                upload_mode=normalized_upload_mode,
+            )
+            table.setCellWidget(row_index, 0, create_widget)
+            table.setCellWidget(row_index, 1, update_widget)
+            table.setItem(row_index, 2, QTableWidgetItem(column_name))
 
             combo = QComboBox()
             combo.addItem("")
             combo.addItems(schema_field_names)
             if column_name in selected_mapping and combo.findText(selected_mapping[column_name]) >= 0:
                 combo.setCurrentText(selected_mapping[column_name])
-            table.setCellWidget(row_index, 2, combo)
+            table.setCellWidget(row_index, 3, combo)
 
             schema_field = selected_mapping.get(column_name)
             schema_row = page._schema_rows_by_name.get(schema_field, {})
-            table.setItem(row_index, 3, QTableWidgetItem(str(schema_row.get("field_type") or "")))
-            table.setItem(row_index, 4, QTableWidgetItem(str(bool(schema_row.get("multiple_values", False)))))
-            table.setItem(row_index, 5, QTableWidgetItem("yes" if schema_row.get("is_supported", True) else "no"))
+            table.setItem(row_index, 4, QTableWidgetItem(str(schema_row.get("field_type") or "")))
+            table.setItem(row_index, 5, QTableWidgetItem(str(bool(schema_row.get("multiple_values", False)))))
+            table.setItem(row_index, 6, QTableWidgetItem("yes" if schema_row.get("is_supported", True) else "no"))
 
             def _on_combo_changed(_text, row=row_index):
-                selected_name = table.cellWidget(row, 2).currentText().strip()
+                selected_name = table.cellWidget(row, 3).currentText().strip()
                 schema = page._schema_rows_by_name.get(selected_name, {})
-                table.setItem(row, 3, QTableWidgetItem(str(schema.get("field_type") or "")))
-                table.setItem(row, 4, QTableWidgetItem(str(bool(schema.get("multiple_values", False)))))
-                table.setItem(row, 5, QTableWidgetItem("yes" if schema.get("is_supported", True) else "no"))
-                _populate_tracker_item_table(get_selected_mapping(), get_selected_tracker_item_settings())
-                _mark_dirty()
+                table.setItem(row, 4, QTableWidgetItem(str(schema.get("field_type") or "")))
+                table.setItem(row, 5, QTableWidgetItem(str(bool(schema.get("multiple_values", False)))))
+                table.setItem(row, 6, QTableWidgetItem("yes" if schema.get("is_supported", True) else "no"))
+                _refresh_mapping_row(row)
 
             combo.currentTextChanged.connect(_on_combo_changed)
-            enabled_widget.toggled.connect(
-                lambda _checked: (_populate_tracker_item_table(get_selected_mapping(), get_selected_tracker_item_settings()), _mark_dirty())
-            )
+            create_widget.toggled.connect(lambda _checked, row=row_index: _refresh_mapping_row(row))
+            update_widget.toggled.connect(lambda _checked, row=row_index: _refresh_mapping_row(row))
+            _apply_mapping_row_highlight(row_index)
 
         default_table.setRowCount(len(default_value_candidates))
         for row_index, candidate in enumerate(default_value_candidates):
             schema_field = str(getattr(candidate, "schema_field", ""))
-            default_table.setItem(row_index, 0, QTableWidgetItem(schema_field))
-            default_table.setItem(row_index, 1, QTableWidgetItem(str(getattr(candidate, "field_type", ""))))
+            create_widget = QCheckBox()
+            default_scope = _normalize_default_value_scope(
+                (selected_default_value_modes or {}).get(schema_field),
+                upload_mode=normalized_upload_mode,
+            )
+            create_widget.setChecked(bool(default_scope.get("create", False) or default_scope.get("update", False)))
+            create_widget.setEnabled(True)
+            default_table.setCellWidget(row_index, 0, create_widget)
+            default_table.setItem(row_index, 1, QTableWidgetItem(schema_field))
+            default_table.setItem(row_index, 2, QTableWidgetItem(str(getattr(candidate, "field_type", ""))))
 
             combo = QComboBox()
             selected_default = str(selected_default_values.get(schema_field, "") or "")
             _configure_default_value_widget(combo, candidate, selected_default)
             _bind_default_value_commit(combo)
             combo.currentTextChanged.connect(lambda _text, widget=combo: None if bool(widget.isEditable()) else _mark_dirty())
-            default_table.setCellWidget(row_index, 2, combo)
+            default_table.setCellWidget(row_index, 3, combo)
 
             default_table.setItem(
                 row_index,
-                3,
+                4,
                 QTableWidgetItem("yes" if bool(getattr(candidate, "mandatory", False)) else "no"),
             )
+            create_widget.toggled.connect(lambda _checked: _mark_dirty())
 
-        _configure_table_columns(table, [90, 240, 240, 180, 100, 100])
-        _configure_table_columns(default_table, [240, 180, 240, 90])
-        _populate_tracker_item_table(selected_mapping, selected_tracker_item_settings)
-        info_label.setText(f"매핑 대상 컬럼 {len(upload_columns)}개. id, parent 는 제외됩니다.")
+        _configure_table_columns(table, [70, 70, 220, 220, 170, 90, 90])
+        _configure_table_columns(default_table, [70, 220, 170, 240, 90])
+        _populate_tracker_item_table(get_selected_mapping(), selected_tracker_item_settings)
+        info_label.setText(
+            f"매핑 대상 컬럼 {len(upload_columns)}개. id, parent 는 제외되며 생성/수정 체크를 모두 끄면 해당 컬럼은 무시됩니다."
+        )
         if default_value_candidates:
-            default_help_label.setText("행 값이 있으면 행 값이 우선하고, 비어 있으면 아래 기본값을 사용합니다.")
+            default_help_label.setText("행 값이 있으면 행 값이 우선하고, 비어 있으면 아래 기본값을 현재 처리 모드에 맞게 적용합니다.")
         else:
             default_help_label.setText("선택 가능한 공통 기본값 필드가 없습니다.")
         status_label.setText("")
@@ -1992,26 +2244,51 @@ def create_mapping_page(on_validate_requested, on_error=None):
     def get_selected_mapping() -> dict[str, str]:
         mapping: dict[str, str] = {}
         for row_index in range(table.rowCount()):
-            enabled_widget = table.cellWidget(row_index, 0)
-            combo = table.cellWidget(row_index, 2)
-            if enabled_widget is None or combo is None:
+            create_widget = table.cellWidget(row_index, 0)
+            update_widget = table.cellWidget(row_index, 1)
+            combo = table.cellWidget(row_index, 3)
+            if create_widget is None or update_widget is None or combo is None:
                 continue
-            if not enabled_widget.isChecked():
+            if not (bool(create_widget.isChecked()) or bool(update_widget.isChecked())):
                 continue
             schema_field = combo.currentText().strip()
             if not schema_field:
                 continue
-            column_name_item = table.item(row_index, 1)
+            column_name_item = table.item(row_index, 2)
             if column_name_item is None:
                 continue
             mapping[column_name_item.text()] = schema_field
         return mapping
 
+    def get_selected_mapping_modes() -> dict[str, dict[str, bool]]:
+        mapping_modes: dict[str, dict[str, bool]] = {}
+        for row_index in range(table.rowCount()):
+            create_widget = table.cellWidget(row_index, 0)
+            update_widget = table.cellWidget(row_index, 1)
+            column_name_item = table.item(row_index, 2)
+            combo = table.cellWidget(row_index, 3)
+            if (
+                create_widget is None
+                or update_widget is None
+                or column_name_item is None
+                or combo is None
+            ):
+                continue
+            if not combo.currentText().strip():
+                continue
+            if not (bool(create_widget.isChecked()) or bool(update_widget.isChecked())):
+                continue
+            mapping_modes[column_name_item.text()] = {
+                "create": bool(create_widget.isChecked()),
+                "update": bool(update_widget.isChecked()),
+            }
+        return mapping_modes
+
     def get_selected_default_values() -> dict[str, str]:
         default_values: dict[str, str] = {}
         for row_index in range(default_table.rowCount()):
-            field_item = default_table.item(row_index, 0)
-            combo = default_table.cellWidget(row_index, 2)
+            field_item = default_table.item(row_index, 1)
+            combo = default_table.cellWidget(row_index, 3)
             if field_item is None or combo is None:
                 continue
             selected_value = combo.currentText().strip()
@@ -2019,6 +2296,28 @@ def create_mapping_page(on_validate_requested, on_error=None):
                 continue
             default_values[field_item.text()] = selected_value
         return default_values
+
+    def get_selected_default_value_modes() -> dict[str, dict[str, bool]]:
+        default_value_modes: dict[str, dict[str, bool]] = {}
+        for row_index in range(default_table.rowCount()):
+            field_item = default_table.item(row_index, 1)
+            create_widget = default_table.cellWidget(row_index, 0)
+            combo = default_table.cellWidget(row_index, 3)
+            if field_item is None or create_widget is None or combo is None:
+                continue
+            if not combo.currentText().strip():
+                continue
+            if not bool(create_widget.isChecked()):
+                default_value_modes[field_item.text()] = {"create": False, "update": False}
+                continue
+            upload_mode_scope = _default_scope_for_upload_mode(
+                getattr(page, "_mapping_upload_mode", GUI_UPLOAD_MODE_CREATE)
+            )
+            default_value_modes[field_item.text()] = {
+                "create": bool(upload_mode_scope.get("create", False)),
+                "update": bool(upload_mode_scope.get("update", False)),
+            }
+        return default_value_modes
 
     def get_selected_tracker_item_settings() -> dict[str, dict[str, object]]:
         settings: dict[str, dict[str, object]] = {}
@@ -2048,10 +2347,15 @@ def create_mapping_page(on_validate_requested, on_error=None):
         if not mapping:
             status_label.setText("최소 1개 이상의 컬럼을 매핑해야 합니다.")
             return
+        mapping_modes = get_selected_mapping_modes()
+        selected_default_values = get_selected_default_values()
+        selected_default_value_modes = get_selected_default_value_modes()
         try:
             on_validate_requested(
                 mapping,
-                get_selected_default_values(),
+                mapping_modes,
+                selected_default_values,
+                selected_default_value_modes,
                 get_selected_tracker_item_settings(),
             )
         except Exception as exc:
@@ -2072,7 +2376,9 @@ def create_mapping_page(on_validate_requested, on_error=None):
 
     page.load_context = load_context
     page.get_selected_mapping = get_selected_mapping
+    page.get_selected_mapping_modes = get_selected_mapping_modes
     page.get_selected_default_values = get_selected_default_values
+    page.get_selected_default_value_modes = get_selected_default_value_modes
     page.get_selected_tracker_item_settings = get_selected_tracker_item_settings
     return page
 
@@ -2089,23 +2395,27 @@ def create_validation_page():
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
+    _configure_page_layout(layout)
     summary_label = QLabel("")
     summary_label.setObjectName("summary_label")
+    _configure_constrained_panel(summary_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(summary_label)
 
     table = QTableWidget(0, 7)
     table.setHorizontalHeaderLabels(["상태", "행", "항목", "컬럼", "입력값", "문제", "조치"])
     table.setAlternatingRowColors(True)
+    _configure_data_table(table, minimum_height=PRIMARY_TABLE_MIN_HEIGHT)
     _configure_table_columns(table, [90, 120, 180, 160, 160, 260, 280])
-    layout.addWidget(table)
+    page.issue_table = table
+    layout.addWidget(table, 1)
 
     status_label = QLabel("")
     status_label.setObjectName("status_label")
+    _configure_constrained_panel(status_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
+    _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
     next_button = QPushButton("다음")
     next_button.setObjectName("primary_button")
@@ -2190,6 +2500,7 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
     QHBoxLayout = qt["QHBoxLayout"]
+    QTabWidget = qt["QTabWidget"]
     QLabel = qt["QLabel"]
     QPushButton = qt["QPushButton"]
     QPlainTextEdit = qt["QPlainTextEdit"]
@@ -2200,73 +2511,72 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
+    _configure_page_layout(layout)
 
     page.progress_bar = QProgressBar()
     page.progress_bar.setTextVisible(True)
     page.progress_bar.setFormat("0 / 0 (0.0%)")
     layout.addWidget(page.progress_bar)
     page.progress_label = QLabel("진행률 0.0% (0 / 0)")
+    page.progress_label.setObjectName("section_label")
     layout.addWidget(page.progress_label)
 
+    page.phase_label = QLabel("현재 단계: -")
     page.current_label = QLabel("현재 항목: -")
     page.total_label = QLabel("총 대상 0건 / 완료 0건")
+    page.phase_total_label = QLabel("단계별 총 대상: 생성 0건 / 수정 0건")
+    page.phase_counter_label = QLabel("단계별 결과: 생성 성공 0 / 실패 0 | 수정 성공 0 / 실패 0")
     page.counter_label = QLabel("성공 0 / 실패 0 / 재시도 0")
     page.status_label = QLabel("준비")
     page.status_label.setObjectName("status_label")
-    layout.addWidget(page.current_label)
-    layout.addWidget(page.total_label)
-    layout.addWidget(page.counter_label)
-    layout.addWidget(page.status_label)
-
     page.time_label = QLabel("배치 시간: -")
     page.time_label.setObjectName("section_label")
-    layout.addWidget(page.time_label)
     page.eta_label = QLabel("예상 종료: -")
     page.eta_label.setObjectName("section_label")
-    layout.addWidget(page.eta_label)
+
+    summary_row = QHBoxLayout()
+    _configure_inline_layout(summary_row, spacing=10)
+
+    left_col = QVBoxLayout()
+    _configure_inline_layout(left_col, spacing=2)
+    left_col.addWidget(page.phase_label)
+    left_col.addWidget(page.current_label)
+    summary_row.addLayout(left_col, 2)
+
+    middle_col = QVBoxLayout()
+    _configure_inline_layout(middle_col, spacing=2)
+    middle_col.addWidget(page.total_label)
+    middle_col.addWidget(page.counter_label)
+    summary_row.addLayout(middle_col, 2)
+
+    phase_col = QVBoxLayout()
+    _configure_inline_layout(phase_col, spacing=2)
+    phase_col.addWidget(page.phase_total_label)
+    phase_col.addWidget(page.phase_counter_label)
+    summary_row.addLayout(phase_col, 3)
+
+    time_col = QVBoxLayout()
+    _configure_inline_layout(time_col, spacing=2)
+    time_col.addWidget(page.time_label)
+    time_col.addWidget(page.eta_label)
+    summary_row.addLayout(time_col, 2)
+
+    layout.addLayout(summary_row)
+    layout.addWidget(page.status_label)
 
     page.dry_run_checkbox = QCheckBox("Dry Run")
     page.continue_checkbox = QCheckBox("Continue on error")
     page.continue_checkbox.setChecked(True)
-    opts = QHBoxLayout()
-    opts.addWidget(page.dry_run_checkbox)
-    opts.addWidget(page.continue_checkbox)
-    opts.addStretch(1)
-    layout.addLayout(opts)
-
-    page.log_view = QPlainTextEdit()
-    page.log_view.setReadOnly(True)
-    page.log_view.setPlaceholderText("업로드 진행 로그와 시각이 여기에 표시됩니다.")
-    page.log_view.setMinimumHeight(120)
-    layout.addWidget(page.log_view)
-
-    activity_label = QLabel("항목별 진행 기록")
-    activity_label.setObjectName("section_label")
-    layout.addWidget(activity_label)
-
-    page.activity_table = QTableWidget(0, 7)
-    page.activity_table.setHorizontalHeaderLabels(["파일", "항목", "상태", "시작", "완료", "소요", "로그"])
-    page.activity_table.setAlternatingRowColors(True)
-    page.activity_table.setMinimumHeight(220)
-    _configure_table_columns(page.activity_table, [160, 180, 100, 110, 110, 90, 320])
-    layout.addWidget(page.activity_table)
-
-    page._activity_row_map = {}
-
-    page.response_view = QPlainTextEdit()
-    page.response_view.setReadOnly(True)
-    page.response_view.setPlaceholderText("실패한 요청의 서버 응답 JSON이 여기에 표시됩니다.")
-    page.response_view.setMinimumHeight(100)
-    layout.addWidget(page.response_view)
-
-    buttons = QHBoxLayout()
+    controls = QHBoxLayout()
+    _configure_inline_layout(controls)
+    controls.addWidget(page.dry_run_checkbox)
+    controls.addWidget(page.continue_checkbox)
+    controls.addStretch(1)
     page.start_button = QPushButton("시작")
     page.pause_button = QPushButton("일시정지")
     page.resume_button = QPushButton("재개")
     page.cancel_button = QPushButton("중단")
-    page.result_button = QPushButton("결과 화면으로 이동")
+    page.result_button = QPushButton("결과 보기")
     page.start_button.setObjectName("primary_button")
     page.resume_button.setObjectName("primary_button")
     page.cancel_button.setObjectName("danger_button")
@@ -2275,13 +2585,52 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     page.resume_button.setEnabled(False)
     page.cancel_button.setEnabled(False)
     page.result_button.setEnabled(False)
-    buttons.addWidget(page.start_button)
-    buttons.addWidget(page.pause_button)
-    buttons.addWidget(page.resume_button)
-    buttons.addWidget(page.cancel_button)
-    buttons.addStretch(1)
-    buttons.addWidget(page.result_button)
-    layout.addLayout(buttons)
+    controls.addWidget(page.start_button)
+    controls.addWidget(page.pause_button)
+    controls.addWidget(page.resume_button)
+    controls.addWidget(page.cancel_button)
+    controls.addWidget(page.result_button)
+    layout.addLayout(controls)
+
+    page.detail_tabs = QTabWidget()
+    page.detail_tabs.setDocumentMode(True)
+    page.detail_tabs.setMinimumHeight(UPLOAD_DETAIL_TABS_MIN_HEIGHT)
+
+    activity_tab = QWidget()
+    activity_layout = QVBoxLayout(activity_tab)
+    _configure_inline_layout(activity_layout)
+    page.activity_table = QTableWidget(0, 8)
+    page.activity_table.setHorizontalHeaderLabels(["파일", "단계", "항목", "상태", "시작", "완료", "소요", "로그"])
+    page.activity_table.setAlternatingRowColors(True)
+    page.activity_table.setMinimumHeight(ACTIVITY_TABLE_MIN_HEIGHT)
+    _configure_table_columns(page.activity_table, [140, 80, 160, 90, 95, 95, 80, 260])
+    activity_layout.addWidget(page.activity_table)
+    page.detail_tabs.addTab(activity_tab, "진행 기록")
+
+    log_tab = QWidget()
+    log_layout = QVBoxLayout(log_tab)
+    _configure_inline_layout(log_layout)
+    page.log_view = QPlainTextEdit()
+    page.log_view.setReadOnly(True)
+    page.log_view.setPlaceholderText("업로드 진행 로그와 시각이 여기에 표시됩니다.")
+    log_layout.addWidget(page.log_view)
+    page.detail_tabs.addTab(log_tab, "실시간 로그")
+
+    response_tab = QWidget()
+    response_layout = QVBoxLayout(response_tab)
+    _configure_inline_layout(response_layout)
+    page.response_view = QPlainTextEdit()
+    page.response_view.setReadOnly(True)
+    page.response_view.setPlaceholderText("실패한 요청의 서버 응답 JSON이 여기에 표시됩니다.")
+    response_layout.addWidget(page.response_view)
+    page.detail_tabs.addTab(response_tab, "실패 응답")
+
+    page.activity_tab = activity_tab
+    page.log_tab = log_tab
+    page.response_tab = response_tab
+    layout.addWidget(page.detail_tabs, 1)
+
+    page._activity_row_map = {}
 
     page.start_button.clicked.connect(on_start_requested)
     page.pause_button.clicked.connect(on_pause_requested)
@@ -2297,7 +2646,7 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
             return
         item.setText(value)
 
-    def _ensure_activity_row(row_key: str, file_label: str, item_name: str) -> int:
+    def _ensure_activity_row(row_key: str, file_label: str, phase_name: str, item_name: str) -> int:
         if row_key in page._activity_row_map:
             row_index = int(page._activity_row_map[row_key])
         else:
@@ -2305,22 +2654,30 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
             page.activity_table.insertRow(row_index)
             page._activity_row_map[row_key] = row_index
         _set_activity_cell(row_index, 0, file_label)
-        _set_activity_cell(row_index, 1, item_name)
+        _set_activity_cell(row_index, 1, phase_name)
+        _set_activity_cell(row_index, 2, item_name)
         return row_index
 
-    def record_activity_started(row_key: str, file_label: str, item_name: str, started_at: str) -> None:
-        row_index = _ensure_activity_row(row_key, file_label, item_name)
-        _set_activity_cell(row_index, 2, "진행 중")
-        _set_activity_cell(row_index, 3, started_at)
-        _set_activity_cell(row_index, 4, "")
+    def record_activity_started(
+        row_key: str,
+        file_label: str,
+        phase_name: str,
+        item_name: str,
+        started_at: str,
+    ) -> None:
+        row_index = _ensure_activity_row(row_key, file_label, phase_name, item_name)
+        _set_activity_cell(row_index, 3, "진행 중")
+        _set_activity_cell(row_index, 4, started_at)
         _set_activity_cell(row_index, 5, "")
-        _set_activity_cell(row_index, 6, "업로드 시작")
-        _configure_table_columns(page.activity_table, [160, 180, 100, 110, 110, 90, 320])
+        _set_activity_cell(row_index, 6, "")
+        _set_activity_cell(row_index, 7, "업로드 시작")
+        _configure_table_columns(page.activity_table, [140, 80, 160, 90, 95, 95, 80, 260])
         page.activity_table.scrollToBottom()
 
     def record_activity_finished(
         row_key: str,
         file_label: str,
+        phase_name: str,
         item_name: str,
         *,
         status: str,
@@ -2328,14 +2685,14 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
         duration_text: str,
         message: str,
     ) -> None:
-        row_index = _ensure_activity_row(row_key, file_label, item_name)
-        _set_activity_cell(row_index, 2, status)
-        if not page.activity_table.item(row_index, 3):
-            _set_activity_cell(row_index, 3, finished_at)
-        _set_activity_cell(row_index, 4, finished_at)
-        _set_activity_cell(row_index, 5, duration_text)
-        _set_activity_cell(row_index, 6, message)
-        _configure_table_columns(page.activity_table, [160, 180, 100, 110, 110, 90, 320])
+        row_index = _ensure_activity_row(row_key, file_label, phase_name, item_name)
+        _set_activity_cell(row_index, 3, status)
+        if not page.activity_table.item(row_index, 4):
+            _set_activity_cell(row_index, 4, finished_at)
+        _set_activity_cell(row_index, 5, finished_at)
+        _set_activity_cell(row_index, 6, duration_text)
+        _set_activity_cell(row_index, 7, message)
+        _configure_table_columns(page.activity_table, [140, 80, 160, 90, 95, 95, 80, 260])
         page.activity_table.scrollToBottom()
 
     def reset(total_count: int) -> None:
@@ -2343,8 +2700,11 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
         page.progress_bar.setValue(0)
         page.progress_bar.setFormat("0 / 0 (0.0%)" if total_count <= 0 else f"0 / {total_count} (0.0%)")
         page.progress_label.setText(f"진행률 0.0% (0 / {max(total_count, 0)})")
+        page.phase_label.setText("현재 단계: -")
         page.current_label.setText("현재 항목: -")
         page.total_label.setText("총 대상 0건 / 완료 0건")
+        page.phase_total_label.setText("단계별 총 대상: 생성 0건 / 수정 0건")
+        page.phase_counter_label.setText("단계별 결과: 생성 성공 0 / 실패 0 | 수정 성공 0 / 실패 0")
         page.counter_label.setText("성공 0 / 실패 0 / 재시도 0")
         page.status_label.setText("준비")
         page.time_label.setText("배치 시간: -")
@@ -2379,10 +2739,11 @@ def create_result_page():
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
+    _configure_page_layout(layout)
 
     tabs = QTabWidget()
+    tabs.setDocumentMode(True)
+    page.result_tabs = tabs
     page.tables = {}
     for key, label in (
         ("success_df", "성공"),
@@ -2391,18 +2752,22 @@ def create_result_page():
     ):
         tab = QWidget()
         tab_layout = QVBoxLayout(tab)
+        _configure_inline_layout(tab_layout)
         table = QTableWidget(0, 0)
         table.setAlternatingRowColors(True)
-        tab_layout.addWidget(table)
+        _configure_data_table(table, minimum_height=PRIMARY_TABLE_MIN_HEIGHT)
+        tab_layout.addWidget(table, 1)
         tabs.addTab(tab, label)
         page.tables[key] = table
-    layout.addWidget(tabs)
+    layout.addWidget(tabs, 1)
 
     page.response_view = QPlainTextEdit()
     page.response_view.setReadOnly(True)
+    page.response_view.setMinimumHeight(DETAIL_PANE_MIN_HEIGHT)
     layout.addWidget(page.response_view)
 
     buttons = QHBoxLayout()
+    _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
     restart_button = QPushButton("새 업로드 시작")
     restart_button.setObjectName("primary_button")

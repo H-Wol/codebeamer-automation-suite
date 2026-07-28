@@ -27,6 +27,10 @@ from src.upload_pipeline import suggest_mapping_from_headers
 from src.wizard import CodebeamerUploadWizard
 from .settings_store import GUI_UPLOAD_MODE_CREATE
 from .settings_store import GUI_UPLOAD_MODE_UPDATE
+from .settings_store import GUI_UPLOAD_MODE_UPSERT
+from .settings_store import gui_upload_mode_action_label
+from .settings_store import gui_upload_mode_allows_root_items
+from .settings_store import gui_upload_mode_supports_update
 from .settings_store import normalize_gui_upload_mode
 
 
@@ -410,8 +414,10 @@ class MappingContext:
     schema_df: pd.DataFrame
     upload_columns: list[str]
     selected_mapping: dict[str, str]
+    selected_mapping_modes: dict[str, dict[str, bool]]
     default_value_candidates: list[DefaultValueCandidate]
     selected_default_values: dict[str, str]
+    selected_default_value_modes: dict[str, dict[str, bool]]
     selected_tracker_item_settings: dict[str, dict[str, Any]]
     tracker_item_field_candidates: list[TrackerItemFieldCandidate]
     tracker_item_lookup_cache: dict[tuple[str, str], tuple[Any, str | None, str | None]]
@@ -443,6 +449,8 @@ class BatchUploadJob:
     file_label: str
     root_item_specs: list["RootItemUploadSpec"]
     ready_count: int
+    insert_ready_count: int
+    update_ready_count: int
     output_dir: str
     wizard: CodebeamerUploadWizard
 
@@ -512,6 +520,77 @@ class GuiUploadPipelineService:
         self.client_factory = client_factory
         self.reader_cls = reader_cls
         self.excel_service = excel_service or GuiExcelService(logger=logger, reader_cls=reader_cls)
+
+    @staticmethod
+    def _default_operation_scope(upload_mode: str | None) -> dict[str, bool]:
+        normalized_mode = normalize_gui_upload_mode(upload_mode)
+        if normalized_mode == GUI_UPLOAD_MODE_UPDATE:
+            return {"create": False, "update": True}
+        if normalized_mode == GUI_UPLOAD_MODE_UPSERT:
+            return {"create": True, "update": True}
+        return {"create": True, "update": False}
+
+    @classmethod
+    def _normalize_operation_scope(
+        cls,
+        raw_scope: Any,
+        *,
+        upload_mode: str | None,
+    ) -> dict[str, bool]:
+        default_scope = cls._default_operation_scope(upload_mode)
+        scope_payload = dict(raw_scope) if isinstance(raw_scope, dict) else {}
+        return {
+            "create": bool(scope_payload.get("create", default_scope["create"])),
+            "update": bool(scope_payload.get("update", default_scope["update"])),
+        }
+
+    @classmethod
+    def _scope_applies_to_upload_mode(cls, raw_scope: Any, *, upload_mode: str | None) -> bool:
+        normalized_mode = normalize_gui_upload_mode(upload_mode)
+        scope = cls._normalize_operation_scope(raw_scope, upload_mode=upload_mode)
+        if normalized_mode == GUI_UPLOAD_MODE_UPDATE:
+            return bool(scope.get("update", False))
+        if normalized_mode == GUI_UPLOAD_MODE_UPSERT:
+            return bool(scope.get("create", False) or scope.get("update", False))
+        return bool(scope.get("create", False))
+
+    @classmethod
+    def _normalize_mapping_modes(
+        cls,
+        selected_mapping: dict[str, str],
+        selected_mapping_modes: dict[str, Any] | None,
+        *,
+        upload_mode: str | None,
+    ) -> dict[str, dict[str, bool]]:
+        normalized_modes: dict[str, dict[str, bool]] = {}
+        for df_column in selected_mapping.keys():
+            normalized_column = str(df_column).strip()
+            if not normalized_column:
+                continue
+            normalized_modes[normalized_column] = cls._normalize_operation_scope(
+                (selected_mapping_modes or {}).get(normalized_column),
+                upload_mode=upload_mode,
+            )
+        return normalized_modes
+
+    @classmethod
+    def _normalize_default_value_modes(
+        cls,
+        selected_default_values: dict[str, str],
+        selected_default_value_modes: dict[str, Any] | None,
+        *,
+        upload_mode: str | None,
+    ) -> dict[str, dict[str, bool]]:
+        normalized_modes: dict[str, dict[str, bool]] = {}
+        default_scope = cls._default_operation_scope(upload_mode)
+        for schema_field in selected_default_values.keys():
+            normalized_field = str(schema_field).strip()
+            if not normalized_field:
+                continue
+            raw_scope = (selected_default_value_modes or {}).get(normalized_field)
+            is_enabled = cls._scope_applies_to_upload_mode(raw_scope, upload_mode=upload_mode)
+            normalized_modes[normalized_field] = dict(default_scope) if is_enabled else {"create": False, "update": False}
+        return normalized_modes
 
     def create_wizard(self, settings) -> CodebeamerUploadWizard:
         client = _build_gui_client(settings, self.client_factory, self.logger)
@@ -1913,7 +1992,7 @@ class GuiUploadPipelineService:
             "message",
             "action",
         ]
-        if normalize_gui_upload_mode(mapping_context.upload_mode) != GUI_UPLOAD_MODE_UPDATE:
+        if not gui_upload_mode_supports_update(mapping_context.upload_mode):
             return set(), pd.DataFrame(columns=issue_columns)
 
         occurrences_by_item_id: dict[int, list[dict[str, str]]] = {}
@@ -1981,6 +2060,28 @@ class GuiUploadPipelineService:
             })
 
         return duplicate_item_ids, pd.DataFrame(issues, columns=issue_columns)
+
+    def _build_upsert_root_item_issue_df(
+        self,
+        mapping_context: MappingContext,
+        *,
+        payload_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        del mapping_context, payload_df
+        return pd.DataFrame(columns=[
+            "severity",
+            "category",
+            "row_id",
+            "row_label",
+            "item_name",
+            "source_file",
+            "source_file_path",
+            "column",
+            "field",
+            "raw_value",
+            "message",
+            "action",
+        ])
 
     def prepare_mapping_context(self, settings, file_state: dict[str, Any]) -> MappingContext:
         file_paths = self._normalize_file_paths(file_state)
@@ -2053,21 +2154,42 @@ class GuiUploadPipelineService:
             for column, schema_field in raw_mapping.items()
             if column in upload_columns
         }
+        selected_mapping_modes = self._normalize_mapping_modes(
+            selected_mapping,
+            None,
+            upload_mode=wizard.state.upload_mode,
+        )
         default_value_candidates = self._build_default_value_candidates(mappable_schema_df)
+        selected_default_value_modes = self._normalize_default_value_modes(
+            {},
+            None,
+            upload_mode=wizard.state.upload_mode,
+        )
         tracker_item_field_candidates, selected_tracker_item_settings = self._normalize_tracker_item_settings(
             mappable_schema_df,
             selected_mapping,
             None,
         )
 
+        default_root_item_config = self._default_root_item_config(mappable_schema_df)
+        upload_mode = normalize_gui_upload_mode(getattr(settings, "upload_mode", None))
+        if not gui_upload_mode_allows_root_items(upload_mode):
+            default_root_item_config["enabled"] = False
+            default_root_item_config["group_enabled"] = False
+        elif upload_mode == GUI_UPLOAD_MODE_UPSERT:
+            default_root_item_config["enabled"] = False
+            default_root_item_config["group_enabled"] = False
+
         return MappingContext(
             wizard=wizard,
-            upload_mode=normalize_gui_upload_mode(getattr(settings, "upload_mode", None)),
+            upload_mode=upload_mode,
             schema_df=mappable_schema_df,
             upload_columns=upload_columns,
             selected_mapping=selected_mapping,
+            selected_mapping_modes=selected_mapping_modes,
             default_value_candidates=default_value_candidates,
             selected_default_values={},
+            selected_default_value_modes=selected_default_value_modes,
             selected_tracker_item_settings=selected_tracker_item_settings,
             tracker_item_field_candidates=tracker_item_field_candidates,
             tracker_item_lookup_cache={},
@@ -2078,7 +2200,7 @@ class GuiUploadPipelineService:
             header_row=target_header_row,
             summary_column=target_summary_column,
             preview_data=preview,
-            root_item_config=self._default_root_item_config(mappable_schema_df),
+            root_item_config=default_root_item_config,
             existing_item_cache={},
             batch_duplicate_update_item_ids=set(),
         )
@@ -2124,7 +2246,9 @@ class GuiUploadPipelineService:
         *,
         root_item_config: dict[str, Any] | None = None,
         selected_mapping: dict[str, str] | None = None,
+        selected_mapping_modes: dict[str, dict[str, bool]] | None = None,
         selected_default_values: dict[str, str] | None = None,
+        selected_default_value_modes: dict[str, dict[str, bool]] | None = None,
         selected_tracker_item_settings: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         """현재 파일 기준 자동 추천은 유지하고, 저장된 preset은 유효한 항목만 덮어쓴다."""
@@ -2144,6 +2268,13 @@ class GuiUploadPipelineService:
             )
         )
         mapping_context.selected_mapping = merged_mapping
+        mapping_context.selected_mapping_modes = self._normalize_mapping_modes(
+            mapping_context.selected_mapping,
+            selected_mapping_modes
+            if selected_mapping_modes is not None
+            else mapping_context.selected_mapping_modes,
+            upload_mode=mapping_context.upload_mode,
+        )
 
         valid_schema_fields = {
             str(field_name).strip()
@@ -2161,6 +2292,13 @@ class GuiUploadPipelineService:
             for field_name, raw_value in (default_values_source or {}).items()
             if str(field_name).strip() in valid_schema_fields and str(raw_value).strip()
         }
+        mapping_context.selected_default_value_modes = self._normalize_default_value_modes(
+            mapping_context.selected_default_values,
+            selected_default_value_modes
+            if selected_default_value_modes is not None
+            else mapping_context.selected_default_value_modes,
+            upload_mode=mapping_context.upload_mode,
+        )
 
         tracker_item_settings_source = (
             selected_tracker_item_settings
@@ -2182,6 +2320,9 @@ class GuiUploadPipelineService:
         selected_mapping: dict[str, str],
         selected_default_values: dict[str, str] | None = None,
         selected_tracker_item_settings: dict[str, dict[str, Any]] | None = None,
+        *,
+        selected_mapping_modes: dict[str, dict[str, bool]] | None = None,
+        selected_default_value_modes: dict[str, dict[str, bool]] | None = None,
     ) -> ValidationContext:
         wizard = mapping_context.wizard
         list_cols = self.mapper.get_list_columns_for_mapping(selected_mapping, mapping_context.schema_df)
@@ -2194,24 +2335,40 @@ class GuiUploadPipelineService:
             for field_name, raw_value in (selected_default_values or {}).items()
             if str(field_name).strip() and str(raw_value).strip()
         }
+        normalized_mapping_modes = self._normalize_mapping_modes(
+            selected_mapping,
+            selected_mapping_modes,
+            upload_mode=mapping_context.upload_mode,
+        )
+        normalized_default_value_modes = self._normalize_default_value_modes(
+            normalized_default_values,
+            selected_default_value_modes,
+            upload_mode=mapping_context.upload_mode,
+        )
         tracker_item_field_candidates, normalized_tracker_item_settings = self._normalize_tracker_item_settings(
             mapping_context.schema_df,
             selected_mapping,
             selected_tracker_item_settings,
         )
         mapping_context.selected_mapping = selected_mapping
+        mapping_context.selected_mapping_modes = normalized_mapping_modes
         mapping_context.selected_default_values = normalized_default_values
+        mapping_context.selected_default_value_modes = normalized_default_value_modes
         mapping_context.selected_tracker_item_settings = normalized_tracker_item_settings
         mapping_context.tracker_item_field_candidates = tracker_item_field_candidates
+        wizard.state.selected_mapping_modes = dict(normalized_mapping_modes)
+        wizard.state.selected_default_value_modes = dict(normalized_default_value_modes)
         wizard.state.selected_tracker_item_settings = dict(normalized_tracker_item_settings)
         wizard.state.tracker_item_lookup_cache = dict(mapping_context.tracker_item_lookup_cache)
         wizard.state.existing_item_cache = {}
         validation_result = run_validation_pipeline(
             wizard,
             selected_mapping,
+            selected_mapping_modes=normalized_mapping_modes,
             selected_default_values=normalized_default_values,
+            selected_default_value_modes=normalized_default_value_modes,
             selected_tracker_item_settings=normalized_tracker_item_settings,
-            fetch_existing_items=normalize_gui_upload_mode(mapping_context.upload_mode) != GUI_UPLOAD_MODE_UPDATE,
+            fetch_existing_items=not gui_upload_mode_supports_update(mapping_context.upload_mode),
         )
         comparison_df = self._gui_visible_comparison_df(validation_result.comparison_df)
         option_check_frames = [
@@ -2257,9 +2414,11 @@ class GuiUploadPipelineService:
             batch_validation_result = run_validation_pipeline(
                 batch_wizard,
                 selected_mapping,
+                selected_mapping_modes=normalized_mapping_modes,
                 selected_default_values=normalized_default_values,
+                selected_default_value_modes=normalized_default_value_modes,
                 selected_tracker_item_settings=normalized_tracker_item_settings,
-                fetch_existing_items=normalize_gui_upload_mode(mapping_context.upload_mode) != GUI_UPLOAD_MODE_UPDATE,
+                fetch_existing_items=not gui_upload_mode_supports_update(mapping_context.upload_mode),
             )
             self._sync_validation_wizard_caches(wizard, batch_wizard)
             option_check_frames.append(
@@ -2321,7 +2480,7 @@ class GuiUploadPipelineService:
             selected_default_values=normalized_default_values,
         )
         mapping_context.batch_duplicate_update_item_ids = set()
-        if normalize_gui_upload_mode(mapping_context.upload_mode) == GUI_UPLOAD_MODE_UPDATE:
+        if gui_upload_mode_supports_update(mapping_context.upload_mode):
             file_upload_dfs = {
                 file_path: self._upload_df_for_file(
                     mapping_context,
@@ -2338,6 +2497,13 @@ class GuiUploadPipelineService:
             if not duplicate_issue_df.empty:
                 issue_df = pd.concat([issue_df, duplicate_issue_df], ignore_index=True)
                 issue_df = self._finalize_issue_df(issue_df)
+        upsert_root_issue_df = self._build_upsert_root_item_issue_df(
+            mapping_context,
+            payload_df=payload_df,
+        )
+        if not upsert_root_issue_df.empty:
+            issue_df = pd.concat([issue_df, upsert_root_issue_df], ignore_index=True)
+            issue_df = self._finalize_issue_df(issue_df)
         summary_stats = self._build_summary_stats(issue_df, row_context_df)
         summary_stats["file_count"] = len(mapping_context.file_paths)
         summary_stats["batch_total_rows"] = self._count_batch_upload_rows(
@@ -2642,6 +2808,12 @@ class GuiUploadPipelineService:
     def _tracker_item_query_mapping(mapping_context: MappingContext) -> dict[str, str]:
         query_mapping: dict[str, str] = {}
         for df_column, schema_field in mapping_context.selected_mapping.items():
+            scope = dict((mapping_context.selected_mapping_modes or {}).get(str(df_column).strip()) or {})
+            if not GuiUploadPipelineService._scope_applies_to_upload_mode(
+                scope,
+                upload_mode=mapping_context.upload_mode,
+            ):
+                continue
             setting = mapping_context.selected_tracker_item_settings.get(str(schema_field).strip(), {})
             if str(setting.get("mode") or "").strip() != TrackerItemResolutionMode.QUERY.value:
                 continue
@@ -2663,6 +2835,11 @@ class GuiUploadPipelineService:
         cache_wizard.state.schema = mapping_context.wizard.state.schema
         cache_wizard.state.schema_df = mapping_context.schema_df
         cache_wizard.state.selected_mapping = dict(mapping_context.selected_mapping)
+        cache_wizard.state.selected_mapping_modes = {
+            str(key): dict(value)
+            for key, value in dict(mapping_context.selected_mapping_modes or {}).items()
+            if str(key).strip() and isinstance(value, dict)
+        }
         cache_wizard.state.selected_tracker_item_settings = dict(mapping_context.selected_tracker_item_settings)
         cache_wizard.state.tracker_item_lookup_cache = dict(mapping_context.tracker_item_lookup_cache)
 
@@ -2706,18 +2883,45 @@ class GuiUploadPipelineService:
         wizard: CodebeamerUploadWizard,
         root_item_specs: list[RootItemUploadSpec] | None = None,
     ) -> int:
+        insert_count, update_count = GuiUploadPipelineService._phase_ready_counts(
+            wizard,
+            root_item_specs=root_item_specs,
+        )
+        return insert_count + update_count
+
+    @staticmethod
+    def _phase_ready_counts(
+        wizard: CodebeamerUploadWizard,
+        root_item_specs: list[RootItemUploadSpec] | None = None,
+    ) -> tuple[int, int]:
         payload_df = wizard.state.payload_df if wizard.state.payload_df is not None else wizard.build_payloads()
         if payload_df is None or payload_df.empty:
-            return 0
+            return (0, 0)
 
-        ready_count = int((payload_df["payload_status"] == PayloadStatus.READY.value).sum())
+        ready_df = payload_df[payload_df["payload_status"] == PayloadStatus.READY.value].copy()
+        upload_mode = normalize_gui_upload_mode(getattr(wizard.state, "upload_mode", GUI_UPLOAD_MODE_CREATE))
+        if ready_df.empty:
+            return (0, 0)
+
+        if upload_mode == GUI_UPLOAD_MODE_UPDATE:
+            return (0, int(len(ready_df)))
+
+        if upload_mode == GUI_UPLOAD_MODE_UPSERT and "_operation" in ready_df.columns:
+            operation_series = ready_df["_operation"].fillna("").astype(str).str.lower()
+            insert_count = int(operation_series.eq("create").sum())
+            update_count = int(operation_series.eq("update").sum())
+            if insert_count > 0 and root_item_specs:
+                insert_count += len(root_item_specs)
+            return (insert_count, update_count)
+
+        insert_count = int(len(ready_df))
         if (
-            ready_count > 0
+            insert_count > 0
             and root_item_specs
-            and str(getattr(wizard.state, "upload_mode", GUI_UPLOAD_MODE_CREATE)) == GUI_UPLOAD_MODE_CREATE
+            and gui_upload_mode_allows_root_items(upload_mode)
         ):
-            ready_count += len(root_item_specs)
-        return ready_count
+            insert_count += len(root_item_specs)
+        return (insert_count, 0)
 
     @staticmethod
     def _annotate_batch_result_frame(
@@ -2765,8 +2969,18 @@ class GuiUploadPipelineService:
         )
 
         wizard.state.selected_mapping = dict(mapping_context.selected_mapping)
+        wizard.state.selected_mapping_modes = {
+            str(key): dict(value)
+            for key, value in dict(mapping_context.selected_mapping_modes or {}).items()
+            if str(key).strip() and isinstance(value, dict)
+        }
         wizard.state.schema = schema
         wizard.state.schema_df = schema_df
+        wizard.state.selected_default_value_modes = {
+            str(key): dict(value)
+            for key, value in dict(mapping_context.selected_default_value_modes or {}).items()
+            if str(key).strip() and isinstance(value, dict)
+        }
         wizard.state.selected_tracker_item_settings = dict(mapping_context.selected_tracker_item_settings)
         wizard.state.tracker_item_lookup_cache = dict(mapping_context.tracker_item_lookup_cache)
         wizard.state.existing_item_cache = {}
@@ -2778,12 +2992,14 @@ class GuiUploadPipelineService:
         wizard._detect_table_field_columns()
         wizard.process_option_mapping(
             wizard.state.selected_mapping,
+            selected_mapping_modes=wizard.state.selected_mapping_modes,
             selected_default_values=mapping_context.selected_default_values,
+            selected_default_value_modes=wizard.state.selected_default_value_modes,
             selected_tracker_item_settings=mapping_context.selected_tracker_item_settings,
         )
         wizard.build_payloads(
             force=True,
-            fetch_existing_items=normalize_gui_upload_mode(mapping_context.upload_mode) != GUI_UPLOAD_MODE_UPDATE,
+            fetch_existing_items=not gui_upload_mode_supports_update(mapping_context.upload_mode),
         )
         return wizard
 
@@ -2806,12 +3022,12 @@ class GuiUploadPipelineService:
         if not mapping_context.selected_mapping:
             raise ValueError("검증된 매핑이 없습니다.")
         upload_mode = normalize_gui_upload_mode(mapping_context.upload_mode)
-        if upload_mode == GUI_UPLOAD_MODE_UPDATE and bool(getattr(settings, "offline_mode", False)):
-            raise ValueError("테스트 모드에서는 업데이트 작업을 실행할 수 없습니다.")
-        if upload_mode == GUI_UPLOAD_MODE_UPDATE and mapping_context.batch_duplicate_update_item_ids:
+        if gui_upload_mode_supports_update(upload_mode) and bool(getattr(settings, "offline_mode", False)):
+            raise ValueError("테스트 모드에서는 기존 수정 또는 혼합 처리 작업을 실행할 수 없습니다.")
+        if gui_upload_mode_supports_update(upload_mode) and mapping_context.batch_duplicate_update_item_ids:
             duplicate_ids = ", ".join(str(item_id) for item_id in sorted(mapping_context.batch_duplicate_update_item_ids))
             raise ValueError(f"배치 전체에서 중복된 업데이트 대상 id가 있습니다: {duplicate_ids}")
-        action_label = "업데이트" if upload_mode == GUI_UPLOAD_MODE_UPDATE else "업로드"
+        action_label = gui_upload_mode_action_label(upload_mode)
 
         sheet_name = str(file_state["sheet_name"])
         header_row = int(file_state["header_row"])
@@ -2823,6 +3039,11 @@ class GuiUploadPipelineService:
         unresolved_frames: list[pd.DataFrame] = []
         created_map_by_file: dict[str, dict[Any, Any]] = {}
         total_count = 0
+        phase_total_counts = {"insert": 0, "update": 0}
+        phase_results = {
+            "insert": {"total": 0, "success": 0, "failed": 0, "unresolved": 0},
+            "update": {"total": 0, "success": 0, "failed": 0, "unresolved": 0},
+        }
 
         def _emit(event: dict[str, Any]) -> None:
             if event_callback is not None:
@@ -2857,17 +3078,22 @@ class GuiUploadPipelineService:
                     header_row=header_row,
                     summary_col=summary_col,
                 )
-                if upload_mode == GUI_UPLOAD_MODE_CREATE:
+                if gui_upload_mode_allows_root_items(upload_mode):
                     root_item_specs = self.build_root_item_payload_specs(mapping_context, wizard, file_path)
                 else:
                     root_item_specs = []
-                ready_count = self._ready_upload_count(wizard, root_item_specs)
+                insert_ready_count, update_ready_count = self._phase_ready_counts(wizard, root_item_specs)
+                ready_count = insert_ready_count + update_ready_count
                 total_count += ready_count
+                phase_total_counts["insert"] += insert_ready_count
+                phase_total_counts["update"] += update_ready_count
                 prepared_jobs.append(BatchUploadJob(
                     file_path=file_path,
                     file_label=file_label,
                     root_item_specs=root_item_specs,
                     ready_count=ready_count,
+                    insert_ready_count=insert_ready_count,
+                    update_ready_count=update_ready_count,
                     output_dir=self._batch_output_dir(output_dir, file_path, index),
                     wizard=wizard,
                 ))
@@ -2892,6 +3118,7 @@ class GuiUploadPipelineService:
         _emit({
             "type": "batch_total",
             "total": total_count,
+            "phase_totals": dict(phase_total_counts),
         })
 
         for job_index, job in enumerate(prepared_jobs, start=1):
@@ -2923,6 +3150,25 @@ class GuiUploadPipelineService:
                 result = job.wizard.update_items(
                     dry_run=dry_run,
                     continue_on_error=continue_on_error,
+                    event_callback=_forward_event,
+                    cancel_requested=cancel_requested,
+                    pause_requested=pause_requested,
+                )
+            elif upload_mode == GUI_UPLOAD_MODE_UPSERT:
+                result = job.wizard.upsert_items(
+                    dry_run=dry_run,
+                    continue_on_error=continue_on_error,
+                    top_level_parent_specs=[
+                        {
+                            "key": spec.key,
+                            "name": spec.name,
+                            "field_values": dict(spec.field_values),
+                            "row_ids": list(spec.row_ids),
+                            "parent_key": spec.parent_key,
+                            "kind": spec.kind,
+                        }
+                        for spec in job.root_item_specs
+                    ],
                     event_callback=_forward_event,
                     cancel_requested=cancel_requested,
                     pause_requested=pause_requested,
@@ -2972,14 +3218,36 @@ class GuiUploadPipelineService:
             if not unresolved_df.empty:
                 unresolved_frames.append(unresolved_df)
 
+            for phase_name in ("insert", "update"):
+                if not success_df.empty and "phase" in success_df.columns:
+                    phase_results[phase_name]["success"] += int(
+                        success_df["phase"].fillna("").astype(str).str.lower().eq(phase_name).sum()
+                    )
+                if not failed_df.empty and "phase" in failed_df.columns:
+                    phase_results[phase_name]["failed"] += int(
+                        failed_df["phase"].fillna("").astype(str).str.lower().eq(phase_name).sum()
+                    )
+                if not unresolved_df.empty and "phase" in unresolved_df.columns:
+                    phase_results[phase_name]["unresolved"] += int(
+                        unresolved_df["phase"].fillna("").astype(str).str.lower().eq(phase_name).sum()
+                    )
+
             if not continue_on_error and (not failed_df.empty or not unresolved_df.empty):
                 break
+
+        for phase_name in ("insert", "update"):
+            phase_results[phase_name]["total"] = (
+                int(phase_results[phase_name]["success"])
+                + int(phase_results[phase_name]["failed"])
+                + int(phase_results[phase_name]["unresolved"])
+            )
 
         return {
             "created_map_by_file": created_map_by_file,
             "success_df": pd.concat(success_frames, ignore_index=True) if success_frames else pd.DataFrame(),
             "failed_df": pd.concat(failed_frames, ignore_index=True) if failed_frames else pd.DataFrame(),
             "unresolved_df": pd.concat(unresolved_frames, ignore_index=True) if unresolved_frames else pd.DataFrame(),
+            "phase_results": phase_results,
         }
 
     @classmethod
@@ -3017,7 +3285,7 @@ class GuiUploadPipelineService:
             return (
                 "오류",
                 f"{field_name} 필드는 현재 GUI에서 지원하지 않습니다.",
-                "이 컬럼 사용을 끄거나 지원되는 다른 필드로 다시 매핑하세요.",
+                "이 컬럼 매핑을 해제하거나 지원되는 다른 필드로 다시 매핑하세요.",
             )
         if status == OptionCheckStatus.LOOKUP_REQUIRED.value:
             if is_default_value:
@@ -3029,7 +3297,7 @@ class GuiUploadPipelineService:
             return (
                 "오류",
                 f"{field_name} 값은 업로드 전에 추가 조회가 필요합니다.",
-                "이 컬럼 사용을 끄거나, 지원되는 필드로 다시 매핑하세요.",
+                "이 컬럼 매핑을 해제하거나, 지원되는 필드로 다시 매핑하세요.",
             )
         if status == OptionCheckStatus.OPTION_NOT_FOUND.value:
             if is_default_value:
@@ -3095,7 +3363,7 @@ class GuiUploadPipelineService:
             return (
                 "오류",
                 f"{field_name} 필드의 값을 확인할 준비가 아직 되어 있지 않습니다.",
-                "이 컬럼 사용을 끄거나 지원되는 다른 필드로 다시 매핑하세요.",
+                "이 컬럼 매핑을 해제하거나 지원되는 다른 필드로 다시 매핑하세요.",
             )
         if status.endswith(("USER_LOOKUP_FAILED", "USER_LOOKUP_AMBIGUOUS", "USER_NOT_FOUND")):
             return (
@@ -3168,7 +3436,7 @@ class GuiUploadPipelineService:
                 column,
                 field,
                 "현재 GUI에서 지원하지 않는 필드가 포함되어 있습니다.",
-                "매핑에서 해당 컬럼 사용을 끄거나 다른 필드로 바꾼 뒤 다시 검증하세요.",
+                "매핑에서 해당 컬럼을 해제하거나 다른 필드로 바꾼 뒤 다시 검증하세요.",
             )
         if code == "LOOKUP_REQUIRED":
             return (
@@ -3225,6 +3493,20 @@ class GuiUploadPipelineService:
                 field or "id",
                 "기존 item 정보를 조회하지 못해 업데이트 payload를 만들 수 없습니다.",
                 "id 값과 서버 연결 상태를 확인한 뒤 다시 검증하세요.",
+            )
+        if code == "UPSERT_PARENT_ID_REQUIRED":
+            return (
+                column or "id",
+                field or "id",
+                "계층형 신규 행을 연결할 기존 부모 item id가 없습니다.",
+                "부모 행에 기존 id를 넣거나, 계층을 제거한 뒤 다시 검증하세요.",
+            )
+        if code == "UPSERT_UPDATE_WITH_NEW_ANCESTOR":
+            return (
+                column or "id",
+                field or "id",
+                "기존 수정 행의 상위 계층에 신규 생성 행이 섞여 있습니다.",
+                "상위 계층에도 기존 id를 넣거나, 해당 하위 행을 신규 생성으로 분리한 뒤 다시 검증하세요.",
             )
 
         if detail:
@@ -3329,7 +3611,7 @@ class GuiUploadPipelineService:
                 if status in {MappingStatus.OK.value, "ok", "matched", ""}:
                     continue
                 if status in {MappingStatus.UNMAPPED.value, "unmapped"}:
-                    # GUI의 `사용` 체크박스로 제외한 컬럼은 업로드 대상이 아니므로 차단하지 않는다.
+                    # GUI에서 생성/수정 적용을 모두 해제한 컬럼은 업로드 대상이 아니므로 차단하지 않는다.
                     continue
                 if status in {MappingStatus.SCHEMA_FIELD_MISSING.value, "schema_field_missing"}:
                     issues.append({
@@ -3344,7 +3626,7 @@ class GuiUploadPipelineService:
                         "field": str(row.get("selected_schema_field") or ""),
                         "raw_value": "",
                         "message": "선택한 필드를 현재 트래커 스키마에서 찾을 수 없습니다.",
-                        "action": "매핑 단계에서 다른 필드를 선택하거나, 해당 컬럼 사용을 끄세요.",
+                        "action": "매핑 단계에서 다른 필드를 선택하거나, 해당 컬럼의 생성/수정 적용을 해제하세요.",
                     })
 
         if option_check_df is not None and not option_check_df.empty:

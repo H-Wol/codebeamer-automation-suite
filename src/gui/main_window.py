@@ -20,6 +20,7 @@ from .services import GuiUploadPipelineService
 from .settings_store import GuiSettings
 from .settings_store import GuiSettingsStore
 from .settings_store import GuiWorkflowPreset
+from .settings_store import gui_upload_mode_action_label
 from .settings_store import GUI_UPLOAD_MODE_UPDATE
 from .settings_store import normalize_gui_upload_mode
 from .styles import build_gui_stylesheet
@@ -236,6 +237,14 @@ class MainWindow:
                 self.upload_failed_count = 0
                 self.upload_retry_count = 0
                 self.upload_total_count = 0
+                self.upload_phase_totals = {"insert": 0, "update": 0}
+                self.upload_phase_counts = {
+                    "insert_success": 0,
+                    "insert_failed": 0,
+                    "update_success": 0,
+                    "update_failed": 0,
+                }
+                self.upload_current_phase = ""
                 self._upload_progress_current = 0
                 self._upload_progress_total = 0
                 self._upload_event_started_at = {}
@@ -267,13 +276,13 @@ class MainWindow:
                 root.setObjectName("app_root")
                 self.root_widget = root
                 root_layout = QVBoxLayout(root)
-                root_layout.setContentsMargins(14, 12, 14, 12)
-                root_layout.setSpacing(10)
+                root_layout.setContentsMargins(10, 8, 10, 8)
+                root_layout.setSpacing(8)
 
                 header_card = QFrame()
                 header_card.setObjectName("header_card")
                 header_layout = QVBoxLayout(header_card)
-                header_layout.setContentsMargins(14, 12, 14, 12)
+                header_layout.setContentsMargins(10, 8, 10, 8)
                 header_layout.setSpacing(6)
 
                 title = QLabel("Codebeamer Upload Studio")
@@ -282,7 +291,7 @@ class MainWindow:
                 subtitle.setObjectName("app_subtitle")
 
                 title_row = QHBoxLayout()
-                title_row.setSpacing(8)
+                title_row.setSpacing(6)
                 title_row.addWidget(title)
                 title_row.addStretch(1)
 
@@ -295,7 +304,7 @@ class MainWindow:
                 header_layout.addWidget(subtitle)
 
                 steps_row = QHBoxLayout()
-                steps_row.setSpacing(8)
+                steps_row.setSpacing(6)
                 self.step_labels = []
                 for step_name in ("설정", "프로젝트", "파일", "상단 구조", "상단 필드", "매핑", "검증", "업로드", "결과"):
                     label = QLabel(step_name)
@@ -315,7 +324,7 @@ class MainWindow:
                 self.stack_card = QFrame()
                 self.stack_card.setObjectName("page_card")
                 stack_layout = QVBoxLayout(self.stack_card)
-                stack_layout.setContentsMargins(8, 8, 8, 8)
+                stack_layout.setContentsMargins(6, 6, 6, 6)
                 stack_layout.setSpacing(0)
                 self.stack = self.qt["QStackedWidget"]()
                 stack_layout.addWidget(self.stack)
@@ -333,8 +342,8 @@ class MainWindow:
                 busy_card = QFrame(self.busy_overlay)
                 busy_card.setObjectName("busy_card")
                 busy_card_layout = QVBoxLayout(busy_card)
-                busy_card_layout.setContentsMargins(22, 20, 22, 18)
-                busy_card_layout.setSpacing(10)
+                busy_card_layout.setContentsMargins(18, 16, 18, 14)
+                busy_card_layout.setSpacing(8)
 
                 busy_title = QLabel("작업 중")
                 busy_title.setObjectName("busy_title")
@@ -366,7 +375,7 @@ class MainWindow:
                 scroll_area.setFrameShape(QFrame.Shape.NoFrame)
                 scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
                 scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-                scroll_area.verticalScrollBar().setSingleStep(24)
+                scroll_area.verticalScrollBar().setSingleStep(20)
                 self.page_scroll_areas[page] = scroll_area
                 return scroll_area
 
@@ -757,21 +766,21 @@ class MainWindow:
                 dialog.setObjectName("alert_dialog")
                 dialog.setWindowTitle(header_text)
                 dialog.setModal(True)
-                dialog.setMinimumWidth(440)
+                dialog.setMinimumWidth(400)
 
                 root_layout = QVBoxLayout(dialog)
-                root_layout.setContentsMargins(14, 14, 14, 14)
+                root_layout.setContentsMargins(10, 10, 10, 10)
                 root_layout.setSpacing(0)
 
                 surface = QFrame(dialog)
                 surface.setObjectName("alert_surface")
                 surface.setProperty("tone", tone)
                 surface_layout = QVBoxLayout(surface)
-                surface_layout.setContentsMargins(20, 18, 20, 18)
-                surface_layout.setSpacing(14)
+                surface_layout.setContentsMargins(16, 14, 16, 14)
+                surface_layout.setSpacing(10)
 
                 header_row = QHBoxLayout()
-                header_row.setSpacing(14)
+                header_row.setSpacing(10)
 
                 badge = QLabel("!" if tone == "error" else "i")
                 badge.setObjectName("alert_badge")
@@ -781,7 +790,7 @@ class MainWindow:
                 header_row.addWidget(badge, 0, Qt.AlignmentFlag.AlignTop)
 
                 copy_layout = QVBoxLayout()
-                copy_layout.setSpacing(6)
+                copy_layout.setSpacing(4)
 
                 title_label = QLabel(header_text)
                 title_label.setObjectName("alert_title")
@@ -801,7 +810,7 @@ class MainWindow:
                     details.setObjectName("alert_details")
                     details.setReadOnly(True)
                     details.setPlainText(detail_text)
-                    details.setFixedHeight(116)
+                    details.setFixedHeight(104)
                     surface_layout.addWidget(details)
 
                 button_row = QHBoxLayout()
@@ -926,7 +935,9 @@ class MainWindow:
                     mapping_context,
                     root_item_config=dict(preset.root_item_config or {}),
                     selected_mapping=dict(preset.selected_mapping or {}),
+                    selected_mapping_modes=dict(preset.selected_mapping_modes or {}),
                     selected_default_values=dict(preset.selected_default_values or {}),
+                    selected_default_value_modes=dict(preset.selected_default_value_modes or {}),
                     selected_tracker_item_settings=dict(preset.selected_tracker_item_settings or {}),
                 )
 
@@ -962,19 +973,29 @@ class MainWindow:
                     )
 
                 selected_mapping: dict[str, str] = {}
+                selected_mapping_modes: dict[str, dict[str, bool]] = {}
                 selected_default_values: dict[str, str] = {}
+                selected_default_value_modes: dict[str, dict[str, bool]] = {}
                 selected_tracker_item_settings: dict[str, dict[str, object]] = {}
                 if callable(getattr(self.mapping_page, "get_selected_mapping", None)):
                     selected_mapping = dict(self.mapping_page.get_selected_mapping() or {})
+                if callable(getattr(self.mapping_page, "get_selected_mapping_modes", None)):
+                    selected_mapping_modes = dict(self.mapping_page.get_selected_mapping_modes() or {})
                 if callable(getattr(self.mapping_page, "get_selected_default_values", None)):
                     selected_default_values = dict(self.mapping_page.get_selected_default_values() or {})
+                if callable(getattr(self.mapping_page, "get_selected_default_value_modes", None)):
+                    selected_default_value_modes = dict(self.mapping_page.get_selected_default_value_modes() or {})
                 if callable(getattr(self.mapping_page, "get_selected_tracker_item_settings", None)):
                     selected_tracker_item_settings = dict(self.mapping_page.get_selected_tracker_item_settings() or {})
 
                 if not selected_mapping and mapping_context is not None:
                     selected_mapping = dict(getattr(mapping_context, "selected_mapping", {}) or {})
+                if not selected_mapping_modes and mapping_context is not None:
+                    selected_mapping_modes = dict(getattr(mapping_context, "selected_mapping_modes", {}) or {})
                 if not selected_default_values and mapping_context is not None:
                     selected_default_values = dict(getattr(mapping_context, "selected_default_values", {}) or {})
+                if not selected_default_value_modes and mapping_context is not None:
+                    selected_default_value_modes = dict(getattr(mapping_context, "selected_default_value_modes", {}) or {})
                 if not selected_tracker_item_settings and mapping_context is not None:
                     selected_tracker_item_settings = dict(getattr(mapping_context, "selected_tracker_item_settings", {}) or {})
 
@@ -983,7 +1004,9 @@ class MainWindow:
                     file_options=file_options,
                     root_item_config=root_item_config,
                     selected_mapping=selected_mapping,
+                    selected_mapping_modes=selected_mapping_modes,
                     selected_default_values=selected_default_values,
+                    selected_default_value_modes=selected_default_value_modes,
                     selected_tracker_item_settings=selected_tracker_item_settings,
                 )
 
@@ -1018,11 +1041,14 @@ class MainWindow:
                     self.root_item_structure_page.load_context(preview_context)
                     self.root_item_field_page.load_context(preview_context)
                     self.mapping_page.load_context(
+                        self.session_state.mapping_context.upload_mode,
                         self.session_state.mapping_context.upload_columns,
                         self.session_state.mapping_context.schema_df,
                         self.session_state.mapping_context.selected_mapping,
+                        self.session_state.mapping_context.selected_mapping_modes,
                         self.session_state.mapping_context.default_value_candidates,
                         self.session_state.mapping_context.selected_default_values,
+                        self.session_state.mapping_context.selected_default_value_modes,
                         self.session_state.mapping_context.selected_tracker_item_settings,
                         self.session_state.mapping_context.wizard.state.upload_df,
                     )
@@ -1093,10 +1119,8 @@ class MainWindow:
                     self.upload_page.status_label.setText("테스트 모드에서는 Dry Run만 실행할 수 있습니다.")
                 else:
                     self.upload_page.dry_run_checkbox.setEnabled(True)
-                    action_label = (
-                        "업데이트"
-                        if normalize_gui_upload_mode(getattr(self.session_state.settings, "upload_mode", None)) == GUI_UPLOAD_MODE_UPDATE
-                        else "업로드"
+                    action_label = gui_upload_mode_action_label(
+                        getattr(self.session_state.settings, "upload_mode", None)
                     )
                     self.upload_page.status_label.setText(f"{action_label} 준비 완료")
                 self._show_page(self.upload_page)
@@ -1144,11 +1168,14 @@ class MainWindow:
                         next_handler=self._enter_validation_page,
                     )
                     self.mapping_page.load_context(
+                        self.session_state.mapping_context.upload_mode,
                         self.session_state.mapping_context.upload_columns,
                         self.session_state.mapping_context.schema_df,
                         self.session_state.mapping_context.selected_mapping,
+                        self.session_state.mapping_context.selected_mapping_modes,
                         self.session_state.mapping_context.default_value_candidates,
                         self.session_state.mapping_context.selected_default_values,
+                        self.session_state.mapping_context.selected_default_value_modes,
                         self.session_state.mapping_context.selected_tracker_item_settings,
                         self.session_state.mapping_context.wizard.state.upload_df,
                     )
@@ -1198,11 +1225,14 @@ class MainWindow:
                     raise ValueError("매핑 컨텍스트가 준비되지 않았습니다.")
                 self.session_state.mapping_context.root_item_config = self.root_item_field_page.get_config()
                 self.mapping_page.load_context(
+                    self.session_state.mapping_context.upload_mode,
                     self.session_state.mapping_context.upload_columns,
                     self.session_state.mapping_context.schema_df,
                     self.session_state.mapping_context.selected_mapping,
+                    self.session_state.mapping_context.selected_mapping_modes,
                     self.session_state.mapping_context.default_value_candidates,
                     self.session_state.mapping_context.selected_default_values,
+                    self.session_state.mapping_context.selected_default_value_modes,
                     self.session_state.mapping_context.selected_tracker_item_settings,
                     self.session_state.mapping_context.wizard.state.upload_df,
                 )
@@ -1211,7 +1241,9 @@ class MainWindow:
             def _validate_mapping(
                 self,
                 selected_mapping: dict[str, str],
+                selected_mapping_modes: dict[str, dict[str, bool]],
                 selected_default_values: dict[str, str],
+                selected_default_value_modes: dict[str, dict[str, bool]],
                 selected_tracker_item_settings: dict[str, dict[str, object]],
             ) -> None:
                 if self.session_state.mapping_context is None:
@@ -1223,6 +1255,8 @@ class MainWindow:
                     selected_mapping,
                     selected_default_values,
                     selected_tracker_item_settings,
+                    selected_mapping_modes=selected_mapping_modes,
+                    selected_default_value_modes=selected_default_value_modes,
                 )
                 self.session_state.validation_context = validation_context
                 self.validation_page.set_results(
@@ -1246,6 +1280,14 @@ class MainWindow:
                 self.upload_failed_count = 0
                 self.upload_retry_count = 0
                 self.upload_total_count = 0
+                self.upload_phase_totals = {"insert": 0, "update": 0}
+                self.upload_phase_counts = {
+                    "insert_success": 0,
+                    "insert_failed": 0,
+                    "update_success": 0,
+                    "update_failed": 0,
+                }
+                self.upload_current_phase = ""
                 self._upload_progress_current = 0
                 self._upload_progress_total = 0
                 self._upload_event_started_at = {}
@@ -1266,10 +1308,8 @@ class MainWindow:
                 self.upload_page.start_button.setEnabled(False)
                 self.upload_page.pause_button.setEnabled(True)
                 self.upload_page.cancel_button.setEnabled(True)
-                action_label = (
-                    "업데이트"
-                    if normalize_gui_upload_mode(getattr(self.session_state.settings, "upload_mode", None)) == GUI_UPLOAD_MODE_UPDATE
-                    else "업로드"
+                action_label = gui_upload_mode_action_label(
+                    getattr(self.session_state.settings, "upload_mode", None)
                 )
                 self.upload_page.status_label.setText(f"{action_label} 실행 중")
                 self.upload_worker.start()
@@ -1316,6 +1356,29 @@ class MainWindow:
                     return upload_name[len(prefix):].strip() or upload_name
                 return upload_name or "-"
 
+            @staticmethod
+            def _normalize_phase_key(phase: object) -> str:
+                normalized = str(phase or "").strip().lower()
+                if normalized == "create":
+                    return "insert"
+                return normalized
+
+            @classmethod
+            def _phase_display_name(cls, phase: object) -> str:
+                phase_key = cls._normalize_phase_key(phase)
+                if phase_key == "insert":
+                    return "생성"
+                if phase_key == "update":
+                    return "수정"
+                return "-"
+
+            @staticmethod
+            def _count_phase_rows(df, phase: str) -> int:
+                if df is None or getattr(df, "empty", True) or "phase" not in df.columns:
+                    return 0
+                phase_series = df["phase"].fillna("").astype(str).str.lower()
+                return int(phase_series.eq(phase).sum())
+
             def _append_timestamped_log(self, message: str) -> None:
                 text = str(message or "").strip()
                 if not text:
@@ -1329,6 +1392,18 @@ class MainWindow:
                 completed_count = self.upload_success_count + self.upload_failed_count
                 self.upload_page.total_label.setText(
                     f"총 대상 {self.upload_total_count}건 / 완료 {completed_count}건"
+                )
+                self.upload_page.phase_total_label.setText(
+                    "단계별 총 대상: "
+                    f"생성 {int(self.upload_phase_totals.get('insert', 0))}건 / "
+                    f"수정 {int(self.upload_phase_totals.get('update', 0))}건"
+                )
+                self.upload_page.phase_counter_label.setText(
+                    "단계별 결과: "
+                    f"생성 성공 {int(self.upload_phase_counts.get('insert_success', 0))} / "
+                    f"실패 {int(self.upload_phase_counts.get('insert_failed', 0))} | "
+                    f"수정 성공 {int(self.upload_phase_counts.get('update_success', 0))} / "
+                    f"실패 {int(self.upload_phase_counts.get('update_failed', 0))}"
                 )
 
             def _update_upload_progress_widgets(self) -> None:
@@ -1375,22 +1450,51 @@ class MainWindow:
 
                 if event_type == "batch_total":
                     self.upload_total_count = int(event.get("total") or 0)
+                    phase_totals = event.get("phase_totals") or {}
+                    self.upload_phase_totals = {
+                        "insert": int(phase_totals.get("insert") or 0),
+                        "update": int(phase_totals.get("update") or 0),
+                    }
                     self._upload_progress_total = self.upload_total_count
                     self._update_upload_progress_widgets()
                     self._update_upload_counter()
                     self._append_timestamped_log(f"총 업로드 예정 건수: {self.upload_total_count}")
                     return
 
+                if event_type == "phase_started":
+                    self.upload_current_phase = self._normalize_phase_key(event.get("phase"))
+                    phase_name = self._phase_display_name(self.upload_current_phase)
+                    total = int(event.get("total") or 0)
+                    self.upload_page.phase_label.setText(f"현재 단계: {phase_name} ({total}건)")
+                    self.upload_page.status_label.setText(f"{phase_name} 단계 실행 중")
+                    self._append_timestamped_log(f"{phase_name} 단계 시작 | 대상 {total}건")
+                    return
+
+                if event_type == "phase_finished":
+                    phase_key = self._normalize_phase_key(event.get("phase"))
+                    phase_name = self._phase_display_name(phase_key)
+                    success_count = int(event.get("success") or 0)
+                    failed_count = int(event.get("failed") or 0)
+                    unresolved_count = int(event.get("unresolved") or 0)
+                    self._append_timestamped_log(
+                        f"{phase_name} 단계 완료 | 성공 {success_count} / 실패 {failed_count} / 미해결 {unresolved_count}"
+                    )
+                    if self.upload_current_phase == phase_key:
+                        self.upload_page.phase_label.setText(f"현재 단계: {phase_name} 완료")
+                    return
+
                 if event_type == "row_started":
                     started_at = time.perf_counter()
                     self._upload_event_started_at[row_key] = started_at
+                    phase_name = self._phase_display_name(event.get("phase"))
                     self.upload_page.record_activity_started(
                         row_key,
                         file_label,
+                        phase_name,
                         item_name,
                         self._format_clock(),
                     )
-                    self._append_timestamped_log(f"시작 | {raw_item_name}")
+                    self._append_timestamped_log(f"{phase_name} 시작 | {raw_item_name}")
                     return
 
                 if event_type not in {"row_success", "row_failed"}:
@@ -1400,21 +1504,35 @@ class MainWindow:
                 elapsed = None if started_at is None else (time.perf_counter() - started_at)
                 if event_type == "row_success":
                     self.upload_success_count += 1
+                    phase_key = self._normalize_phase_key(event.get("phase"))
+                    if phase_key == "insert":
+                        self.upload_phase_counts["insert_success"] += 1
+                    elif phase_key == "update":
+                        self.upload_phase_counts["update_success"] += 1
                     status_text = "성공"
                     if not message:
                         message = "업로드 완료"
                 else:
                     self.upload_failed_count += 1
+                    phase_key = self._normalize_phase_key(event.get("phase"))
+                    if phase_key == "insert":
+                        self.upload_phase_counts["insert_failed"] += 1
+                    elif phase_key == "update":
+                        self.upload_phase_counts["update_failed"] += 1
                     status_text = "실패"
                     if not message:
                         message = "업로드 실패"
                     response_json = event.get("response_json")
                     if response_json not in (None, ""):
                         self.upload_page.response_view.setPlainText(str(response_json))
+                        if hasattr(self.upload_page, "detail_tabs") and hasattr(self.upload_page, "response_tab"):
+                            self.upload_page.detail_tabs.setCurrentWidget(self.upload_page.response_tab)
+                phase_name = self._phase_display_name(event.get("phase"))
 
                 self.upload_page.record_activity_finished(
                     row_key,
                     file_label,
+                    phase_name,
                     item_name,
                     status=status_text,
                     finished_at=self._format_clock(),
@@ -1423,13 +1541,17 @@ class MainWindow:
                 )
                 self._update_upload_counter()
                 self._update_upload_time_label()
-                self._append_timestamped_log(f"{status_text} | {message}")
+                self._append_timestamped_log(f"{phase_name} {status_text} | {message}")
 
             def _on_upload_progress(self, current: int, total: int, upload_name: str) -> None:
                 self._upload_progress_current = max(int(current), 0)
                 self._upload_progress_total = max(int(total), 0)
                 self._update_upload_progress_widgets()
-                self.upload_page.current_label.setText(f"현재 항목: {upload_name or '-'}")
+                phase_name = self._phase_display_name(self.upload_current_phase)
+                if phase_name != "-":
+                    self.upload_page.current_label.setText(f"현재 항목: [{phase_name}] {upload_name or '-'}")
+                else:
+                    self.upload_page.current_label.setText(f"현재 항목: {upload_name or '-'}")
                 self._update_upload_time_label()
 
             def _on_upload_finished(self, result: dict) -> None:
@@ -1440,15 +1562,35 @@ class MainWindow:
                 unresolved_df = result.get("unresolved_df")
                 self.upload_success_count = 0 if success_df is None else len(success_df)
                 self.upload_failed_count = 0 if failed_df is None else len(failed_df)
+                phase_results = result.get("phase_results") or {}
+                self.upload_phase_totals = {
+                    "insert": int((phase_results.get("insert") or {}).get("total", self.upload_phase_totals.get("insert", 0)) or 0),
+                    "update": int((phase_results.get("update") or {}).get("total", self.upload_phase_totals.get("update", 0)) or 0),
+                }
+                self.upload_phase_counts = {
+                    "insert_success": int((phase_results.get("insert") or {}).get("success", self._count_phase_rows(success_df, "insert")) or 0),
+                    "insert_failed": int(
+                        ((phase_results.get("insert") or {}).get("failed", 0) or 0)
+                        + self._count_phase_rows(unresolved_df, "insert")
+                    ),
+                    "update_success": int((phase_results.get("update") or {}).get("success", self._count_phase_rows(success_df, "update")) or 0),
+                    "update_failed": int(
+                        ((phase_results.get("update") or {}).get("failed", 0) or 0)
+                        + self._count_phase_rows(unresolved_df, "update")
+                    ),
+                }
                 self._upload_progress_current = self.upload_success_count + self.upload_failed_count
                 self._update_upload_progress_widgets()
                 self._update_upload_counter()
                 if failed_df is not None and not getattr(failed_df, "empty", True) and "error_response_json" in failed_df.columns:
                     self.upload_page.response_view.setPlainText(str(failed_df.iloc[0].get("error_response_json") or ""))
+                    if hasattr(self.upload_page, "detail_tabs") and hasattr(self.upload_page, "response_tab"):
+                        self.upload_page.detail_tabs.setCurrentWidget(self.upload_page.response_tab)
                 self._update_upload_time_label()
                 self.upload_page.eta_label.setText(f"예상 종료: 완료됨 ({self._format_clock()})")
                 self._append_timestamped_log("배치 업로드가 완료되었습니다.")
                 self.upload_page.status_label.setText("업로드 완료")
+                self.upload_page.phase_label.setText("현재 단계: 완료")
                 self.upload_page.start_button.setEnabled(True)
                 self.upload_page.pause_button.setEnabled(False)
                 self.upload_page.resume_button.setEnabled(False)

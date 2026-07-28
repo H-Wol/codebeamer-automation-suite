@@ -17,13 +17,37 @@ KEY_FILE_NAME = "gui_settings.key"
 WORKFLOW_PRESET_FILE_NAME = "gui_workflow_preset.json"
 GUI_UPLOAD_MODE_CREATE = "create"
 GUI_UPLOAD_MODE_UPDATE = "update"
+GUI_UPLOAD_MODE_UPSERT = "upsert"
 
 
 def normalize_gui_upload_mode(upload_mode: str | None) -> str:
     normalized = str(upload_mode or "").strip().lower()
-    if normalized in {GUI_UPLOAD_MODE_CREATE, GUI_UPLOAD_MODE_UPDATE}:
+    if normalized in {GUI_UPLOAD_MODE_CREATE, GUI_UPLOAD_MODE_UPDATE, GUI_UPLOAD_MODE_UPSERT}:
         return normalized
     return GUI_UPLOAD_MODE_CREATE
+
+
+def gui_upload_mode_supports_create(upload_mode: str | None) -> bool:
+    normalized = normalize_gui_upload_mode(upload_mode)
+    return normalized in {GUI_UPLOAD_MODE_CREATE, GUI_UPLOAD_MODE_UPSERT}
+
+
+def gui_upload_mode_supports_update(upload_mode: str | None) -> bool:
+    normalized = normalize_gui_upload_mode(upload_mode)
+    return normalized in {GUI_UPLOAD_MODE_UPDATE, GUI_UPLOAD_MODE_UPSERT}
+
+
+def gui_upload_mode_allows_root_items(upload_mode: str | None) -> bool:
+    return normalize_gui_upload_mode(upload_mode) in {GUI_UPLOAD_MODE_CREATE, GUI_UPLOAD_MODE_UPSERT}
+
+
+def gui_upload_mode_action_label(upload_mode: str | None) -> str:
+    normalized = normalize_gui_upload_mode(upload_mode)
+    if normalized == GUI_UPLOAD_MODE_UPDATE:
+        return "업데이트"
+    if normalized == GUI_UPLOAD_MODE_UPSERT:
+        return "혼합 처리"
+    return "업로드"
 
 
 @dataclass
@@ -59,7 +83,9 @@ class GuiWorkflowPreset:
     file_options: dict[str, Any] = field(default_factory=dict)
     root_item_config: dict[str, Any] = field(default_factory=dict)
     selected_mapping: dict[str, str] = field(default_factory=dict)
+    selected_mapping_modes: dict[str, dict[str, bool]] = field(default_factory=dict)
     selected_default_values: dict[str, str] = field(default_factory=dict)
+    selected_default_value_modes: dict[str, dict[str, bool]] = field(default_factory=dict)
     selected_tracker_item_settings: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
@@ -104,10 +130,20 @@ class GuiSettingsStore:
                 for key, value in self._dict_payload(payload.get("selected_mapping")).items()
                 if str(key).strip() and str(value).strip()
             },
+            selected_mapping_modes={
+                str(key): self._operation_scope_payload(value)
+                for key, value in self._dict_payload(payload.get("selected_mapping_modes")).items()
+                if str(key).strip() and isinstance(value, dict)
+            },
             selected_default_values={
                 str(key): str(value)
                 for key, value in self._dict_payload(payload.get("selected_default_values")).items()
                 if str(key).strip() and str(value).strip()
+            },
+            selected_default_value_modes={
+                str(key): self._operation_scope_payload(value)
+                for key, value in self._dict_payload(payload.get("selected_default_value_modes")).items()
+                if str(key).strip() and isinstance(value, dict)
             },
             selected_tracker_item_settings={
                 str(key): dict(value)
@@ -128,10 +164,20 @@ class GuiSettingsStore:
                 for key, value in dict(preset.selected_mapping or {}).items()
                 if str(key).strip() and str(value).strip()
             },
+            "selected_mapping_modes": {
+                str(key): self._operation_scope_payload(value)
+                for key, value in dict(preset.selected_mapping_modes or {}).items()
+                if str(key).strip() and isinstance(value, dict)
+            },
             "selected_default_values": {
                 str(key): str(value)
                 for key, value in dict(preset.selected_default_values or {}).items()
                 if str(key).strip() and str(value).strip()
+            },
+            "selected_default_value_modes": {
+                str(key): self._operation_scope_payload(value)
+                for key, value in dict(preset.selected_default_value_modes or {}).items()
+                if str(key).strip() and isinstance(value, dict)
             },
             "selected_tracker_item_settings": {
                 str(key): dict(value)
@@ -147,6 +193,14 @@ class GuiSettingsStore:
     @staticmethod
     def _dict_payload(value: Any) -> dict[str, Any]:
         return dict(value) if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _operation_scope_payload(value: Any) -> dict[str, bool]:
+        payload = dict(value) if isinstance(value, dict) else {}
+        return {
+            "create": bool(payload.get("create", False)),
+            "update": bool(payload.get("update", False)),
+        }
 
     def _settings_payload(self, settings: GuiSettings) -> dict[str, Any]:
         payload = asdict(settings)

@@ -8,6 +8,7 @@ from pathlib import Path
 from src.gui.settings_store import GuiSettings
 from src.gui.settings_store import GuiSettingsStore
 from src.gui.settings_store import GuiWorkflowPreset
+from src.gui.settings_store import GUI_UPLOAD_MODE_UPSERT
 from src.gui.settings_store import GUI_UPLOAD_MODE_UPDATE
 from src.gui.styles import DEFAULT_GUI_THEME
 
@@ -114,7 +115,14 @@ class GuiSettingsStoreTest(unittest.TestCase):
                     },
                 },
                 selected_mapping={"Summary": "Summary", "담당자": "담당자"},
+                selected_mapping_modes={
+                    "Summary": {"create": True, "update": True},
+                    "담당자": {"create": True, "update": False},
+                },
                 selected_default_values={"담당자": "홍길동"},
+                selected_default_value_modes={
+                    "담당자": {"create": False, "update": True},
+                },
                 selected_tracker_item_settings={
                     "연관 요구사항": {
                         "mode": "query",
@@ -142,7 +150,10 @@ class GuiSettingsStoreTest(unittest.TestCase):
             self.assertFalse(loaded.root_item_config["enabled"])
             self.assertEqual(loaded.root_item_config["regex_pattern"], r"^(?P<name>.+)$")
             self.assertEqual(loaded.selected_mapping["담당자"], "담당자")
+            self.assertEqual(loaded.selected_mapping_modes["Summary"], {"create": True, "update": True})
+            self.assertEqual(loaded.selected_mapping_modes["담당자"], {"create": True, "update": False})
             self.assertEqual(loaded.selected_default_values["담당자"], "홍길동")
+            self.assertEqual(loaded.selected_default_value_modes["담당자"], {"create": False, "update": True})
             self.assertEqual(
                 loaded.selected_tracker_item_settings["연관 요구사항"]["source_tracker_ids"],
                 [13526611],
@@ -177,3 +188,16 @@ class GuiSettingsStoreTest(unittest.TestCase):
             loaded = store.load()
 
             self.assertEqual(loaded.upload_mode, "create")
+
+    def test_load_preserves_upsert_upload_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = GuiSettingsStore(Path(tmp_dir))
+            store.root_dir.mkdir(parents=True, exist_ok=True)
+            store.settings_path.write_text(
+                json.dumps({"upload_mode": GUI_UPLOAD_MODE_UPSERT, "password_encrypted": ""}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            loaded = store.load()
+
+            self.assertEqual(loaded.upload_mode, GUI_UPLOAD_MODE_UPSERT)
