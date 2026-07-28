@@ -1027,7 +1027,9 @@ class CodebeamerUploadWizard:
         self,
         selected_mapping: dict[str, str],
         selected_option_mapping: dict[str, str] | None = None,
+        selected_mapping_modes: dict[str, dict[str, bool]] | None = None,
         selected_default_values: dict[str, Any] | None = None,
+        selected_default_value_modes: dict[str, dict[str, bool]] | None = None,
         selected_tracker_item_settings: dict[str, dict[str, Any]] | None = None,
     ) -> tuple[dict[str, str], pd.DataFrame]:
         """옵션/참조형 필드를 찾아 lookup과 검증을 한 번에 수행한다."""
@@ -1038,13 +1040,38 @@ class CodebeamerUploadWizard:
 
         option_fields = self.mapper.get_option_field_candidates(self.state.schema_df)
         self.state.option_candidates_df = option_fields
+        upload_mode = self._normalize_upload_mode(self.state.upload_mode)
+        normalized_mapping_modes = {
+            str(df_column).strip(): self._normalize_operation_scope(
+                (selected_mapping_modes or {}).get(str(df_column).strip()),
+                upload_mode=upload_mode,
+            )
+            for df_column in selected_mapping.keys()
+            if str(df_column).strip()
+        }
+        self.state.selected_mapping_modes = normalized_mapping_modes
+
+        effective_selected_mapping = {
+            excel_col: schema_field
+            for excel_col, schema_field in selected_mapping.items()
+            if self._scope_applies_to_upload_mode(
+                normalized_mapping_modes.get(str(excel_col).strip()),
+                upload_mode,
+            )
+        }
 
         if selected_option_mapping is None:
             selected_option_mapping = {}
             option_field_names = set(option_fields["field_name"].dropna().astype(str))
-            for excel_col, schema_field in selected_mapping.items():
+            for excel_col, schema_field in effective_selected_mapping.items():
                 if schema_field in option_field_names:
                     selected_option_mapping[excel_col] = schema_field
+        else:
+            selected_option_mapping = {
+                excel_col: schema_field
+                for excel_col, schema_field in selected_option_mapping.items()
+                if excel_col in effective_selected_mapping
+            }
 
         normalized_default_values: dict[str, Any] = {}
         for schema_field, raw_value in (selected_default_values or {}).items():
@@ -1053,6 +1080,22 @@ class CodebeamerUploadWizard:
             normalized_default_values[str(schema_field).strip()] = raw_value
 
         self.state.selected_default_values = normalized_default_values
+        normalized_default_value_modes = {
+            schema_field: self._normalize_operation_scope(
+                (selected_default_value_modes or {}).get(schema_field),
+                upload_mode=upload_mode,
+            )
+            for schema_field in normalized_default_values.keys()
+        }
+        self.state.selected_default_value_modes = normalized_default_value_modes
+        effective_default_values = {
+            schema_field: raw_value
+            for schema_field, raw_value in normalized_default_values.items()
+            if self._scope_applies_to_upload_mode(
+                normalized_default_value_modes.get(schema_field),
+                upload_mode,
+            )
+        }
         if selected_tracker_item_settings is not None:
             self.state.selected_tracker_item_settings = {
                 str(schema_field).strip(): dict(setting)
@@ -1061,7 +1104,7 @@ class CodebeamerUploadWizard:
             }
         self.state.resolved_default_values = {}
 
-        if not selected_option_mapping and not normalized_default_values:
+        if not selected_option_mapping and not effective_default_values:
             self.state.selected_option_mapping = {}
             self.state.option_maps = {}
             self.state.option_check_df = pd.DataFrame()
@@ -1101,7 +1144,7 @@ class CodebeamerUploadWizard:
             )
 
         default_value_check_df, resolved_default_values = self._resolve_default_field_values(
-            normalized_default_values,
+            effective_default_values,
             option_maps,
         )
         self.state.resolved_default_values = resolved_default_values
@@ -1806,6 +1849,7 @@ class CodebeamerUploadWizard:
         item: TrackerItemBase,
         *,
         row_id: int,
+        operation: str,
         applied_schema_fields: set[str],
     ) -> None:
         """행 값이 없는 필드에 공통 기본값을 보충한다."""
@@ -1816,6 +1860,12 @@ class CodebeamerUploadWizard:
             if schema_field in applied_schema_fields:
                 continue
             if not self._has_configured_value(raw_value):
+                continue
+            if not self._scope_applies_to_operation(
+                self.state.selected_default_value_modes.get(schema_field),
+                operation,
+                upload_mode=self.state.upload_mode,
+            ):
                 continue
 
             matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
@@ -1921,6 +1971,7 @@ class CodebeamerUploadWizard:
         row_id: int,
         *,
         default_name: str | None,
+        operation: str,
     ) -> TrackerItemBase:
         """행 값과 기본값을 반영한 TrackerItem 조립 결과를 만든다."""
         item = TrackerItemBase()
@@ -1929,6 +1980,12 @@ class CodebeamerUploadWizard:
         applied_schema_fields: set[str] = set()
 
         for df_col, schema_field in self.state.selected_mapping.items():
+            if not self._scope_applies_to_operation(
+                self.state.selected_mapping_modes.get(df_col),
+                operation,
+                upload_mode=self.state.upload_mode,
+            ):
+                continue
             matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
             if matched.empty:
                 continue
@@ -1970,6 +2027,7 @@ class CodebeamerUploadWizard:
         self._apply_default_field_values(
             item,
             row_id=row_id,
+            operation=operation,
             applied_schema_fields=applied_schema_fields,
         )
         table_custom_fields = self._build_table_custom_fields(row)
@@ -1979,12 +2037,13 @@ class CodebeamerUploadWizard:
 
         return item
 
-    def _build_row_payload(self, row: pd.Series, row_id: int) -> dict[str, Any]:
+    def _build_row_payload(self, row: pd.Series, row_id: int, *, operation: str = "create") -> dict[str, Any]:
         """단일 생성 행에서 순수 item payload만 계산한다."""
         item = self._build_row_item(
             row,
             row_id,
             default_name=str(row.get("upload_name", "")),
+            operation=operation,
         )
         payload = item.create_new_item_payload()
         return self._serialize_payload_value(payload)
@@ -2015,6 +2074,47 @@ class CodebeamerUploadWizard:
     def _upload_mode_supports_update(cls, upload_mode: Any) -> bool:
         """현재 모드가 기존 item ID 기반 수정 경로를 포함하는지 돌려준다."""
         return cls._normalize_upload_mode(upload_mode) in {"update", "upsert"}
+
+    @classmethod
+    def _default_operation_scope(cls, upload_mode: Any) -> dict[str, bool]:
+        normalized_mode = cls._normalize_upload_mode(upload_mode)
+        if normalized_mode == "update":
+            return {"create": False, "update": True}
+        if normalized_mode == "upsert":
+            return {"create": True, "update": True}
+        return {"create": True, "update": False}
+
+    @classmethod
+    def _normalize_operation_scope(
+        cls,
+        raw_scope: Any,
+        *,
+        upload_mode: Any,
+    ) -> dict[str, bool]:
+        default_scope = cls._default_operation_scope(upload_mode)
+        scope_payload = dict(raw_scope) if isinstance(raw_scope, dict) else {}
+        return {
+            "create": bool(scope_payload.get("create", default_scope["create"])),
+            "update": bool(scope_payload.get("update", default_scope["update"])),
+        }
+
+    @classmethod
+    def _scope_applies_to_operation(cls, raw_scope: Any, operation: str, *, upload_mode: Any) -> bool:
+        scope = cls._normalize_operation_scope(raw_scope, upload_mode=upload_mode)
+        normalized_operation = str(operation or "create").strip().lower()
+        if normalized_operation == "update":
+            return bool(scope.get("update", False))
+        return bool(scope.get("create", False))
+
+    @classmethod
+    def _scope_applies_to_upload_mode(cls, raw_scope: Any, upload_mode: Any) -> bool:
+        normalized_mode = cls._normalize_upload_mode(upload_mode)
+        scope = cls._normalize_operation_scope(raw_scope, upload_mode=upload_mode)
+        if normalized_mode == "update":
+            return bool(scope.get("update", False))
+        if normalized_mode == "upsert":
+            return bool(scope.get("create", False) or scope.get("update", False))
+        return bool(scope.get("create", False))
 
     @staticmethod
     def _parse_update_item_id(raw_value: Any) -> int:
@@ -2288,6 +2388,7 @@ class CodebeamerUploadWizard:
             row,
             row_id,
             default_name=None,
+            operation="update",
         )
         partial_payload = self._serialize_payload_value(partial_item.to_dict())
 
@@ -2340,6 +2441,7 @@ class CodebeamerUploadWizard:
         self._apply_default_field_values(
             item,
             row_id=-1,
+            operation="create",
             applied_schema_fields=applied_schema_fields,
         )
         return self._serialize_payload_value(item.create_new_item_payload())
@@ -3236,9 +3338,21 @@ class CodebeamerUploadWizard:
             with open(out / "option_maps.json", "w", encoding="utf-8") as file:
                 json.dump(self.state.option_maps, file, ensure_ascii=False, indent=2)
 
+        if self.state.selected_mapping:
+            with open(out / "selected_mapping.json", "w", encoding="utf-8") as file:
+                json.dump(self.state.selected_mapping, file, ensure_ascii=False, indent=2)
+
+        if self.state.selected_mapping_modes:
+            with open(out / "selected_mapping_modes.json", "w", encoding="utf-8") as file:
+                json.dump(self.state.selected_mapping_modes, file, ensure_ascii=False, indent=2)
+
         if self.state.selected_default_values:
             with open(out / "selected_default_values.json", "w", encoding="utf-8") as file:
                 json.dump(self.state.selected_default_values, file, ensure_ascii=False, indent=2)
+
+        if self.state.selected_default_value_modes:
+            with open(out / "selected_default_value_modes.json", "w", encoding="utf-8") as file:
+                json.dump(self.state.selected_default_value_modes, file, ensure_ascii=False, indent=2)
 
         if self.state.resolved_default_values:
             with open(out / "resolved_default_values.json", "w", encoding="utf-8") as file:

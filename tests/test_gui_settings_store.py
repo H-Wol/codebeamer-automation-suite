@@ -115,7 +115,14 @@ class GuiSettingsStoreTest(unittest.TestCase):
                     },
                 },
                 selected_mapping={"Summary": "Summary", "담당자": "담당자"},
+                selected_mapping_modes={
+                    "Summary": {"create": True, "update": True},
+                    "담당자": {"create": True, "update": False},
+                },
                 selected_default_values={"담당자": "홍길동"},
+                selected_default_value_modes={
+                    "담당자": {"create": False, "update": True},
+                },
                 selected_tracker_item_settings={
                     "연관 요구사항": {
                         "mode": "query",
@@ -143,7 +150,10 @@ class GuiSettingsStoreTest(unittest.TestCase):
             self.assertFalse(loaded.root_item_config["enabled"])
             self.assertEqual(loaded.root_item_config["regex_pattern"], r"^(?P<name>.+)$")
             self.assertEqual(loaded.selected_mapping["담당자"], "담당자")
+            self.assertEqual(loaded.selected_mapping_modes["Summary"], {"create": True, "update": True})
+            self.assertEqual(loaded.selected_mapping_modes["담당자"], {"create": True, "update": False})
             self.assertEqual(loaded.selected_default_values["담당자"], "홍길동")
+            self.assertEqual(loaded.selected_default_value_modes["담당자"], {"create": False, "update": True})
             self.assertEqual(
                 loaded.selected_tracker_item_settings["연관 요구사항"]["source_tracker_ids"],
                 [13526611],

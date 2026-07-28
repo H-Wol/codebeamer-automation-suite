@@ -935,7 +935,9 @@ class MainWindow:
                     mapping_context,
                     root_item_config=dict(preset.root_item_config or {}),
                     selected_mapping=dict(preset.selected_mapping or {}),
+                    selected_mapping_modes=dict(preset.selected_mapping_modes or {}),
                     selected_default_values=dict(preset.selected_default_values or {}),
+                    selected_default_value_modes=dict(preset.selected_default_value_modes or {}),
                     selected_tracker_item_settings=dict(preset.selected_tracker_item_settings or {}),
                 )
 
@@ -971,19 +973,29 @@ class MainWindow:
                     )
 
                 selected_mapping: dict[str, str] = {}
+                selected_mapping_modes: dict[str, dict[str, bool]] = {}
                 selected_default_values: dict[str, str] = {}
+                selected_default_value_modes: dict[str, dict[str, bool]] = {}
                 selected_tracker_item_settings: dict[str, dict[str, object]] = {}
                 if callable(getattr(self.mapping_page, "get_selected_mapping", None)):
                     selected_mapping = dict(self.mapping_page.get_selected_mapping() or {})
+                if callable(getattr(self.mapping_page, "get_selected_mapping_modes", None)):
+                    selected_mapping_modes = dict(self.mapping_page.get_selected_mapping_modes() or {})
                 if callable(getattr(self.mapping_page, "get_selected_default_values", None)):
                     selected_default_values = dict(self.mapping_page.get_selected_default_values() or {})
+                if callable(getattr(self.mapping_page, "get_selected_default_value_modes", None)):
+                    selected_default_value_modes = dict(self.mapping_page.get_selected_default_value_modes() or {})
                 if callable(getattr(self.mapping_page, "get_selected_tracker_item_settings", None)):
                     selected_tracker_item_settings = dict(self.mapping_page.get_selected_tracker_item_settings() or {})
 
                 if not selected_mapping and mapping_context is not None:
                     selected_mapping = dict(getattr(mapping_context, "selected_mapping", {}) or {})
+                if not selected_mapping_modes and mapping_context is not None:
+                    selected_mapping_modes = dict(getattr(mapping_context, "selected_mapping_modes", {}) or {})
                 if not selected_default_values and mapping_context is not None:
                     selected_default_values = dict(getattr(mapping_context, "selected_default_values", {}) or {})
+                if not selected_default_value_modes and mapping_context is not None:
+                    selected_default_value_modes = dict(getattr(mapping_context, "selected_default_value_modes", {}) or {})
                 if not selected_tracker_item_settings and mapping_context is not None:
                     selected_tracker_item_settings = dict(getattr(mapping_context, "selected_tracker_item_settings", {}) or {})
 
@@ -992,7 +1004,9 @@ class MainWindow:
                     file_options=file_options,
                     root_item_config=root_item_config,
                     selected_mapping=selected_mapping,
+                    selected_mapping_modes=selected_mapping_modes,
                     selected_default_values=selected_default_values,
+                    selected_default_value_modes=selected_default_value_modes,
                     selected_tracker_item_settings=selected_tracker_item_settings,
                 )
 
@@ -1027,11 +1041,14 @@ class MainWindow:
                     self.root_item_structure_page.load_context(preview_context)
                     self.root_item_field_page.load_context(preview_context)
                     self.mapping_page.load_context(
+                        self.session_state.mapping_context.upload_mode,
                         self.session_state.mapping_context.upload_columns,
                         self.session_state.mapping_context.schema_df,
                         self.session_state.mapping_context.selected_mapping,
+                        self.session_state.mapping_context.selected_mapping_modes,
                         self.session_state.mapping_context.default_value_candidates,
                         self.session_state.mapping_context.selected_default_values,
+                        self.session_state.mapping_context.selected_default_value_modes,
                         self.session_state.mapping_context.selected_tracker_item_settings,
                         self.session_state.mapping_context.wizard.state.upload_df,
                     )
@@ -1151,11 +1168,14 @@ class MainWindow:
                         next_handler=self._enter_validation_page,
                     )
                     self.mapping_page.load_context(
+                        self.session_state.mapping_context.upload_mode,
                         self.session_state.mapping_context.upload_columns,
                         self.session_state.mapping_context.schema_df,
                         self.session_state.mapping_context.selected_mapping,
+                        self.session_state.mapping_context.selected_mapping_modes,
                         self.session_state.mapping_context.default_value_candidates,
                         self.session_state.mapping_context.selected_default_values,
+                        self.session_state.mapping_context.selected_default_value_modes,
                         self.session_state.mapping_context.selected_tracker_item_settings,
                         self.session_state.mapping_context.wizard.state.upload_df,
                     )
@@ -1205,11 +1225,14 @@ class MainWindow:
                     raise ValueError("매핑 컨텍스트가 준비되지 않았습니다.")
                 self.session_state.mapping_context.root_item_config = self.root_item_field_page.get_config()
                 self.mapping_page.load_context(
+                    self.session_state.mapping_context.upload_mode,
                     self.session_state.mapping_context.upload_columns,
                     self.session_state.mapping_context.schema_df,
                     self.session_state.mapping_context.selected_mapping,
+                    self.session_state.mapping_context.selected_mapping_modes,
                     self.session_state.mapping_context.default_value_candidates,
                     self.session_state.mapping_context.selected_default_values,
+                    self.session_state.mapping_context.selected_default_value_modes,
                     self.session_state.mapping_context.selected_tracker_item_settings,
                     self.session_state.mapping_context.wizard.state.upload_df,
                 )
@@ -1218,7 +1241,9 @@ class MainWindow:
             def _validate_mapping(
                 self,
                 selected_mapping: dict[str, str],
+                selected_mapping_modes: dict[str, dict[str, bool]],
                 selected_default_values: dict[str, str],
+                selected_default_value_modes: dict[str, dict[str, bool]],
                 selected_tracker_item_settings: dict[str, dict[str, object]],
             ) -> None:
                 if self.session_state.mapping_context is None:
@@ -1230,6 +1255,8 @@ class MainWindow:
                     selected_mapping,
                     selected_default_values,
                     selected_tracker_item_settings,
+                    selected_mapping_modes=selected_mapping_modes,
+                    selected_default_value_modes=selected_default_value_modes,
                 )
                 self.session_state.validation_context = validation_context
                 self.validation_page.set_results(

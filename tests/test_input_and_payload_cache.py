@@ -79,9 +79,9 @@ class CountingWizard(CodebeamerUploadWizard):
         super().__init__(*args, **kwargs)
         self.payload_build_calls = 0
 
-    def _build_row_payload(self, row: pd.Series, row_id: int) -> dict[str, Any]:
+    def _build_row_payload(self, row: pd.Series, row_id: int, *, operation: str = "create") -> dict[str, Any]:
         self.payload_build_calls += 1
-        return super()._build_row_payload(row, row_id)
+        return super()._build_row_payload(row, row_id, operation=operation)
 
 
 class HierarchyProcessorSplitTest(unittest.TestCase):
@@ -356,6 +356,75 @@ class PayloadCacheWizardTest(unittest.TestCase):
         self.assertEqual(payload_df["_operation"].tolist(), ["create", "update"])
         self.assertEqual(payload_df["payload_status"].tolist(), [PayloadStatus.READY.value, PayloadStatus.FAILED.value])
         self.assertIn("UPSERT_UPDATE_WITH_NEW_ANCESTOR", str(payload_df.iloc[1]["payload_error"]))
+
+    def test_upsert_can_split_create_and_update_field_usage(self) -> None:
+        schema = [
+            {
+                "id": 1,
+                "name": "Summary",
+                "type": "TextField",
+                "trackerItemField": "name",
+                "valueModel": "TextFieldValue",
+            },
+            {
+                "id": 2,
+                "name": "설명",
+                "type": "TextField",
+                "trackerItemField": "description",
+                "valueModel": "TextFieldValue",
+            },
+            {
+                "id": 3,
+                "name": "비고",
+                "type": "TextField",
+                "valueModel": "TextFieldValue",
+            },
+        ]
+        client = UpsertSchemaClient(schema)
+        wizard = CountingWizard(
+            client=client,
+            processor=HierarchyProcessor(summary_col="요약"),
+            mapper=self.mapper,
+        )
+        wizard.select_project(1)
+        wizard.select_tracker(2)
+        wizard.state.upload_mode = "upsert"
+        raw_df = pd.DataFrame([
+            {"id": None, "요약": "Create Row", "생성설명": "생성 설명", "수정비고": "생성 비고", "_excel_row": 2, "_summary_indent": 0},
+            {"id": 101, "요약": "Update Row", "생성설명": "수정 설명", "수정비고": "수정 비고", "_excel_row": 3, "_summary_indent": 0},
+        ], dtype=object)
+        wizard.load_raw_dataframe(raw_df, list_cols=[])
+        wizard.load_schema_and_compare({
+            "요약": "Summary",
+            "생성설명": "설명",
+            "수정비고": "비고",
+        })
+        wizard.process_option_mapping(
+            {
+                "요약": "Summary",
+                "생성설명": "설명",
+                "수정비고": "비고",
+            },
+            selected_mapping_modes={
+                "요약": {"create": True, "update": True},
+                "생성설명": {"create": True, "update": False},
+                "수정비고": {"create": False, "update": True},
+            },
+        )
+
+        upload_result = wizard.upsert_items(dry_run=False)
+
+        self.assertEqual(client.create_item_calls[0]["payload"]["name"], "Create Row")
+        self.assertEqual(client.create_item_calls[0]["payload"]["description"], "생성 설명")
+        self.assertNotIn("customFields", client.create_item_calls[0]["payload"])
+        self.assertEqual(client.update_item_calls[0][0], 101)
+        self.assertEqual(client.update_item_calls[0][1]["name"], "Update Row")
+        self.assertEqual(client.update_item_calls[0][1].get("description"), None)
+        self.assertEqual(
+            client.update_item_calls[0][1]["customFields"],
+            [{"fieldId": 3, "name": "비고", "type": "TextFieldValue", "value": "수정 비고"}],
+        )
+        self.assertEqual(len(upload_result["success_df"]), 2)
 
     def test_upload_root_field_values_can_apply_static_option_field(self) -> None:
         schema = [

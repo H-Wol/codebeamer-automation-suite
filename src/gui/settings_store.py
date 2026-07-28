@@ -83,7 +83,9 @@ class GuiWorkflowPreset:
     file_options: dict[str, Any] = field(default_factory=dict)
     root_item_config: dict[str, Any] = field(default_factory=dict)
     selected_mapping: dict[str, str] = field(default_factory=dict)
+    selected_mapping_modes: dict[str, dict[str, bool]] = field(default_factory=dict)
     selected_default_values: dict[str, str] = field(default_factory=dict)
+    selected_default_value_modes: dict[str, dict[str, bool]] = field(default_factory=dict)
     selected_tracker_item_settings: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
@@ -128,10 +130,20 @@ class GuiSettingsStore:
                 for key, value in self._dict_payload(payload.get("selected_mapping")).items()
                 if str(key).strip() and str(value).strip()
             },
+            selected_mapping_modes={
+                str(key): self._operation_scope_payload(value)
+                for key, value in self._dict_payload(payload.get("selected_mapping_modes")).items()
+                if str(key).strip() and isinstance(value, dict)
+            },
             selected_default_values={
                 str(key): str(value)
                 for key, value in self._dict_payload(payload.get("selected_default_values")).items()
                 if str(key).strip() and str(value).strip()
+            },
+            selected_default_value_modes={
+                str(key): self._operation_scope_payload(value)
+                for key, value in self._dict_payload(payload.get("selected_default_value_modes")).items()
+                if str(key).strip() and isinstance(value, dict)
             },
             selected_tracker_item_settings={
                 str(key): dict(value)
@@ -152,10 +164,20 @@ class GuiSettingsStore:
                 for key, value in dict(preset.selected_mapping or {}).items()
                 if str(key).strip() and str(value).strip()
             },
+            "selected_mapping_modes": {
+                str(key): self._operation_scope_payload(value)
+                for key, value in dict(preset.selected_mapping_modes or {}).items()
+                if str(key).strip() and isinstance(value, dict)
+            },
             "selected_default_values": {
                 str(key): str(value)
                 for key, value in dict(preset.selected_default_values or {}).items()
                 if str(key).strip() and str(value).strip()
+            },
+            "selected_default_value_modes": {
+                str(key): self._operation_scope_payload(value)
+                for key, value in dict(preset.selected_default_value_modes or {}).items()
+                if str(key).strip() and isinstance(value, dict)
             },
             "selected_tracker_item_settings": {
                 str(key): dict(value)
@@ -171,6 +193,14 @@ class GuiSettingsStore:
     @staticmethod
     def _dict_payload(value: Any) -> dict[str, Any]:
         return dict(value) if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _operation_scope_payload(value: Any) -> dict[str, bool]:
+        payload = dict(value) if isinstance(value, dict) else {}
+        return {
+            "create": bool(payload.get("create", False)),
+            "update": bool(payload.get("update", False)),
+        }
 
     def _settings_payload(self, settings: GuiSettings) -> dict[str, Any]:
         payload = asdict(settings)
