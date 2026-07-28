@@ -75,6 +75,12 @@
 - `Status` 는 transition 기반 후처리가 필요하므로 TODO 로 분리
 - 정적 option이 없는 일반 reference field는 `LOOKUP_REQUIRED` 또는 `FIELD_UNSUPPORTED` 로 조기 노출
 
+현재 내부 구조:
+- public façade: `src/mapping_service.py`
+- reference 파싱: `src/mapping_reference.py`
+- schema 해석: `src/mapping_schema.py`
+- option 검증/적용: `src/mapping_option.py`
+
 확장 참고:
 - 새로운 field type 지원 절차는 [필드 지원 추가 가이드](./field-support-guide.md)에 정리되어 있습니다.
 
@@ -118,6 +124,14 @@
 - 실행 산출물 저장
 - GUI upload worker가 재사용할 progress/pause/cancel hook 제공
 
+현재 내부 구조:
+- public façade: `src/wizard.py`
+- 데이터 준비: `src/wizard_data.py`
+- 사용자/멤버 lookup: `src/wizard_user_lookup.py`
+- tracker item lookup: `src/wizard_tracker_lookup.py`
+- payload 구성: `src/wizard_payload.py`
+- 실행 오케스트레이션: `src/wizard_operations.py`
+
 ### GUI 계층
 
 `src/gui/`
@@ -141,6 +155,11 @@
 - `src/gui/services.py`
 - `src/gui/settings_store.py`
 - `src/gui/worker.py`
+
+현재 내부 구조:
+- 페이지 공통/설정/실행 분리: `src/gui/page_common.py`, `src/gui/page_setup.py`, `src/gui/page_execution.py`
+- 메인 윈도우 셸/워크플로/업로드 분리: `src/gui/window_support.py`, `src/gui/window_shell.py`, `src/gui/window_workflow.py`, `src/gui/window_upload.py`
+- GUI 서비스 분리: `src/gui/service_core.py`, `src/gui/upload_service.py`
 
 ### API 접근
 

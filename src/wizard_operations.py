@@ -1,0 +1,920 @@
+from __future__ import annotations
+
+from .wizard_support import *  # noqa: F403
+
+
+class WizardOperationMixin:
+    def build_payloads(
+        self,
+        force: bool = False,
+        *,
+        fetch_existing_items: bool = True,
+    ) -> pd.DataFrame:
+        """현재 업로드 대상 전체 행의 payload를 한 번에 계산해 cache한다."""
+        if self.state.schema_df is None:
+            raise ValueError("schema_df is required before payload generation.")
+
+        if self.state.payload_df is not None and not force:
+            return self.state.payload_df
+
+        source_df = self._payload_source_df()
+        payload_rows: list[dict[str, Any]] = []
+        upload_mode = self._normalize_upload_mode(self.state.upload_mode)
+        id_column_name = None
+        duplicate_item_ids: set[int] = set()
+
+        if self._upload_mode_supports_update(upload_mode):
+            id_column_name = self._update_item_id_column_name(source_df)
+            if id_column_name is not None:
+                item_id_counts: dict[int, int] = {}
+                for _, row in source_df.iterrows():
+                    try:
+                        target_item_id = self._parse_update_item_id(row.get(id_column_name))
+                    except ValueError:
+                        continue
+                    item_id_counts[target_item_id] = item_id_counts.get(target_item_id, 0) + 1
+                duplicate_item_ids = {
+                    item_id
+                    for item_id, item_count in item_id_counts.items()
+                    if item_count > 1
+                }
+
+        for _, row in source_df.iterrows():
+            row_id = int(row["_row_id"])
+            operation = "create"
+            target_item_id = None
+            try:
+                payload_json = None
+                if upload_mode == "update":
+                    operation = "update"
+                    if id_column_name is None:
+                        self._raise_payload_error(
+                            "UPDATE_ITEM_ID_COLUMN_MISSING",
+                            schema_field="id",
+                            df_col="id",
+                            row_id=row_id,
+                            detail="update mode requires an Excel 'id' column",
+                        )
+                    target_item_id, payload_json = self._build_update_row_payload(
+                        row,
+                        row_id,
+                        id_column_name=id_column_name,
+                        duplicate_item_ids=duplicate_item_ids,
+                        fetch_existing_item=fetch_existing_items,
+                    )
+                elif upload_mode == "upsert":
+                    if id_column_name is None:
+                        payload_json = self._build_row_payload(row, row_id)
+                    else:
+                        target_item_id = self._resolve_update_target_item_id(
+                            row,
+                            row_id,
+                            id_column_name=id_column_name,
+                            duplicate_item_ids=duplicate_item_ids,
+                            allow_missing=True,
+                        )
+                        if target_item_id is None:
+                            payload_json = self._build_row_payload(row, row_id)
+                        else:
+                            operation = "update"
+                            target_item_id, payload_json = self._build_update_row_payload(
+                                row,
+                                row_id,
+                                id_column_name=id_column_name,
+                                duplicate_item_ids=duplicate_item_ids,
+                                fetch_existing_item=fetch_existing_items,
+                                target_item_id=target_item_id,
+                            )
+                else:
+                    payload_json = self._build_row_payload(row, row_id)
+                payload_rows.append({
+                    "_row_id": row_id,
+                    "parent_row_id": row.get("parent_row_id"),
+                    "upload_name": row.get("upload_name"),
+                    "_target_item_id": target_item_id,
+                    "_operation": operation,
+                    "payload_json": payload_json,
+                    "payload_status": PayloadStatus.READY.value,
+                    "payload_error": None,
+                })
+            except Exception as exc:
+                payload_rows.append({
+                    "_row_id": row_id,
+                    "parent_row_id": row.get("parent_row_id"),
+                    "upload_name": row.get("upload_name"),
+                    "_target_item_id": target_item_id,
+                    "_operation": operation,
+                    "payload_json": None,
+                    "payload_status": PayloadStatus.FAILED.value,
+                    "payload_error": str(exc),
+                })
+
+        self.state.payload_df = pd.DataFrame(payload_rows)
+        if upload_mode == "upsert" and not self.state.payload_df.empty:
+            self._apply_upsert_hierarchy_validation(self.state.payload_df, source_df)
+        return self.state.payload_df
+
+    def preview_payload(self, row_id: int) -> dict:
+        """cache된 payload를 돌려주고, 필요하면 먼저 build_payloads를 수행한다."""
+        payload_df = self.build_payloads()
+        row_df = payload_df[payload_df["_row_id"] == row_id]
+        if row_df.empty:
+            raise ValueError(f"_row_id={row_id} was not found.")
+
+        payload_row = row_df.iloc[0]
+        if payload_row["payload_status"] != PayloadStatus.READY.value:
+            raise ValueError(payload_row["payload_error"])
+
+        return payload_row["payload_json"]
+
+    def upload(
+        self,
+        dry_run: bool = False,
+        continue_on_error: bool = True,
+        *,
+        phase_name: str = "insert",
+        root_item_name: str | None = None,
+        root_field_values: dict[str, Any] | None = None,
+        top_level_parent_specs: list[dict[str, Any]] | None = None,
+        include_row_ids: set[int] | None = None,
+        existing_row_item_ids: dict[int, Any] | None = None,
+        event_callback=None,
+        cancel_requested=None,
+        pause_requested=None,
+    ) -> dict:
+        """부모-자식 순서를 지키며 업로드를 실행하고 결과를 모아 돌려준다."""
+        if self.state.tracker_id is None:
+            raise ValueError("tracker_id is not set.")
+
+        root_item_name = self._normalize_root_item_name(root_item_name)
+        normalized_parent_specs, top_level_parent_name_by_row_id = self._normalize_top_level_parent_specs(
+            top_level_parent_specs
+        )
+        payload_df = self.build_payloads()
+        filtered_payload_df = self._filter_payload_rows(payload_df, include_row_ids)
+        ready_df = filtered_payload_df[filtered_payload_df["payload_status"] == PayloadStatus.READY.value].copy()
+        payload_failed_df = filtered_payload_df[filtered_payload_df["payload_status"] == PayloadStatus.FAILED.value].copy()
+        should_create_root_item = (
+            root_item_name is not None
+            and not ready_df.empty
+            and not normalized_parent_specs
+        )
+
+        pending = set(ready_df["_row_id"].tolist())
+        created_map = {
+            int(row_id): item_id
+            for row_id, item_id in dict(existing_row_item_ids or {}).items()
+        }
+        root_item_id = None
+        top_level_parent_item_ids: dict[int, Any] = {}
+        success_logs = []
+        failed_logs = [
+            {
+                "_row_id": int(row["_row_id"]),
+                "parent_row_id": row.get("parent_row_id"),
+                "upload_name": row.get("upload_name"),
+                "phase": phase_name,
+                "error": row.get("payload_error"),
+                "status": PayloadStatus.FAILED.value,
+            }
+            for _, row in payload_failed_df.iterrows()
+        ]
+
+        def _finalize(unresolved_df: pd.DataFrame) -> dict[str, Any]:
+            self.state.upload_result = {
+                "root_item_id": root_item_id,
+                "created_map": created_map,
+                "success_df": pd.DataFrame(success_logs),
+                "failed_df": pd.DataFrame(failed_logs),
+                "unresolved_df": unresolved_df,
+            }
+            return self.state.upload_result
+
+        def _build_unresolved_df(row_df: pd.DataFrame) -> pd.DataFrame:
+            unresolved_df = row_df.copy()
+            if unresolved_df.empty:
+                return unresolved_df
+            unresolved_df["status"] = UploadStatus.UNRESOLVED_PARENT.value
+            unresolved_df["phase"] = phase_name
+            unresolved_df["error"] = unresolved_df.apply(
+                lambda row: self._unresolved_parent_error(
+                    row.get("parent_row_id"),
+                    root_item_name=(
+                        top_level_parent_name_by_row_id.get(int(row["_row_id"]))
+                        if int(row["_row_id"]) in top_level_parent_name_by_row_id
+                        else (root_item_name if should_create_root_item else None)
+                    ),
+                ),
+                axis=1,
+            )
+            return unresolved_df
+
+        if should_create_root_item:
+            while pause_requested is not None and pause_requested():
+                time.sleep(0.1)
+            if cancel_requested is not None and cancel_requested():
+                return _finalize(_build_unresolved_df(ready_df))
+
+            if event_callback is not None:
+                event_callback({
+                    "type": "row_started",
+                    "phase": phase_name,
+                    "row_id": None,
+                    "upload_name": root_item_name,
+                })
+
+            try:
+                root_payload = self._build_root_item_payload(root_item_name, root_field_values=root_field_values)
+                if dry_run:
+                    result = {"id": "DRYRUN-ROOT"}
+                else:
+                    result = self.client.create_item(
+                        tracker_id=self.state.tracker_id,
+                        payload=root_payload,
+                        parent_item_id=None,
+                    )
+
+                root_item_id = result["id"]
+                success_logs.append({
+                    "_row_id": None,
+                    "parent_row_id": None,
+                    "upload_name": root_item_name,
+                    "phase": phase_name,
+                    "created_item_id": root_item_id,
+                    "status": UploadStatus.SUCCESS.value,
+                })
+                message = f"Row {root_item_name} uploaded successfully: item_id={root_item_id}"
+                print(message)
+                if event_callback is not None:
+                    event_callback({
+                        "type": "row_success",
+                        "phase": phase_name,
+                        "row_id": None,
+                        "upload_name": root_item_name,
+                        "item_id": root_item_id,
+                        "message": message,
+                    })
+            except Exception as exc:
+                error_status_code = self._http_status_code(exc)
+                error_response_json = self._response_json(exc)
+                error_message = str(error_response_json) if error_response_json is not None else str(exc)
+
+                failed_logs.append({
+                    "_row_id": None,
+                    "parent_row_id": None,
+                    "upload_name": root_item_name,
+                    "phase": phase_name,
+                    "error_status_code": error_status_code,
+                    "error_response_json": error_response_json,
+                    "error": error_message,
+                    "status": UploadStatus.FAILED.value,
+                })
+                if event_callback is not None:
+                    event_callback({
+                        "type": "row_failed",
+                        "phase": phase_name,
+                        "row_id": None,
+                        "upload_name": root_item_name,
+                        "message": error_message,
+                        "status_code": error_status_code,
+                        "response_json": error_response_json,
+                    })
+
+                return _finalize(_build_unresolved_df(ready_df))
+
+        if normalized_parent_specs:
+            created_parent_item_ids_by_key: dict[str, Any] = {}
+            pending_parent_specs = list(normalized_parent_specs)
+            parent_attempt_index = 0
+
+            while pending_parent_specs:
+                progress = False
+                deferred_parent_specs: list[dict[str, Any]] = []
+
+                for parent_spec in pending_parent_specs:
+                    parent_key = str(parent_spec.get("parent_key") or "").strip() or None
+                    if parent_key is not None and parent_key not in created_parent_item_ids_by_key:
+                        deferred_parent_specs.append(parent_spec)
+                        continue
+
+                    parent_attempt_index += 1
+                    parent_item_parent_id = created_parent_item_ids_by_key.get(parent_key)
+
+                    while pause_requested is not None and pause_requested():
+                        time.sleep(0.1)
+                    if cancel_requested is not None and cancel_requested():
+                        return _finalize(_build_unresolved_df(ready_df[ready_df["_row_id"].isin(sorted(pending))].copy()))
+
+                    parent_name = parent_spec["name"]
+                    if event_callback is not None:
+                        event_callback({
+                            "type": "row_started",
+                            "phase": phase_name,
+                            "row_id": None,
+                            "upload_name": parent_name,
+                        })
+
+                    try:
+                        root_payload = self._build_root_item_payload(
+                            parent_name,
+                            root_field_values=parent_spec["field_values"],
+                        )
+                        if dry_run:
+                            result = {"id": f"DRYRUN-ROOT-{parent_attempt_index}"}
+                        else:
+                            result = self.client.create_item(
+                                tracker_id=self.state.tracker_id,
+                                payload=root_payload,
+                                parent_item_id=parent_item_parent_id,
+                            )
+
+                        parent_item_id = result["id"]
+                        created_parent_item_ids_by_key[parent_spec["key"]] = parent_item_id
+                        for row_id in parent_spec["row_ids"]:
+                            top_level_parent_item_ids[int(row_id)] = parent_item_id
+                        success_logs.append({
+                            "_row_id": None,
+                            "parent_row_id": None,
+                            "upload_name": parent_name,
+                            "phase": phase_name,
+                            "created_item_id": parent_item_id,
+                            "status": UploadStatus.SUCCESS.value,
+                        })
+                        message = f"Row {parent_name} uploaded successfully: item_id={parent_item_id}"
+                        print(message)
+                        if event_callback is not None:
+                            event_callback({
+                                "type": "row_success",
+                                "phase": phase_name,
+                                "row_id": None,
+                                "upload_name": parent_name,
+                                "item_id": parent_item_id,
+                                "message": message,
+                            })
+                        progress = True
+                    except Exception as exc:
+                        error_status_code = self._http_status_code(exc)
+                        error_response_json = self._response_json(exc)
+                        error_message = str(error_response_json) if error_response_json is not None else str(exc)
+
+                        failed_logs.append({
+                            "_row_id": None,
+                            "parent_row_id": None,
+                            "upload_name": parent_name,
+                            "phase": phase_name,
+                            "error_status_code": error_status_code,
+                            "error_response_json": error_response_json,
+                            "error": error_message,
+                            "status": UploadStatus.FAILED.value,
+                        })
+                        if event_callback is not None:
+                            event_callback({
+                                "type": "row_failed",
+                                "phase": phase_name,
+                                "row_id": None,
+                                "upload_name": parent_name,
+                                "message": error_message,
+                                "status_code": error_status_code,
+                                "response_json": error_response_json,
+                            })
+
+                        if not continue_on_error:
+                            return _finalize(_build_unresolved_df(ready_df[ready_df["_row_id"].isin(sorted(pending))].copy()))
+
+                if progress:
+                    pending_parent_specs = deferred_parent_specs
+                    continue
+
+                for parent_spec in deferred_parent_specs:
+                    missing_parent_key = str(parent_spec.get("parent_key") or "").strip()
+                    error_message = (
+                        f"Top-level parent {parent_spec['name']!r} requires unavailable parent {missing_parent_key!r}."
+                    )
+                    failed_logs.append({
+                        "_row_id": None,
+                        "parent_row_id": None,
+                        "upload_name": parent_spec["name"],
+                        "phase": phase_name,
+                        "error": error_message,
+                        "status": UploadStatus.UNRESOLVED_PARENT.value,
+                    })
+                    if event_callback is not None:
+                        event_callback({
+                            "type": "row_failed",
+                            "phase": phase_name,
+                            "row_id": None,
+                            "upload_name": parent_spec["name"],
+                            "message": error_message,
+                        })
+                break
+
+        while pending:
+            progress = False
+
+            for _, row in ready_df.iterrows():
+                row_id = int(row["_row_id"])
+                if row_id not in pending:
+                    continue
+
+                while pause_requested is not None and pause_requested():
+                    time.sleep(0.1)
+                if cancel_requested is not None and cancel_requested():
+                    break
+
+                parent_row_id = row["parent_row_id"]
+                if parent_row_id is None or pd.isna(parent_row_id):
+                    if normalized_parent_specs:
+                        if row_id in top_level_parent_item_ids:
+                            parent_item_id = top_level_parent_item_ids[row_id]
+                        elif row_id in top_level_parent_name_by_row_id:
+                            continue
+                        else:
+                            parent_item_id = None
+                    else:
+                        parent_item_id = root_item_id if should_create_root_item else None
+                else:
+                    parent_row_id = int(parent_row_id)
+                    if parent_row_id not in created_map:
+                        continue
+                    parent_item_id = created_map[parent_row_id]
+
+                try:
+                    payload = row["payload_json"]
+                    if event_callback is not None:
+                        event_callback({
+                            "type": "row_started",
+                            "phase": phase_name,
+                            "row_id": row_id,
+                            "upload_name": row["upload_name"],
+                        })
+
+                    if dry_run:
+                        result = {"id": f"DRYRUN-{row_id}"}
+                    else:
+                        result = self.client.create_item(
+                            tracker_id=self.state.tracker_id,
+                            payload=payload,
+                            parent_item_id=parent_item_id,
+                        )
+
+                    created_map[row_id] = result["id"]
+                    pending.remove(row_id)
+                    progress = True
+
+                    success_logs.append({
+                        "_row_id": row_id,
+                        "parent_row_id": row["parent_row_id"],
+                        "upload_name": row["upload_name"],
+                        "phase": phase_name,
+                        "created_item_id": result["id"],
+                        "status": UploadStatus.SUCCESS.value,
+                    })
+                    message = f"Row {row['upload_name']} uploaded successfully: item_id={result['id']}"
+                    print(message)
+                    if event_callback is not None:
+                        event_callback({
+                            "type": "row_success",
+                            "phase": phase_name,
+                            "row_id": row_id,
+                            "upload_name": row["upload_name"],
+                            "item_id": result["id"],
+                            "message": message,
+                        })
+
+                except Exception as exc:
+                    error_status_code = self._http_status_code(exc)
+                    error_response_json = self._response_json(exc)
+                    error_message = ""
+                    if error_response_json is not None:
+                        error_message = str(error_response_json)
+                    else:
+                        error_message = str(exc)
+
+                    failed_logs.append({
+                        "_row_id": row_id,
+                        "parent_row_id": row["parent_row_id"],
+                        "upload_name": row["upload_name"],
+                        "phase": phase_name,
+                        "error_status_code": error_status_code,
+                        "error_response_json": error_response_json,
+                        "error": error_message,
+                        "status": UploadStatus.FAILED.value,
+                    })
+                    if event_callback is not None:
+                        event_callback({
+                            "type": "row_failed",
+                            "phase": phase_name,
+                            "row_id": row_id,
+                            "upload_name": row["upload_name"],
+                            "message": error_message,
+                            "status_code": error_status_code,
+                            "response_json": error_response_json,
+                        })
+
+                    if not continue_on_error:
+                        return _finalize(ready_df[ready_df["_row_id"].isin(sorted(pending))].copy())
+
+                    pending.remove(row_id)
+                    progress = True
+
+            if not progress:
+                break
+            if cancel_requested is not None and cancel_requested():
+                break
+
+        return _finalize(_build_unresolved_df(ready_df[ready_df["_row_id"].isin(sorted(pending))].copy()))
+
+    def update_items(
+        self,
+        dry_run: bool = False,
+        continue_on_error: bool = True,
+        *,
+        phase_name: str = "update",
+        include_row_ids: set[int] | None = None,
+        fetch_existing_items: bool = True,
+        event_callback=None,
+        cancel_requested=None,
+        pause_requested=None,
+    ) -> dict[str, Any]:
+        """대상 item id를 기준으로 PUT 업데이트를 실행하고 결과를 모아 돌려준다."""
+        if self.state.tracker_id is None:
+            raise ValueError("tracker_id is not set.")
+
+        payload_df = self.build_payloads(
+            force=bool(fetch_existing_items),
+            fetch_existing_items=fetch_existing_items,
+        )
+        filtered_payload_df = self._filter_payload_rows(payload_df, include_row_ids)
+        ready_df = filtered_payload_df[filtered_payload_df["payload_status"] == PayloadStatus.READY.value].copy()
+        payload_failed_df = filtered_payload_df[filtered_payload_df["payload_status"] == PayloadStatus.FAILED.value].copy()
+
+        success_logs: list[dict[str, Any]] = []
+        failed_logs = [
+            {
+                "_row_id": int(row["_row_id"]),
+                "parent_row_id": row.get("parent_row_id"),
+                "upload_name": row.get("upload_name"),
+                "phase": phase_name,
+                "target_item_id": row.get("_target_item_id"),
+                "error": row.get("payload_error"),
+                "status": PayloadStatus.FAILED.value,
+            }
+            for _, row in payload_failed_df.iterrows()
+        ]
+
+        def _finalize(unresolved_df: pd.DataFrame) -> dict[str, Any]:
+            self.state.upload_result = {
+                "root_item_id": None,
+                "created_map": {},
+                "success_df": pd.DataFrame(success_logs),
+                "failed_df": pd.DataFrame(failed_logs),
+                "unresolved_df": unresolved_df,
+            }
+            return self.state.upload_result
+
+        pending_row_ids = ready_df["_row_id"].tolist()
+
+        for current_index, (_, row) in enumerate(ready_df.iterrows()):
+            while pause_requested is not None and pause_requested():
+                time.sleep(0.1)
+            if cancel_requested is not None and cancel_requested():
+                break
+
+            row_id = int(row["_row_id"])
+            pending_row_ids = [value for value in pending_row_ids if value != row_id]
+            target_item_id = int(row["_target_item_id"])
+
+            try:
+                if event_callback is not None:
+                    event_callback({
+                        "type": "row_started",
+                        "phase": phase_name,
+                        "row_id": row_id,
+                        "upload_name": row["upload_name"],
+                        "item_id": target_item_id,
+                    })
+
+                if dry_run:
+                    result = {"id": target_item_id}
+                else:
+                    result = self.client.update_item(
+                        target_item_id,
+                        row["payload_json"],
+                    )
+
+                success_logs.append({
+                    "_row_id": row_id,
+                    "parent_row_id": row.get("parent_row_id"),
+                    "upload_name": row.get("upload_name"),
+                    "phase": phase_name,
+                    "target_item_id": target_item_id,
+                    "updated_item_id": result.get("id", target_item_id),
+                    "status": UploadStatus.SUCCESS.value,
+                })
+                message = f"Row {row['upload_name']} updated successfully: item_id={target_item_id}"
+                if event_callback is not None:
+                    event_callback({
+                        "type": "row_success",
+                        "phase": phase_name,
+                        "row_id": row_id,
+                        "upload_name": row["upload_name"],
+                        "item_id": target_item_id,
+                        "message": message,
+                    })
+            except Exception as exc:
+                error_status_code = self._http_status_code(exc)
+                error_response_json = self._response_json(exc)
+                error_message = str(error_response_json) if error_response_json is not None else str(exc)
+
+                failed_logs.append({
+                    "_row_id": row_id,
+                    "parent_row_id": row.get("parent_row_id"),
+                    "upload_name": row.get("upload_name"),
+                    "phase": phase_name,
+                    "target_item_id": target_item_id,
+                    "error_status_code": error_status_code,
+                    "error_response_json": error_response_json,
+                    "error": error_message,
+                    "status": UploadStatus.FAILED.value,
+                })
+                if event_callback is not None:
+                    event_callback({
+                        "type": "row_failed",
+                        "phase": phase_name,
+                        "row_id": row_id,
+                        "upload_name": row["upload_name"],
+                        "item_id": target_item_id,
+                        "message": error_message,
+                        "status_code": error_status_code,
+                        "response_json": error_response_json,
+                    })
+
+                if not continue_on_error:
+                    unresolved_df = ready_df.iloc[current_index + 1 :].copy()
+                    if not unresolved_df.empty:
+                        unresolved_df["phase"] = phase_name
+                        unresolved_df["status"] = UploadStatus.UNRESOLVED_PARENT.value
+                        unresolved_df["error"] = "이전 업데이트 실패로 실행이 중단되었습니다."
+                    return _finalize(unresolved_df)
+
+        unresolved_df = ready_df[ready_df["_row_id"].isin(pending_row_ids)].copy()
+        if not unresolved_df.empty:
+            unresolved_df["phase"] = phase_name
+            unresolved_df["status"] = UploadStatus.UNRESOLVED_PARENT.value
+            unresolved_df["error"] = "업데이트가 완료되지 않았습니다."
+
+        return _finalize(unresolved_df)
+
+    def upsert_items(
+        self,
+        dry_run: bool = False,
+        continue_on_error: bool = True,
+        *,
+        top_level_parent_specs: list[dict[str, Any]] | None = None,
+        event_callback=None,
+        cancel_requested=None,
+        pause_requested=None,
+    ) -> dict[str, Any]:
+        """id가 있는 행은 update, 없는 행은 create로 나누어 한 번에 실행한다."""
+        if self.state.tracker_id is None:
+            raise ValueError("tracker_id is not set.")
+
+        payload_df = self.build_payloads(force=True, fetch_existing_items=False)
+        if payload_df.empty:
+            self.state.upload_result = {
+                "root_item_id": None,
+                "created_map": {},
+                "success_df": pd.DataFrame(),
+                "failed_df": pd.DataFrame(),
+                "unresolved_df": pd.DataFrame(),
+                "phase_results": {},
+            }
+            return self.state.upload_result
+
+        operation_series = payload_df.get("_operation", pd.Series(dtype=object)).fillna("").astype(str)
+        create_row_ids = {
+            int(row_id)
+            for row_id in payload_df[operation_series.eq("create")]["_row_id"].tolist()
+        }
+        update_row_ids = {
+            int(row_id)
+            for row_id in payload_df[operation_series.eq("update")]["_row_id"].tolist()
+        }
+        seeded_existing_row_item_ids = {
+            int(row["_row_id"]): int(row["_target_item_id"])
+            for _, row in payload_df[
+                payload_df["payload_status"].eq(PayloadStatus.READY.value)
+                & operation_series.eq("update")
+                & payload_df["_target_item_id"].notna()
+            ].iterrows()
+        }
+
+        root_item_id = None
+        created_map = dict(seeded_existing_row_item_ids)
+        success_frames: list[pd.DataFrame | None] = []
+        failed_frames: list[pd.DataFrame | None] = []
+        unresolved_frames: list[pd.DataFrame | None] = []
+        phase_results: dict[str, dict[str, int]] = {}
+
+        def _emit_phase_started(phase: str, total: int) -> None:
+            if event_callback is None:
+                return
+            event_callback({
+                "type": "phase_started",
+                "phase": phase,
+                "total": int(max(total, 0)),
+            })
+
+        def _emit_phase_finished(phase: str, result: dict[str, Any]) -> None:
+            success_count = self._result_count(result.get("success_df"))
+            failed_count = self._result_count(result.get("failed_df"))
+            unresolved_count = self._result_count(result.get("unresolved_df"))
+            phase_results[phase] = {
+                "total": success_count + failed_count + unresolved_count,
+                "success": success_count,
+                "failed": failed_count,
+                "unresolved": unresolved_count,
+            }
+            if event_callback is None:
+                return
+            event_callback({
+                "type": "phase_finished",
+                "phase": phase,
+                "total": phase_results[phase]["total"],
+                "success": success_count,
+                "failed": failed_count,
+                "unresolved": unresolved_count,
+            })
+
+        create_result: dict[str, Any] | None = None
+        if create_row_ids:
+            _emit_phase_started("insert", len(create_row_ids))
+            create_result = self.upload(
+                dry_run=dry_run,
+                continue_on_error=continue_on_error,
+                phase_name="insert",
+                top_level_parent_specs=top_level_parent_specs,
+                include_row_ids=create_row_ids,
+                existing_row_item_ids=seeded_existing_row_item_ids,
+                event_callback=event_callback,
+                cancel_requested=cancel_requested,
+                pause_requested=pause_requested,
+            )
+            _emit_phase_finished("insert", create_result)
+            root_item_id = create_result.get("root_item_id")
+            created_map.update(create_result.get("created_map", {}))
+            success_frames.append(create_result.get("success_df"))
+            failed_frames.append(create_result.get("failed_df"))
+            unresolved_frames.append(create_result.get("unresolved_df"))
+
+            create_failed_df = create_result.get("failed_df")
+            create_unresolved_df = create_result.get("unresolved_df")
+            if (
+                not continue_on_error
+                and isinstance(create_failed_df, pd.DataFrame)
+                and not create_failed_df.empty
+            ) or (
+                not continue_on_error
+                and isinstance(create_unresolved_df, pd.DataFrame)
+                and not create_unresolved_df.empty
+            ):
+                self.state.upload_result = {
+                    "root_item_id": root_item_id,
+                    "created_map": created_map,
+                    "success_df": self._concat_result_frames(success_frames),
+                    "failed_df": self._concat_result_frames(failed_frames),
+                    "unresolved_df": self._concat_result_frames(unresolved_frames),
+                    "phase_results": phase_results,
+                }
+                return self.state.upload_result
+
+        if update_row_ids:
+            _emit_phase_started("update", len(update_row_ids))
+            update_result = self.update_items(
+                dry_run=dry_run,
+                continue_on_error=continue_on_error,
+                phase_name="update",
+                include_row_ids=update_row_ids,
+                fetch_existing_items=True,
+                event_callback=event_callback,
+                cancel_requested=cancel_requested,
+                pause_requested=pause_requested,
+            )
+            _emit_phase_finished("update", update_result)
+            success_frames.append(update_result.get("success_df"))
+            failed_frames.append(update_result.get("failed_df"))
+            unresolved_frames.append(update_result.get("unresolved_df"))
+
+        self.state.upload_result = {
+            "root_item_id": root_item_id,
+            "created_map": created_map,
+            "success_df": self._concat_result_frames(success_frames),
+            "failed_df": self._concat_result_frames(failed_frames),
+            "unresolved_df": self._concat_result_frames(unresolved_frames),
+            "phase_results": phase_results,
+        }
+        return self.state.upload_result
+
+    def save_state(self, output_dir: str) -> None:
+        """현재 세션의 DataFrame, schema, 결과를 파일로 저장한다."""
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+
+        frames = {
+            "raw_df.csv": self.state.raw_df,
+            "merged_df.csv": self.state.merged_df,
+            "hierarchy_df.csv": self.state.hierarchy_df,
+            "upload_df.csv": self.state.upload_df,
+            "converted_upload_df.csv": self.state.converted_upload_df,
+            "payload_df.csv": self.state.payload_df,
+            "schema_df.csv": self.state.schema_df,
+            "comparison_df.csv": self.state.comparison_df,
+            "option_check_df.csv": self.state.option_check_df,
+        }
+
+        for name, df in frames.items():
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                csv_df = df.copy()
+                if "payload_json" in csv_df.columns:
+                    csv_df["payload_json"] = csv_df["payload_json"].apply(
+                        lambda payload: (
+                            json.dumps(payload, ensure_ascii=False)
+                            if payload is not None
+                            else None
+                        )
+                    )
+                csv_df.to_csv(out / name, index=False)
+
+        if self.state.schema is not None:
+            with open(out / "schema.json", "w", encoding="utf-8") as file:
+                json.dump(self.state.schema, file, ensure_ascii=False, indent=2)
+
+        if self.state.option_maps is not None:
+            with open(out / "option_maps.json", "w", encoding="utf-8") as file:
+                json.dump(self.state.option_maps, file, ensure_ascii=False, indent=2)
+
+        if self.state.selected_mapping:
+            with open(out / "selected_mapping.json", "w", encoding="utf-8") as file:
+                json.dump(self.state.selected_mapping, file, ensure_ascii=False, indent=2)
+
+        if self.state.selected_mapping_modes:
+            with open(out / "selected_mapping_modes.json", "w", encoding="utf-8") as file:
+                json.dump(self.state.selected_mapping_modes, file, ensure_ascii=False, indent=2)
+
+        if self.state.selected_default_values:
+            with open(out / "selected_default_values.json", "w", encoding="utf-8") as file:
+                json.dump(self.state.selected_default_values, file, ensure_ascii=False, indent=2)
+
+        if self.state.selected_default_value_modes:
+            with open(out / "selected_default_value_modes.json", "w", encoding="utf-8") as file:
+                json.dump(self.state.selected_default_value_modes, file, ensure_ascii=False, indent=2)
+
+        if self.state.resolved_default_values:
+            with open(out / "resolved_default_values.json", "w", encoding="utf-8") as file:
+                json.dump(self.state.resolved_default_values, file, ensure_ascii=False, indent=2)
+
+        if isinstance(self.state.payload_df, pd.DataFrame) and not self.state.payload_df.empty:
+            with open(out / "payload_preview.jsonl", "w", encoding="utf-8") as file:
+                for _, row in self.state.payload_df.iterrows():
+                    file.write(json.dumps({
+                        "_row_id": row.get("_row_id"),
+                        "parent_row_id": row.get("parent_row_id"),
+                        "upload_name": row.get("upload_name"),
+                        "payload_status": row.get("payload_status"),
+                        "payload_error": row.get("payload_error"),
+                        "payload_json": row.get("payload_json"),
+                    }, ensure_ascii=False))
+                    file.write("\n")
+
+        if self.state.upload_result is not None:
+            for key in ["success_df", "failed_df", "unresolved_df"]:
+                df = self.state.upload_result.get(key)
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    csv_df = df.copy()
+                    if "error_response_json" in csv_df.columns:
+                        csv_df["error_response_json"] = csv_df["error_response_json"].apply(
+                            lambda payload: (
+                                json.dumps(payload, ensure_ascii=False)
+                                if payload is not None
+                                else None
+                            )
+                        )
+                    csv_df.to_csv(out / f"{key}.csv", index=False)
+
+            failed_df = self.state.upload_result.get("failed_df")
+            if isinstance(failed_df, pd.DataFrame) and not failed_df.empty:
+                with open(out / "failed_responses.jsonl", "w", encoding="utf-8") as file:
+                    for _, row in failed_df.iterrows():
+                        file.write(json.dumps({
+                            "_row_id": row.get("_row_id"),
+                            "parent_row_id": row.get("parent_row_id"),
+                            "upload_name": row.get("upload_name"),
+                            "error_status_code": row.get("error_status_code"),
+                            "error_response_json": row.get("error_response_json"),
+                            "error": row.get("error"),
+                            "status": row.get("status"),
+                        }, ensure_ascii=False))
+                        file.write("\n")
+
+            with open(out / "created_map.json", "w", encoding="utf-8") as file:
+                json.dump(self.state.upload_result.get("created_map", {}), file, ensure_ascii=False, indent=2)

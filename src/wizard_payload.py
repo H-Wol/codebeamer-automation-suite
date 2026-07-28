@@ -1,0 +1,1558 @@
+from __future__ import annotations
+
+from .wizard_support import *  # noqa: F403
+
+
+class WizardPayloadMixin:
+    def _option_processing_operation(
+        self,
+        row: pd.Series,
+        *,
+        upload_mode: str,
+        id_column_name: str | None,
+    ) -> str:
+        """옵션 검증 시 현재 행이 생성/수정 중 어느 흐름인지 판단한다."""
+        normalized_mode = self._normalize_upload_mode(upload_mode)
+        if normalized_mode == "update":
+            return "update"
+        if normalized_mode != "upsert":
+            return "create"
+        if not id_column_name or id_column_name not in row.index:
+            return "create"
+
+        try:
+            self._parse_update_item_id(row.get(id_column_name))
+        except ValueError as exc:
+            if str(exc) == "missing":
+                return "create"
+            return "update"
+        return "update"
+
+    def _mask_inapplicable_option_rows(
+        self,
+        upload_df: pd.DataFrame,
+        option_mapping: dict[str, str],
+    ) -> pd.DataFrame:
+        """행별 create/update 범위에 맞지 않는 옵션 값은 검증/lookup에서 제외한다."""
+        if upload_df.empty or not option_mapping:
+            return upload_df.copy()
+
+        work = upload_df.copy()
+        upload_mode = self._normalize_upload_mode(self.state.upload_mode)
+        id_column_name = self._update_item_id_column_name(work) if upload_mode == "upsert" else None
+        row_operations = [
+            self._option_processing_operation(
+                row,
+                upload_mode=upload_mode,
+                id_column_name=id_column_name,
+            )
+            for _, row in work.iterrows()
+        ]
+
+        for df_col in option_mapping.keys():
+            if df_col not in work.columns:
+                continue
+            scope = self.state.selected_mapping_modes.get(str(df_col).strip())
+            inactive_mask = pd.Series(
+                [
+                    not self._scope_applies_to_operation(
+                        scope,
+                        operation,
+                        upload_mode=upload_mode,
+                    )
+                    for operation in row_operations
+                ],
+                index=work.index,
+            )
+            if inactive_mask.any():
+                work.loc[inactive_mask, df_col] = ""
+
+        return work
+
+    @staticmethod
+    def _restore_option_source_columns(
+        processed_df: pd.DataFrame,
+        source_df: pd.DataFrame,
+        option_mapping: dict[str, str],
+    ) -> pd.DataFrame:
+        """검증용으로 마스킹한 원본 옵션 컬럼은 표시와 후속 처리용으로 복원한다."""
+        restored = processed_df.copy()
+        for df_col in option_mapping.keys():
+            if df_col not in restored.columns or df_col not in source_df.columns:
+                continue
+            restored[df_col] = source_df[df_col].tolist()
+        return restored
+
+    def process_option_mapping(
+        self,
+        selected_mapping: dict[str, str],
+        selected_option_mapping: dict[str, str] | None = None,
+        selected_mapping_modes: dict[str, dict[str, bool]] | None = None,
+        selected_default_values: dict[str, Any] | None = None,
+        selected_default_value_modes: dict[str, dict[str, bool]] | None = None,
+        selected_tracker_item_settings: dict[str, dict[str, Any]] | None = None,
+    ) -> tuple[dict[str, str], pd.DataFrame]:
+        """옵션/참조형 필드를 찾아 lookup과 검증을 한 번에 수행한다."""
+        if self.state.schema_df is None:
+            raise ValueError("Schema must be loaded before option processing.")
+        if self.state.upload_df is None:
+            raise ValueError("upload_df is required before option processing.")
+
+        option_fields = self.mapper.get_option_field_candidates(self.state.schema_df)
+        self.state.option_candidates_df = option_fields
+        upload_mode = self._normalize_upload_mode(self.state.upload_mode)
+        normalized_mapping_modes = {
+            str(df_column).strip(): self._normalize_operation_scope(
+                (selected_mapping_modes or {}).get(str(df_column).strip()),
+                upload_mode=upload_mode,
+            )
+            for df_column in selected_mapping.keys()
+            if str(df_column).strip()
+        }
+        self.state.selected_mapping_modes = normalized_mapping_modes
+
+        effective_selected_mapping = {
+            excel_col: schema_field
+            for excel_col, schema_field in selected_mapping.items()
+            if self._scope_applies_to_upload_mode(
+                normalized_mapping_modes.get(str(excel_col).strip()),
+                upload_mode,
+            )
+        }
+
+        if selected_option_mapping is None:
+            selected_option_mapping = {}
+            option_field_names = set(option_fields["field_name"].dropna().astype(str))
+            for excel_col, schema_field in effective_selected_mapping.items():
+                if schema_field in option_field_names:
+                    selected_option_mapping[excel_col] = schema_field
+        else:
+            selected_option_mapping = {
+                excel_col: schema_field
+                for excel_col, schema_field in selected_option_mapping.items()
+                if excel_col in effective_selected_mapping
+            }
+
+        normalized_default_values: dict[str, Any] = {}
+        for schema_field, raw_value in (selected_default_values or {}).items():
+            if not self._has_configured_value(raw_value):
+                continue
+            normalized_default_values[str(schema_field).strip()] = raw_value
+
+        self.state.selected_default_values = normalized_default_values
+        normalized_default_value_modes = {
+            schema_field: self._normalize_operation_scope(
+                (selected_default_value_modes or {}).get(schema_field),
+                upload_mode=upload_mode,
+            )
+            for schema_field in normalized_default_values.keys()
+        }
+        self.state.selected_default_value_modes = normalized_default_value_modes
+        effective_default_values = {
+            schema_field: raw_value
+            for schema_field, raw_value in normalized_default_values.items()
+            if self._scope_applies_to_upload_mode(
+                normalized_default_value_modes.get(schema_field),
+                upload_mode,
+            )
+        }
+        if selected_tracker_item_settings is not None:
+            self.state.selected_tracker_item_settings = {
+                str(schema_field).strip(): dict(setting)
+                for schema_field, setting in selected_tracker_item_settings.items()
+                if str(schema_field).strip() and isinstance(setting, dict)
+            }
+        self.state.resolved_default_values = {}
+
+        if not selected_option_mapping and not effective_default_values:
+            self.state.selected_option_mapping = {}
+            self.state.option_maps = {}
+            self.state.option_check_df = pd.DataFrame()
+            self.state.converted_upload_df = self.state.upload_df.copy()
+            self._invalidate_payload_cache()
+            return {}, pd.DataFrame()
+
+        self.state.selected_option_mapping = selected_option_mapping
+        option_maps = self.mapper.build_option_maps_from_schema(self.state.schema_df)
+        option_maps = self._decorate_tracker_item_option_maps(option_maps)
+        self.state.option_maps = option_maps
+
+        lookup_ready_df = self._mask_inapplicable_option_rows(
+            self.state.upload_df,
+            selected_option_mapping,
+        )
+        if selected_option_mapping:
+            lookup_ready_df = self._resolve_user_reference_fields(
+                upload_df=lookup_ready_df,
+                option_mapping=selected_option_mapping,
+                option_maps=option_maps,
+            )
+            lookup_ready_df = self._resolve_tracker_item_reference_fields(
+                upload_df=lookup_ready_df,
+                option_mapping=selected_option_mapping,
+                option_maps=option_maps,
+            )
+            lookup_ready_df = self._resolve_member_reference_fields(
+                upload_df=lookup_ready_df,
+                option_mapping=selected_option_mapping,
+                option_maps=option_maps,
+            )
+
+        option_check_df = pd.DataFrame()
+        if selected_option_mapping:
+            option_check_df = self.mapper.check_option_alignment(
+                upload_df=lookup_ready_df,
+                option_mapping=selected_option_mapping,
+                option_maps=option_maps,
+            )
+
+        default_value_check_df, resolved_default_values = self._resolve_default_field_values(
+            effective_default_values,
+            option_maps,
+        )
+        self.state.resolved_default_values = resolved_default_values
+
+        check_frames = [
+            df
+            for df in (option_check_df, default_value_check_df)
+            if isinstance(df, pd.DataFrame) and not df.empty
+        ]
+        self.state.option_check_df = (
+            pd.concat(check_frames, ignore_index=True)
+            if check_frames
+            else pd.DataFrame()
+        )
+
+        if selected_option_mapping:
+            converted_upload_df = self.mapper.apply_option_resolution(
+                upload_df=lookup_ready_df,
+                option_mapping=selected_option_mapping,
+                option_maps=option_maps,
+            )
+            self.state.converted_upload_df = self._restore_option_source_columns(
+                converted_upload_df,
+                self.state.upload_df,
+                selected_option_mapping,
+            )
+        else:
+            self.state.converted_upload_df = lookup_ready_df.copy()
+        self._invalidate_payload_cache()
+
+        return selected_option_mapping, self.state.option_check_df
+
+    def _serialize_payload_value(self, value: Any) -> Any:
+        """payload 안의 모델 객체를 재귀적으로 일반 자료형으로 바꾼다."""
+        if isinstance(value, DomainModel):
+            return value.to_dict()
+        if isinstance(value, list):
+            return [self._serialize_payload_value(item) for item in value]
+        if isinstance(value, dict):
+            return {key: self._serialize_payload_value(item) for key, item in value.items()}
+        return value
+
+    @staticmethod
+    def _has_row_value(row: pd.Series, column_name: str) -> bool:
+        """행 안에 실제로 업로드할 값이 들어 있는지 확인한다."""
+        if column_name not in row.index:
+            return False
+
+        value = row[column_name]
+        if value is None:
+            return False
+        if isinstance(value, float) and pd.isna(value):
+            return False
+        if isinstance(value, str) and value.strip() == "":
+            return False
+        return True
+
+    @staticmethod
+    def _has_configured_value(value: Any) -> bool:
+        """기본값 설정에 실제 값이 들어 있는지 확인한다."""
+        if value is None:
+            return False
+        if isinstance(value, float) and pd.isna(value):
+            return False
+        if isinstance(value, str) and value.strip() == "":
+            return False
+        return True
+
+    @staticmethod
+    def _schema_field_info(field_row: pd.Series, schema_field: str) -> dict[str, Any]:
+        """schema 비교 행에서 payload 생성에 필요한 정보만 골라낸다."""
+        reference_type = field_row.get("reference_type")
+        resolved_field_kind = field_row.get("resolved_field_kind")
+
+        if not reference_type and resolved_field_kind == ResolvedFieldKind.TRACKER_ITEM_REFERENCE.value:
+            reference_type = ReferenceType.TRACKER_ITEM.value
+        if not reference_type and resolved_field_kind == ResolvedFieldKind.USER_REFERENCE.value:
+            reference_type = ReferenceType.USER.value
+        if not reference_type and resolved_field_kind == ResolvedFieldKind.MEMBER_REFERENCE.value:
+            reference_type = ReferenceType.ABSTRACT.value
+
+        return {
+            "field_id": field_row.get("field_id"),
+            "field_type": field_row.get("field_type"),
+            "field_name": schema_field,
+            "multiple_values": field_row.get("multiple_values", False),
+            "reference_type": reference_type,
+            "value_model": field_row.get("value_model"),
+            "resolved_field_kind": resolved_field_kind,
+            "resolution_strategy": field_row.get("resolution_strategy"),
+            "is_supported": field_row.get("is_supported", True),
+            "unsupported_reason": field_row.get("unsupported_reason"),
+            "requires_lookup": field_row.get("requires_lookup", False),
+            "lookup_target_kind": field_row.get("lookup_target_kind"),
+            "preconstruction_kind": field_row.get("preconstruction_kind"),
+            "preconstruction_detail": field_row.get("preconstruction_detail"),
+            "payload_target_kind": field_row.get("payload_target_kind"),
+            "tracker_item_field": field_row.get("tracker_item_field"),
+        }
+
+    @staticmethod
+    def _raise_payload_error(
+        code: str,
+        *,
+        schema_field: str,
+        row_id: int,
+        df_col: str,
+        detail: str,
+    ) -> None:
+        """payload 생성 중 발생한 구조화된 오류를 같은 형식으로 만든다."""
+        raise ValueError(
+            f"[{code}] field='{schema_field}' df_column='{df_col}' _row_id={row_id} {detail}"
+        )
+
+    def _ensure_field_ready_for_payload(
+        self,
+        *,
+        field_row: pd.Series,
+        schema_field: str,
+        df_col: str,
+        row_id: int,
+    ) -> None:
+        """현재 field가 업로드 가능한 상태인지 payload 생성 전에 점검한다."""
+        if not field_row.get("is_supported", True):
+            self._raise_payload_error(
+                "FIELD_UNSUPPORTED",
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+                detail=(
+                    f"reason={field_row.get('unsupported_reason')!r} "
+                    f"strategy={field_row.get('resolution_strategy')!r} "
+                    f"payload_target={field_row.get('payload_target_kind')!r} "
+                    f"preconstruction={field_row.get('preconstruction_kind')!r}"
+                ),
+            )
+
+        if field_row.get("requires_lookup") and df_col not in self.state.selected_option_mapping:
+            self._raise_payload_error(
+                "LOOKUP_REQUIRED",
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+                detail=(
+                    f"lookup_target={field_row.get('lookup_target_kind')!r} "
+                    f"preconstruction={field_row.get('preconstruction_kind')!r} "
+                    f"detail={field_row.get('preconstruction_detail')!r}"
+                ),
+            )
+
+    def _resolve_option_field_value(self, row: pd.Series, row_id: int, df_col: str, schema_field: str) -> Any:
+        """옵션 또는 참조형 필드의 실제 업로드 값을 `__resolved` 기준으로 꺼낸다."""
+        option_info = (self.state.option_maps or {}).get(schema_field, {})
+        resolved_col = f"{df_col}__resolved"
+        status_col = f"{df_col}__lookup_status"
+        error_col = f"{df_col}__lookup_error"
+
+        if not option_info.get("is_supported", True) or option_info.get("kind") == OptionMapKind.UNSUPPORTED.value:
+            self._raise_payload_error(
+                "FIELD_UNSUPPORTED",
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+                detail=(
+                    f"reason={option_info.get('unsupported_reason')!r} "
+                    f"strategy={option_info.get('resolution_strategy')!r} "
+                    f"preconstruction={option_info.get('preconstruction_kind')!r}"
+                ),
+            )
+
+        if resolved_col in row.index and row[resolved_col] is not None:
+            return row[resolved_col]
+
+        if not self._has_row_value(row, df_col):
+            return None
+
+        if option_info.get("kind") in {
+            OptionMapKind.USER_LOOKUP.value,
+            OptionMapKind.MEMBER_LOOKUP.value,
+        }:
+            lookup_status = (
+                row[status_col]
+                if status_col in row.index
+                else UserLookupStatus.USER_LOOKUP_NOT_RUN.value
+            )
+            lookup_error = row[error_col] if error_col in row.index else None
+            detail = (
+                f"value={row[df_col]!r} lookup_status={lookup_status!r} "
+                f"preconstruction={option_info.get('preconstruction_kind')!r}"
+            )
+            if lookup_error:
+                detail = f"{detail} error={lookup_error!r}"
+            self._raise_payload_error(
+                "LOOKUP_REQUIRED",
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+                detail=detail,
+            )
+
+        if option_info.get("kind") == OptionMapKind.TRACKER_ITEM_DIRECT.value:
+            resolved, lookup_status, lookup_error = self._resolve_tracker_item_reference_value(
+                schema_field,
+                row[df_col],
+                option_info,
+            )
+            if resolved is not None:
+                return resolved
+            error_code = (
+                "DIRECT_PARSE_FAILED"
+                if lookup_status in {
+                    OptionCheckStatus.DIRECT_PARSE_FAILED.value,
+                    OptionCheckStatus.TRACKER_ITEM_REGEX_MISSING.value,
+                }
+                else "LOOKUP_REQUIRED"
+            )
+            detail = f"value={row[df_col]!r} lookup_status={lookup_status!r}"
+            if lookup_error:
+                detail = f"{detail} error={lookup_error!r}"
+            self._raise_payload_error(
+                error_code,
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+                detail=detail,
+            )
+
+        if option_info.get("kind") == OptionMapKind.REFERENCE_LOOKUP.value:
+            self._raise_payload_error(
+                "LOOKUP_REQUIRED",
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+                detail=(
+                    f"reference_type={option_info.get('reference_type')!r} "
+                    f"lookup_target={option_info.get('lookup_target_kind')!r} "
+                    f"preconstruction={option_info.get('preconstruction_kind')!r} "
+                    f"detail={option_info.get('preconstruction_detail')!r} "
+                    f"reason={option_info.get('unsupported_reason')!r}"
+                ),
+            )
+
+        self._raise_payload_error(
+            "OPTION_RESOLUTION_FAILED",
+            schema_field=schema_field,
+            df_col=df_col,
+            row_id=row_id,
+            detail=f"value={row[df_col]!r}",
+        )
+
+    def _resolve_default_field_values(
+        self,
+        selected_default_values: dict[str, Any],
+        option_maps: dict[str, dict[str, Any]],
+    ) -> tuple[pd.DataFrame, dict[str, Any]]:
+        """필드 기본값을 검증하고 payload에 바로 쓸 값으로 정리한다."""
+        if self.state.schema_df is None or not selected_default_values:
+            return pd.DataFrame(), {}
+
+        errors: list[dict[str, Any]] = []
+        resolved_defaults: dict[str, Any] = {}
+
+        for schema_field, raw_value in selected_default_values.items():
+            matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
+            if matched.empty:
+                errors.append({
+                    "df_column": DEFAULT_VALUE_COLUMN_LABEL,
+                    "schema_field": schema_field,
+                    "_row_id": None,
+                    "raw_value": raw_value,
+                    "status": "SCHEMA_FIELD_MISSING",
+                    "value_source": "default",
+                    "error": "선택한 기본값 필드를 현재 트래커 스키마에서 찾을 수 없습니다.",
+                })
+                continue
+
+            field_row = matched.iloc[0]
+            if not bool(field_row.get("is_option_like", False)):
+                resolved_defaults[schema_field] = raw_value
+                continue
+
+            option_info = option_maps.get(schema_field)
+            if option_info is None:
+                errors.append({
+                    "df_column": DEFAULT_VALUE_COLUMN_LABEL,
+                    "schema_field": schema_field,
+                    "_row_id": None,
+                    "raw_value": raw_value,
+                    "status": "OPTION_MAP_MISSING",
+                    "value_source": "default",
+                    "error": "기본값에 필요한 option map을 만들 수 없습니다.",
+                })
+                continue
+
+            if not option_info.get("is_supported", True) or option_info.get("kind") == OptionMapKind.UNSUPPORTED.value:
+                errors.append({
+                    **self.mapper._validation_context(
+                        DEFAULT_VALUE_COLUMN_LABEL,
+                        schema_field,
+                        option_info,
+                        raw_value=raw_value,
+                        error=option_info.get("unsupported_reason"),
+                        value_source="default",
+                    ),
+                    "status": "FIELD_UNSUPPORTED",
+                })
+                continue
+
+            if option_info.get("kind") == OptionMapKind.STATIC_OPTIONS.value:
+                resolved_value = self.mapper.resolve_static_option_value(raw_value, option_info)
+                if resolved_value is None:
+                    errors.append({
+                        **self.mapper._validation_context(
+                            DEFAULT_VALUE_COLUMN_LABEL,
+                            schema_field,
+                            option_info,
+                            raw_value=raw_value,
+                            value_source="default",
+                        ),
+                        "status": "OPTION_NOT_FOUND",
+                    })
+                    continue
+                resolved_defaults[schema_field] = resolved_value
+                continue
+
+            if option_info.get("kind") == OptionMapKind.TRACKER_ITEM_DIRECT.value:
+                resolved_value, lookup_status, lookup_error = self._resolve_tracker_item_reference_value(
+                    schema_field,
+                    raw_value,
+                    option_info,
+                )
+                if resolved_value is not None:
+                    resolved_defaults[schema_field] = resolved_value
+                else:
+                    errors.append({
+                        **self.mapper._validation_context(
+                            DEFAULT_VALUE_COLUMN_LABEL,
+                            schema_field,
+                            option_info,
+                            raw_value=raw_value,
+                            error=lookup_error,
+                            value_source="default",
+                        ),
+                        "status": lookup_status or "DIRECT_PARSE_FAILED",
+                    })
+                continue
+
+            if option_info.get("kind") == OptionMapKind.USER_LOOKUP.value:
+                resolved_value, _, lookup_status, lookup_error = self._resolve_user_reference_value(
+                    raw_value,
+                    multiple_values=option_info.get("multiple_values", False),
+                )
+                if resolved_value is not None:
+                    resolved_defaults[schema_field] = resolved_value
+                else:
+                    errors.append({
+                        **self.mapper._validation_context(
+                            DEFAULT_VALUE_COLUMN_LABEL,
+                            schema_field,
+                            option_info,
+                            raw_value=raw_value,
+                            error=lookup_error,
+                            value_source="default",
+                        ),
+                        "status": lookup_status or "LOOKUP_REQUIRED",
+                    })
+                continue
+
+            if option_info.get("kind") == OptionMapKind.MEMBER_LOOKUP.value:
+                resolved_value, _, lookup_status, lookup_error = self._resolve_member_reference_value(
+                    raw_value,
+                    multiple_values=option_info.get("multiple_values", False),
+                    field_id=option_info.get("field_id"),
+                    member_types=option_info.get("member_types") or [],
+                )
+                if resolved_value is not None:
+                    resolved_defaults[schema_field] = resolved_value
+                else:
+                    errors.append({
+                        **self.mapper._validation_context(
+                            DEFAULT_VALUE_COLUMN_LABEL,
+                            schema_field,
+                            option_info,
+                            raw_value=raw_value,
+                            error=lookup_error,
+                            value_source="default",
+                        ),
+                        "status": lookup_status or "LOOKUP_REQUIRED",
+                    })
+                continue
+
+            errors.append({
+                **self.mapper._validation_context(
+                    DEFAULT_VALUE_COLUMN_LABEL,
+                    schema_field,
+                    option_info,
+                    raw_value=raw_value,
+                    error=option_info.get("unsupported_reason"),
+                    value_source="default",
+                ),
+                "status": "LOOKUP_REQUIRED",
+            })
+
+        return pd.DataFrame(errors), resolved_defaults
+
+    def _resolve_default_field_value(self, schema_field: str, raw_value: Any, row_id: int) -> Any:
+        """payload 생성 중 기본값을 실제 업로드 형식으로 변환한다."""
+        matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
+        if matched.empty:
+            self._raise_payload_error(
+                "FIELD_UNSUPPORTED",
+                schema_field=schema_field,
+                df_col=DEFAULT_VALUE_COLUMN_LABEL,
+                row_id=row_id,
+                detail="default field is missing in current schema",
+            )
+
+        field_row = matched.iloc[0]
+        if not bool(field_row.get("is_option_like", False)):
+            return raw_value
+
+        option_info = (self.state.option_maps or {}).get(schema_field, {})
+        kind = option_info.get("kind")
+
+        if not option_info.get("is_supported", True) or kind == OptionMapKind.UNSUPPORTED.value:
+            self._raise_payload_error(
+                "FIELD_UNSUPPORTED",
+                schema_field=schema_field,
+                df_col=DEFAULT_VALUE_COLUMN_LABEL,
+                row_id=row_id,
+                detail=(
+                    f"reason={option_info.get('unsupported_reason')!r} "
+                    f"strategy={option_info.get('resolution_strategy')!r}"
+                ),
+            )
+
+        if kind == OptionMapKind.STATIC_OPTIONS.value:
+            resolved_value = self.mapper.resolve_static_option_value(raw_value, option_info)
+            if resolved_value is None:
+                self._raise_payload_error(
+                    "OPTION_RESOLUTION_FAILED",
+                    schema_field=schema_field,
+                    df_col=DEFAULT_VALUE_COLUMN_LABEL,
+                    row_id=row_id,
+                    detail=f"value={raw_value!r}",
+                )
+            return resolved_value
+
+        if kind == OptionMapKind.TRACKER_ITEM_DIRECT.value:
+            resolved, lookup_status, lookup_error = self._resolve_tracker_item_reference_value(
+                schema_field,
+                raw_value,
+                option_info,
+            )
+            if resolved is not None:
+                return resolved
+            error_code = (
+                "DIRECT_PARSE_FAILED"
+                if lookup_status in {
+                    OptionCheckStatus.DIRECT_PARSE_FAILED.value,
+                    OptionCheckStatus.TRACKER_ITEM_REGEX_MISSING.value,
+                }
+                else "LOOKUP_REQUIRED"
+            )
+            detail = f"value={raw_value!r} lookup_status={lookup_status!r}"
+            if lookup_error:
+                detail = f"{detail} error={lookup_error!r}"
+            self._raise_payload_error(
+                error_code,
+                schema_field=schema_field,
+                df_col=DEFAULT_VALUE_COLUMN_LABEL,
+                row_id=row_id,
+                detail=detail,
+            )
+
+        if kind == OptionMapKind.USER_LOOKUP.value:
+            resolved, _, lookup_status, lookup_error = self._resolve_user_reference_value(
+                raw_value,
+                multiple_values=option_info.get("multiple_values", False),
+            )
+            if resolved is not None:
+                return resolved
+            self._raise_payload_error(
+                "LOOKUP_REQUIRED",
+                schema_field=schema_field,
+                df_col=DEFAULT_VALUE_COLUMN_LABEL,
+                row_id=row_id,
+                detail=(
+                    f"value={raw_value!r} lookup_status={lookup_status!r} "
+                    f"error={lookup_error!r}"
+                ),
+            )
+
+        if kind == OptionMapKind.MEMBER_LOOKUP.value:
+            resolved, _, lookup_status, lookup_error = self._resolve_member_reference_value(
+                raw_value,
+                multiple_values=option_info.get("multiple_values", False),
+                field_id=option_info.get("field_id"),
+                member_types=option_info.get("member_types") or [],
+            )
+            if resolved is not None:
+                return resolved
+            self._raise_payload_error(
+                "LOOKUP_REQUIRED",
+                schema_field=schema_field,
+                df_col=DEFAULT_VALUE_COLUMN_LABEL,
+                row_id=row_id,
+                detail=(
+                    f"value={raw_value!r} lookup_status={lookup_status!r} "
+                    f"error={lookup_error!r}"
+                ),
+            )
+
+        self._raise_payload_error(
+            "LOOKUP_REQUIRED",
+            schema_field=schema_field,
+            df_col=DEFAULT_VALUE_COLUMN_LABEL,
+            row_id=row_id,
+            detail=(
+                f"value={raw_value!r} "
+                f"lookup_target={option_info.get('lookup_target_kind')!r} "
+                f"reason={option_info.get('unsupported_reason')!r}"
+            ),
+        )
+
+    def _resolve_manual_field_value(
+        self,
+        schema_field: str,
+        raw_value: Any,
+        *,
+        row_id: int,
+        df_col: str,
+    ) -> Any:
+        """행 외부 입력값을 스키마 기준 업로드 값으로 변환한다."""
+        matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
+        if matched.empty:
+            self._raise_payload_error(
+                "FIELD_UNSUPPORTED",
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+                detail="schema field is missing in current schema",
+            )
+
+        field_row = matched.iloc[0]
+        if not bool(field_row.get("is_option_like", False)):
+            return raw_value
+
+        option_maps = self.state.option_maps or self.mapper.build_option_maps_from_schema(self.state.schema_df)
+        if not self.state.option_maps:
+            self.state.option_maps = option_maps
+        option_info = option_maps.get(schema_field, {})
+        kind = option_info.get("kind")
+        if not option_info.get("is_supported", True) or kind == OptionMapKind.UNSUPPORTED.value:
+            self._raise_payload_error(
+                "FIELD_UNSUPPORTED",
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+                detail=(
+                    f"reason={option_info.get('unsupported_reason')!r} "
+                    f"strategy={option_info.get('resolution_strategy')!r}"
+                ),
+            )
+
+        if kind == OptionMapKind.STATIC_OPTIONS.value:
+            resolved_value = self.mapper.resolve_static_option_value(raw_value, option_info)
+            if resolved_value is None:
+                self._raise_payload_error(
+                    "OPTION_RESOLUTION_FAILED",
+                    schema_field=schema_field,
+                    df_col=df_col,
+                    row_id=row_id,
+                    detail=f"value={raw_value!r}",
+                )
+            return resolved_value
+
+        if kind == OptionMapKind.TRACKER_ITEM_DIRECT.value:
+            resolved, lookup_status, lookup_error = self._resolve_tracker_item_reference_value(
+                schema_field,
+                raw_value,
+                option_info,
+            )
+            if resolved is not None:
+                return resolved
+            error_code = (
+                "DIRECT_PARSE_FAILED"
+                if lookup_status in {
+                    OptionCheckStatus.DIRECT_PARSE_FAILED.value,
+                    OptionCheckStatus.TRACKER_ITEM_REGEX_MISSING.value,
+                }
+                else "LOOKUP_REQUIRED"
+            )
+            detail = f"value={raw_value!r} lookup_status={lookup_status!r}"
+            if lookup_error:
+                detail = f"{detail} error={lookup_error!r}"
+            self._raise_payload_error(
+                error_code,
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+                detail=detail,
+            )
+
+        if kind == OptionMapKind.USER_LOOKUP.value:
+            resolved, _, lookup_status, lookup_error = self._resolve_user_reference_value(
+                raw_value,
+                multiple_values=option_info.get("multiple_values", False),
+            )
+            if resolved is None:
+                self._raise_payload_error(
+                    "LOOKUP_REQUIRED",
+                    schema_field=schema_field,
+                    df_col=df_col,
+                    row_id=row_id,
+                    detail=(
+                        f"value={raw_value!r} lookup_status={lookup_status!r} "
+                        f"error={lookup_error!r}"
+                    ),
+                )
+            return resolved
+
+        if kind == OptionMapKind.MEMBER_LOOKUP.value:
+            resolved, _, lookup_status, lookup_error = self._resolve_member_reference_value(
+                raw_value,
+                multiple_values=option_info.get("multiple_values", False),
+                field_id=option_info.get("field_id"),
+                member_types=option_info.get("member_types") or [],
+            )
+            if resolved is None:
+                self._raise_payload_error(
+                    "LOOKUP_REQUIRED",
+                    schema_field=schema_field,
+                    df_col=df_col,
+                    row_id=row_id,
+                    detail=(
+                        f"value={raw_value!r} lookup_status={lookup_status!r} "
+                        f"error={lookup_error!r}"
+                    ),
+                )
+            return resolved
+
+        self._raise_payload_error(
+            "LOOKUP_REQUIRED",
+            schema_field=schema_field,
+            df_col=df_col,
+            row_id=row_id,
+            detail=(
+                f"value={raw_value!r} "
+                f"lookup_target={option_info.get('lookup_target_kind')!r} "
+                f"reason={option_info.get('unsupported_reason')!r}"
+            ),
+        )
+
+    def _apply_manual_field_values(
+        self,
+        item: TrackerItemBase,
+        explicit_field_values: dict[str, Any] | None,
+        *,
+        row_id: int,
+        applied_schema_fields: set[str],
+        df_col_prefix: str,
+    ) -> None:
+        """행 외부에서 받은 값을 루트/보조 payload에 적용한다."""
+        if self.state.schema_df is None or not explicit_field_values:
+            return
+
+        for schema_field, raw_value in explicit_field_values.items():
+            if schema_field in applied_schema_fields:
+                continue
+            if not self._has_configured_value(raw_value):
+                continue
+
+            matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
+            if matched.empty:
+                continue
+
+            field_row = matched.iloc[0]
+            if bool(field_row.get("is_table_field")):
+                continue
+            tracker_field = str(field_row.get("tracker_item_field") or schema_field).strip()
+            if not tracker_field:
+                continue
+
+            df_col = f"{df_col_prefix}:{schema_field}"
+            self._ensure_field_ready_for_payload(
+                field_row=field_row,
+                schema_field=schema_field,
+                df_col=df_col,
+                row_id=row_id,
+            )
+            field_value = self._resolve_manual_field_value(
+                schema_field,
+                raw_value,
+                row_id=row_id,
+                df_col=df_col,
+            )
+            if field_value is None:
+                continue
+
+            field_info = self._schema_field_info(field_row, schema_field)
+            item.set_field_value(tracker_field, field_value, field_info)
+            applied_schema_fields.add(schema_field)
+
+    def _apply_default_field_values(
+        self,
+        item: TrackerItemBase,
+        *,
+        row_id: int,
+        operation: str,
+        applied_schema_fields: set[str],
+    ) -> None:
+        """행 값이 없는 필드에 공통 기본값을 보충한다."""
+        if self.state.schema_df is None or not self.state.selected_default_values:
+            return
+
+        for schema_field, raw_value in self.state.selected_default_values.items():
+            if schema_field in applied_schema_fields:
+                continue
+            if not self._has_configured_value(raw_value):
+                continue
+            if not self._scope_applies_to_operation(
+                self.state.selected_default_value_modes.get(schema_field),
+                operation,
+                upload_mode=self.state.upload_mode,
+            ):
+                continue
+
+            matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
+            if matched.empty:
+                continue
+
+            field_row = matched.iloc[0]
+            tracker_field = str(field_row.get("tracker_item_field") or schema_field).strip()
+            if not tracker_field:
+                continue
+
+            field_value = self.state.resolved_default_values.get(schema_field)
+            if field_value is None:
+                field_value = self._resolve_default_field_value(schema_field, raw_value, row_id)
+            if field_value is None:
+                continue
+
+            field_info = self._schema_field_info(field_row, schema_field)
+            item.set_field_value(tracker_field, field_value, field_info)
+            applied_schema_fields.add(schema_field)
+
+    def _build_table_custom_fields(self, row: pd.Series) -> list[TableFieldValue]:
+        """현재 행에서 TableField 값들을 모아 custom field payload로 만든다."""
+        custom_fields: list[TableFieldValue] = []
+        if not self.state.table_field_mapping or self.state.schema_df is None:
+            return custom_fields
+
+        table_fields_by_name = {}
+        table_schema_rows = self.state.schema_df[self.state.schema_df.get("is_table_field", False).fillna(False)]
+
+        for _, tf_row in table_schema_rows.iterrows():
+            tf_name = tf_row["field_name"]
+            table_fields_by_name[tf_name] = {
+                "field_id": tf_row["field_id"],
+                "columns": tf_row.get("table_columns", []),
+            }
+
+        tables_data: dict[str, dict[str, Any]] = {}
+
+        for df_col, tf_info in self.state.table_field_mapping.items():
+            tf_name = tf_info["table_field_name"]
+            col_name = tf_info["column_name"]
+            if tf_name not in tables_data:
+                tables_data[tf_name] = {}
+            tables_data[tf_name][col_name] = row[df_col] if df_col in row.index else None
+
+        for tf_name, table_values_by_column in tables_data.items():
+            if tf_name not in table_fields_by_name:
+                continue
+
+            column_defs = table_fields_by_name[tf_name]["columns"]
+            row_count = 0
+            for raw_value in table_values_by_column.values():
+                if isinstance(raw_value, list):
+                    row_count = max(row_count, len(raw_value))
+                elif self._has_configured_value(raw_value):
+                    row_count = max(row_count, 1)
+
+            values = []
+            for row_index in range(row_count):
+                row_fields = []
+                for column_def in column_defs:
+                    column_name = column_def.get("name")
+                    if not column_name:
+                        continue
+
+                    raw_value = table_values_by_column.get(column_name)
+                    if isinstance(raw_value, list):
+                        cell_value = raw_value[row_index] if row_index < len(raw_value) else None
+                    else:
+                        cell_value = raw_value if row_index == 0 else None
+
+                    if not self._has_configured_value(cell_value):
+                        continue
+
+                    field_info = {
+                        "field_id": column_def.get("id"),
+                        "field_name": column_name,
+                        "field_type": column_def.get("type"),
+                        "value_model": column_def.get("valueModel", FieldValueType.TEXT.value),
+                        "reference_type": column_def.get("referenceType"),
+                        "multiple_values": column_def.get("multipleValues", False),
+                    }
+                    row_fields.append(_build_field_value(field_info, cell_value))
+
+                if row_fields:
+                    values.append(row_fields)
+
+            if values:
+                custom_fields.append(
+                    TableFieldValue(
+                        field_id=table_fields_by_name[tf_name]["field_id"],
+                        field_name=tf_name,
+                        values=values,
+                    )
+                )
+
+        return custom_fields
+
+    def _build_row_item(
+        self,
+        row: pd.Series,
+        row_id: int,
+        *,
+        default_name: str | None,
+        operation: str,
+    ) -> TrackerItemBase:
+        """행 값과 기본값을 반영한 TrackerItem 조립 결과를 만든다."""
+        item = TrackerItemBase()
+        if default_name is not None:
+            item.name = str(default_name)
+        applied_schema_fields: set[str] = set()
+
+        for df_col, schema_field in self.state.selected_mapping.items():
+            if not self._scope_applies_to_operation(
+                self.state.selected_mapping_modes.get(df_col),
+                operation,
+                upload_mode=self.state.upload_mode,
+            ):
+                continue
+            matched = self.state.schema_df[self.state.schema_df["field_name"] == schema_field]
+            if matched.empty:
+                continue
+
+            field_row = matched.iloc[0]
+            if bool(field_row.get("is_table_field")):
+                continue
+            tracker_field = str(field_row.get("tracker_item_field") or schema_field).strip()
+            if not tracker_field:
+                continue
+
+            field_value = None
+            if df_col in self.state.selected_option_mapping:
+                if not self._has_row_value(row, df_col):
+                    continue
+                self._ensure_field_ready_for_payload(
+                    field_row=field_row,
+                    schema_field=schema_field,
+                    df_col=df_col,
+                    row_id=row_id,
+                )
+                field_value = self._resolve_option_field_value(row, row_id, df_col, schema_field)
+            elif self._has_row_value(row, df_col):
+                self._ensure_field_ready_for_payload(
+                    field_row=field_row,
+                    schema_field=schema_field,
+                    df_col=df_col,
+                    row_id=row_id,
+                )
+                field_value = row[df_col]
+
+            if field_value is None:
+                continue
+
+            field_info = self._schema_field_info(field_row, schema_field)
+            item.set_field_value(tracker_field, field_value, field_info)
+            applied_schema_fields.add(schema_field)
+
+        self._apply_default_field_values(
+            item,
+            row_id=row_id,
+            operation=operation,
+            applied_schema_fields=applied_schema_fields,
+        )
+        table_custom_fields = self._build_table_custom_fields(row)
+        if table_custom_fields:
+            for field in table_custom_fields:
+                item.add_field_value(field)
+
+        return item
+
+    def _build_row_payload(self, row: pd.Series, row_id: int, *, operation: str = "create") -> dict[str, Any]:
+        """단일 생성 행에서 순수 item payload만 계산한다."""
+        item = self._build_row_item(
+            row,
+            row_id,
+            default_name=str(row.get("upload_name", "")),
+            operation=operation,
+        )
+        payload = item.create_new_item_payload()
+        return self._serialize_payload_value(payload)
+
+    @staticmethod
+    def _update_item_id_column_name(source_df: pd.DataFrame) -> str | None:
+        """업데이트 모드에서 사용할 Excel ID 열 이름을 찾는다."""
+        exact_match = None
+        for column_name in source_df.columns:
+            normalized = str(column_name or "").strip()
+            if not normalized or normalized.startswith("_"):
+                continue
+            if normalized == "id":
+                return normalized
+            if normalized.casefold() == "id" and exact_match is None:
+                exact_match = normalized
+        return exact_match
+
+    @staticmethod
+    def _normalize_upload_mode(upload_mode: Any) -> str:
+        """내부 업로드 모드 이름을 create/update/upsert 중 하나로 정규화한다."""
+        normalized = str(upload_mode or "create").strip().lower()
+        if normalized in {"update", "upsert"}:
+            return normalized
+        return "create"
+
+    @classmethod
+    def _upload_mode_supports_update(cls, upload_mode: Any) -> bool:
+        """현재 모드가 기존 item ID 기반 수정 경로를 포함하는지 돌려준다."""
+        return cls._normalize_upload_mode(upload_mode) in {"update", "upsert"}
+
+    @classmethod
+    def _default_operation_scope(cls, upload_mode: Any) -> dict[str, bool]:
+        normalized_mode = cls._normalize_upload_mode(upload_mode)
+        if normalized_mode == "update":
+            return {"create": False, "update": True}
+        if normalized_mode == "upsert":
+            return {"create": True, "update": True}
+        return {"create": True, "update": False}
+
+    @classmethod
+    def _normalize_operation_scope(
+        cls,
+        raw_scope: Any,
+        *,
+        upload_mode: Any,
+    ) -> dict[str, bool]:
+        default_scope = cls._default_operation_scope(upload_mode)
+        scope_payload = dict(raw_scope) if isinstance(raw_scope, dict) else {}
+        return {
+            "create": bool(scope_payload.get("create", default_scope["create"])),
+            "update": bool(scope_payload.get("update", default_scope["update"])),
+        }
+
+    @classmethod
+    def _scope_applies_to_operation(cls, raw_scope: Any, operation: str, *, upload_mode: Any) -> bool:
+        scope = cls._normalize_operation_scope(raw_scope, upload_mode=upload_mode)
+        normalized_operation = str(operation or "create").strip().lower()
+        if normalized_operation == "update":
+            return bool(scope.get("update", False))
+        return bool(scope.get("create", False))
+
+    @classmethod
+    def _scope_applies_to_upload_mode(cls, raw_scope: Any, upload_mode: Any) -> bool:
+        normalized_mode = cls._normalize_upload_mode(upload_mode)
+        scope = cls._normalize_operation_scope(raw_scope, upload_mode=upload_mode)
+        if normalized_mode == "update":
+            return bool(scope.get("update", False))
+        if normalized_mode == "upsert":
+            return bool(scope.get("create", False) or scope.get("update", False))
+        return bool(scope.get("create", False))
+
+    @staticmethod
+    def _parse_update_item_id(raw_value: Any) -> int:
+        """업데이트 대상 item id를 정수로 정규화한다."""
+        if raw_value is None:
+            raise ValueError("missing")
+        if isinstance(raw_value, bool):
+            raise ValueError(f"invalid: {raw_value!r}")
+        if isinstance(raw_value, int):
+            if raw_value > 0:
+                return raw_value
+            raise ValueError(f"invalid: {raw_value!r}")
+        if isinstance(raw_value, float):
+            if pd.isna(raw_value):
+                raise ValueError("missing")
+            if raw_value.is_integer() and raw_value > 0:
+                return int(raw_value)
+            raise ValueError(f"invalid: {raw_value!r}")
+
+        text = str(raw_value).strip()
+        if not text:
+            raise ValueError("missing")
+        if text.lower() == "nan":
+            raise ValueError("missing")
+        if text.isdigit():
+            normalized = int(text)
+            if normalized > 0:
+                return normalized
+        if text.endswith(".0") and text[:-2].isdigit():
+            normalized = int(text[:-2])
+            if normalized > 0:
+                return normalized
+        raise ValueError(f"invalid: {raw_value!r}")
+
+    def _resolve_update_target_item_id(
+        self,
+        row: pd.Series,
+        row_id: int,
+        *,
+        id_column_name: str,
+        duplicate_item_ids: set[int],
+        allow_missing: bool,
+    ) -> int | None:
+        """행의 id 셀을 update 대상 item id로 해석한다."""
+        if id_column_name not in row.index:
+            if allow_missing:
+                return None
+            self._raise_payload_error(
+                "UPDATE_ITEM_ID_COLUMN_MISSING",
+                schema_field="id",
+                df_col="id",
+                row_id=row_id,
+                detail="update mode requires an Excel 'id' column",
+            )
+
+        raw_item_id = row.get(id_column_name)
+        try:
+            target_item_id = self._parse_update_item_id(raw_item_id)
+        except ValueError as exc:
+            if str(exc) == "missing":
+                if allow_missing:
+                    return None
+                self._raise_payload_error(
+                    "UPDATE_ITEM_ID_MISSING",
+                    schema_field="id",
+                    df_col=id_column_name,
+                    row_id=row_id,
+                    detail="update target item id is empty",
+                )
+            self._raise_payload_error(
+                "UPDATE_ITEM_ID_INVALID",
+                schema_field="id",
+                df_col=id_column_name,
+                row_id=row_id,
+                detail=f"value={raw_item_id!r}",
+            )
+
+        if target_item_id in duplicate_item_ids:
+            self._raise_payload_error(
+                "UPDATE_ITEM_ID_DUPLICATE",
+                schema_field="id",
+                df_col=id_column_name,
+                row_id=row_id,
+                detail=f"item_id={target_item_id}",
+            )
+
+        return int(target_item_id)
+
+    @staticmethod
+    def _filter_payload_rows(
+        payload_df: pd.DataFrame,
+        include_row_ids: set[int] | None,
+    ) -> pd.DataFrame:
+        """지정된 row_id 집합에 해당하는 payload 행만 남긴다."""
+        if include_row_ids is None:
+            return payload_df.copy()
+        normalized_row_ids = {int(row_id) for row_id in include_row_ids}
+        if not normalized_row_ids:
+            return payload_df.iloc[0:0].copy()
+        return payload_df[payload_df["_row_id"].isin(sorted(normalized_row_ids))].copy()
+
+    @staticmethod
+    def _concat_result_frames(frames: list[pd.DataFrame | None]) -> pd.DataFrame:
+        """업로드 결과 프레임을 비어 있지 않은 것만 합친다."""
+        valid_frames = [frame for frame in frames if isinstance(frame, pd.DataFrame) and not frame.empty]
+        if not valid_frames:
+            return pd.DataFrame()
+        return pd.concat(valid_frames, ignore_index=True)
+
+    @staticmethod
+    def _result_count(frame: pd.DataFrame | None) -> int:
+        """결과 DataFrame 행 수를 안전하게 계산한다."""
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            return 0
+        return int(len(frame))
+
+    def _apply_upsert_hierarchy_validation(
+        self,
+        payload_df: pd.DataFrame,
+        source_df: pd.DataFrame,
+    ) -> None:
+        """계층형 upsert에서 신규 조상 아래의 update 행을 차단한다."""
+        if payload_df.empty or source_df.empty:
+            return
+
+        parent_by_row_id: dict[int, int | None] = {}
+        for _, source_row in source_df.iterrows():
+            row_id = int(source_row["_row_id"])
+            parent_row_id = source_row.get("parent_row_id")
+            normalized_parent_id: int | None = None
+            if parent_row_id is not None and not pd.isna(parent_row_id):
+                try:
+                    normalized_parent_id = int(parent_row_id)
+                except Exception:
+                    normalized_parent_id = None
+            parent_by_row_id[row_id] = normalized_parent_id
+
+        row_index_by_row_id = {
+            int(row_id): index
+            for index, row_id in enumerate(payload_df["_row_id"].tolist())
+        }
+
+        def _has_new_ancestor(row_id: int) -> bool:
+            current_parent_id = parent_by_row_id.get(int(row_id))
+            while current_parent_id is not None:
+                parent_index = row_index_by_row_id.get(int(current_parent_id))
+                if parent_index is None:
+                    current_parent_id = parent_by_row_id.get(int(current_parent_id))
+                    continue
+                parent_row = payload_df.iloc[parent_index]
+                if str(parent_row.get("_operation") or "").strip().lower() == "create":
+                    return True
+                current_parent_id = parent_by_row_id.get(int(current_parent_id))
+            return False
+
+        for index, row in payload_df.iterrows():
+            if row.get("payload_status") != PayloadStatus.READY.value:
+                continue
+            if str(row.get("_operation") or "").strip().lower() != "update":
+                continue
+
+            row_id = int(row["_row_id"])
+            if not _has_new_ancestor(row_id):
+                continue
+
+            payload_df.at[index, "payload_json"] = None
+            payload_df.at[index, "payload_status"] = PayloadStatus.FAILED.value
+            payload_df.at[index, "payload_error"] = (
+                f"[UPSERT_UPDATE_WITH_NEW_ANCESTOR] field='id' df_column='id' _row_id={row_id} "
+                "upsert update rows cannot have newly inserted ancestor rows in the same hierarchy"
+            )
+
+    def _existing_item(self, item_id: int, *, row_id: int, df_col: str) -> dict[str, Any]:
+        """기존 item payload를 조회하고 캐시에 보관한다."""
+        cached = self.state.existing_item_cache.get(int(item_id))
+        if isinstance(cached, dict):
+            return deepcopy(cached)
+
+        try:
+            existing_item = self.client.get_item(int(item_id))
+        except Exception as exc:
+            self._raise_payload_error(
+                "UPDATE_ITEM_FETCH_FAILED",
+                schema_field="id",
+                df_col=df_col,
+                row_id=row_id,
+                detail=f"item_id={int(item_id)} error={exc}",
+            )
+
+        if not isinstance(existing_item, dict):
+            self._raise_payload_error(
+                "UPDATE_ITEM_FETCH_FAILED",
+                schema_field="id",
+                df_col=df_col,
+                row_id=row_id,
+                detail=f"item_id={int(item_id)} returned invalid payload",
+            )
+
+        self.state.existing_item_cache[int(item_id)] = dict(existing_item)
+        return deepcopy(existing_item)
+
+    @staticmethod
+    def _custom_field_key(field_payload: Any) -> tuple[str, Any] | None:
+        """custom field 병합용 식별 키를 만든다."""
+        if not isinstance(field_payload, dict):
+            return None
+        field_id = field_payload.get("fieldId")
+        if field_id is not None:
+            try:
+                return ("fieldId", int(field_id))
+            except Exception:
+                pass
+        field_name = str(field_payload.get("name") or "").strip()
+        if field_name:
+            return ("name", field_name.casefold())
+        return None
+
+    @classmethod
+    def _merge_custom_fields(
+        cls,
+        existing_fields: Any,
+        updated_fields: Any,
+    ) -> list[dict[str, Any]]:
+        """기존 custom field 목록에 수정 대상 field만 덮어쓴다."""
+        merged_fields: list[dict[str, Any]] = []
+        field_indexes: dict[tuple[str, Any], int] = {}
+
+        for existing_field in existing_fields if isinstance(existing_fields, list) else []:
+            if not isinstance(existing_field, dict):
+                continue
+            merged_fields.append(deepcopy(existing_field))
+            field_key = cls._custom_field_key(existing_field)
+            if field_key is not None:
+                field_indexes[field_key] = len(merged_fields) - 1
+
+        for updated_field in updated_fields if isinstance(updated_fields, list) else []:
+            if not isinstance(updated_field, dict):
+                continue
+            copied_field = deepcopy(updated_field)
+            field_key = cls._custom_field_key(updated_field)
+            if field_key is None or field_key not in field_indexes:
+                merged_fields.append(copied_field)
+                if field_key is not None:
+                    field_indexes[field_key] = len(merged_fields) - 1
+                continue
+            merged_fields[field_indexes[field_key]] = copied_field
+
+        return merged_fields
+
+    def _build_update_row_payload(
+        self,
+        row: pd.Series,
+        row_id: int,
+        *,
+        id_column_name: str,
+        duplicate_item_ids: set[int],
+        fetch_existing_item: bool,
+        target_item_id: int | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        """단일 업데이트 행의 대상 id와 PUT payload를 계산한다."""
+        if target_item_id is None:
+            target_item_id = self._resolve_update_target_item_id(
+                row,
+                row_id,
+                id_column_name=id_column_name,
+                duplicate_item_ids=duplicate_item_ids,
+                allow_missing=False,
+            )
+
+        partial_item = self._build_row_item(
+            row,
+            row_id,
+            default_name=None,
+            operation="update",
+        )
+        partial_payload = self._serialize_payload_value(partial_item.to_dict())
+
+        if not fetch_existing_item:
+            partial_payload["id"] = int(target_item_id)
+            return int(target_item_id), partial_payload
+
+        existing_item = self._existing_item(
+            target_item_id,
+            row_id=row_id,
+            df_col=id_column_name,
+        )
+        merged_payload = deepcopy(existing_item)
+
+        for payload_key, payload_value in partial_payload.items():
+            if payload_key == "customFields":
+                merged_payload["customFields"] = self._merge_custom_fields(
+                    merged_payload.get("customFields"),
+                    payload_value,
+                )
+                continue
+            merged_payload[payload_key] = payload_value
+
+        merged_payload["id"] = int(target_item_id)
+        return int(target_item_id), merged_payload
+
+    @staticmethod
+    def _normalize_root_item_name(root_item_name: str | None) -> str | None:
+        if root_item_name is None:
+            return None
+        normalized = str(root_item_name).strip()
+        return normalized or None
+
+    def _build_root_item_payload(
+        self,
+        root_item_name: str,
+        root_field_values: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """업로드 시작 전에 생성할 최상위 부모 item payload를 만든다."""
+        item = TrackerItemBase()
+        item.name = root_item_name
+        applied_schema_fields: set[str] = set()
+        self._apply_manual_field_values(
+            item,
+            root_field_values,
+            row_id=-1,
+            applied_schema_fields=applied_schema_fields,
+            df_col_prefix="ROOT",
+        )
+        self._apply_default_field_values(
+            item,
+            row_id=-1,
+            operation="create",
+            applied_schema_fields=applied_schema_fields,
+        )
+        return self._serialize_payload_value(item.create_new_item_payload())
+
+    @staticmethod
+    def _unresolved_parent_error(parent_row_id: Any, *, root_item_name: str | None = None) -> str:
+        if parent_row_id is None or pd.isna(parent_row_id):
+            if root_item_name:
+                return f"Top-level parent {root_item_name!r} is unavailable."
+            return "Top-level row was not uploaded."
+        return f"Parent row {int(parent_row_id)} was not uploaded successfully."
+
+    @classmethod
+    def _normalize_top_level_parent_specs(
+        cls,
+        top_level_parent_specs: list[dict[str, Any]] | None,
+    ) -> tuple[list[dict[str, Any]], dict[int, str]]:
+        normalized_specs: list[dict[str, Any]] = []
+        parent_name_by_row_id: dict[int, str] = {}
+        for raw_spec in top_level_parent_specs or []:
+            if not isinstance(raw_spec, dict):
+                continue
+            parent_name = cls._normalize_root_item_name(raw_spec.get("name"))
+            if parent_name is None:
+                continue
+
+            normalized_row_ids: list[int] = []
+            for raw_row_id in raw_spec.get("row_ids") or []:
+                try:
+                    normalized_row_ids.append(int(raw_row_id))
+                except Exception:
+                    continue
+
+            normalized_spec = {
+                "key": str(raw_spec.get("key") or parent_name).strip() or parent_name,
+                "name": parent_name,
+                "field_values": dict(raw_spec.get("field_values") or {}),
+                "row_ids": normalized_row_ids,
+                "parent_key": str(raw_spec.get("parent_key") or "").strip() or None,
+                "kind": str(raw_spec.get("kind") or "group_root").strip() or "group_root",
+            }
+            normalized_specs.append(normalized_spec)
+            for row_id in normalized_row_ids:
+                parent_name_by_row_id[row_id] = parent_name
+
+        return normalized_specs, parent_name_by_row_id
