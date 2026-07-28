@@ -1043,10 +1043,12 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
                 },
                 selected_default_values={
                     "Status": "Open",
+                    "담당자": "홍길동",
                     "없는필드": "무시",
                 },
                 selected_default_value_modes={
                     "Status": {"create": True, "update": False},
+                    "담당자": {"create": False, "update": True},
                     "없는필드": {"create": False, "update": True},
                 },
                 selected_tracker_item_settings={
@@ -1064,8 +1066,9 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
             self.assertNotIn("예전담당자", mapping_context.selected_mapping)
             self.assertEqual(mapping_context.selected_mapping_modes["Summary"], {"create": False, "update": True})
             self.assertEqual(mapping_context.selected_mapping_modes["담당자"], {"create": True, "update": False})
-            self.assertEqual(mapping_context.selected_default_values, {"Status": "Open"})
+            self.assertEqual(mapping_context.selected_default_values, {"Status": "Open", "담당자": "홍길동"})
             self.assertEqual(mapping_context.selected_default_value_modes["Status"], {"create": True, "update": False})
+            self.assertEqual(mapping_context.selected_default_value_modes["담당자"], {"create": False, "update": False})
             self.assertEqual(mapping_context.selected_tracker_item_settings, {})
 
     def test_prepare_mapping_context_reuses_cached_preview_data(self) -> None:

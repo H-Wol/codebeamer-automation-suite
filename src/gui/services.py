@@ -582,14 +582,14 @@ class GuiUploadPipelineService:
         upload_mode: str | None,
     ) -> dict[str, dict[str, bool]]:
         normalized_modes: dict[str, dict[str, bool]] = {}
+        default_scope = cls._default_operation_scope(upload_mode)
         for schema_field in selected_default_values.keys():
             normalized_field = str(schema_field).strip()
             if not normalized_field:
                 continue
-            normalized_modes[normalized_field] = cls._normalize_operation_scope(
-                (selected_default_value_modes or {}).get(normalized_field),
-                upload_mode=upload_mode,
-            )
+            raw_scope = (selected_default_value_modes or {}).get(normalized_field)
+            is_enabled = cls._scope_applies_to_upload_mode(raw_scope, upload_mode=upload_mode)
+            normalized_modes[normalized_field] = dict(default_scope) if is_enabled else {"create": False, "update": False}
         return normalized_modes
 
     def create_wizard(self, settings) -> CodebeamerUploadWizard:
@@ -3285,7 +3285,7 @@ class GuiUploadPipelineService:
             return (
                 "오류",
                 f"{field_name} 필드는 현재 GUI에서 지원하지 않습니다.",
-                "이 컬럼 사용을 끄거나 지원되는 다른 필드로 다시 매핑하세요.",
+                "이 컬럼 매핑을 해제하거나 지원되는 다른 필드로 다시 매핑하세요.",
             )
         if status == OptionCheckStatus.LOOKUP_REQUIRED.value:
             if is_default_value:
@@ -3297,7 +3297,7 @@ class GuiUploadPipelineService:
             return (
                 "오류",
                 f"{field_name} 값은 업로드 전에 추가 조회가 필요합니다.",
-                "이 컬럼 사용을 끄거나, 지원되는 필드로 다시 매핑하세요.",
+                "이 컬럼 매핑을 해제하거나, 지원되는 필드로 다시 매핑하세요.",
             )
         if status == OptionCheckStatus.OPTION_NOT_FOUND.value:
             if is_default_value:
@@ -3363,7 +3363,7 @@ class GuiUploadPipelineService:
             return (
                 "오류",
                 f"{field_name} 필드의 값을 확인할 준비가 아직 되어 있지 않습니다.",
-                "이 컬럼 사용을 끄거나 지원되는 다른 필드로 다시 매핑하세요.",
+                "이 컬럼 매핑을 해제하거나 지원되는 다른 필드로 다시 매핑하세요.",
             )
         if status.endswith(("USER_LOOKUP_FAILED", "USER_LOOKUP_AMBIGUOUS", "USER_NOT_FOUND")):
             return (
@@ -3436,7 +3436,7 @@ class GuiUploadPipelineService:
                 column,
                 field,
                 "현재 GUI에서 지원하지 않는 필드가 포함되어 있습니다.",
-                "매핑에서 해당 컬럼 사용을 끄거나 다른 필드로 바꾼 뒤 다시 검증하세요.",
+                "매핑에서 해당 컬럼을 해제하거나 다른 필드로 바꾼 뒤 다시 검증하세요.",
             )
         if code == "LOOKUP_REQUIRED":
             return (
@@ -3611,7 +3611,7 @@ class GuiUploadPipelineService:
                 if status in {MappingStatus.OK.value, "ok", "matched", ""}:
                     continue
                 if status in {MappingStatus.UNMAPPED.value, "unmapped"}:
-                    # GUI의 `사용` 체크박스로 제외한 컬럼은 업로드 대상이 아니므로 차단하지 않는다.
+                    # GUI에서 생성/수정 적용을 모두 해제한 컬럼은 업로드 대상이 아니므로 차단하지 않는다.
                     continue
                 if status in {MappingStatus.SCHEMA_FIELD_MISSING.value, "schema_field_missing"}:
                     issues.append({
@@ -3626,7 +3626,7 @@ class GuiUploadPipelineService:
                         "field": str(row.get("selected_schema_field") or ""),
                         "raw_value": "",
                         "message": "선택한 필드를 현재 트래커 스키마에서 찾을 수 없습니다.",
-                        "action": "매핑 단계에서 다른 필드를 선택하거나, 해당 컬럼 사용을 끄세요.",
+                        "action": "매핑 단계에서 다른 필드를 선택하거나, 해당 컬럼의 생성/수정 적용을 해제하세요.",
                     })
 
         if option_check_df is not None and not option_check_df.empty:
