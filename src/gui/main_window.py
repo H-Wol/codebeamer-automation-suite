@@ -276,13 +276,13 @@ class MainWindow:
                 root.setObjectName("app_root")
                 self.root_widget = root
                 root_layout = QVBoxLayout(root)
-                root_layout.setContentsMargins(14, 12, 14, 12)
-                root_layout.setSpacing(10)
+                root_layout.setContentsMargins(10, 8, 10, 8)
+                root_layout.setSpacing(8)
 
                 header_card = QFrame()
                 header_card.setObjectName("header_card")
                 header_layout = QVBoxLayout(header_card)
-                header_layout.setContentsMargins(14, 12, 14, 12)
+                header_layout.setContentsMargins(10, 8, 10, 8)
                 header_layout.setSpacing(6)
 
                 title = QLabel("Codebeamer Upload Studio")
@@ -291,7 +291,7 @@ class MainWindow:
                 subtitle.setObjectName("app_subtitle")
 
                 title_row = QHBoxLayout()
-                title_row.setSpacing(8)
+                title_row.setSpacing(6)
                 title_row.addWidget(title)
                 title_row.addStretch(1)
 
@@ -304,7 +304,7 @@ class MainWindow:
                 header_layout.addWidget(subtitle)
 
                 steps_row = QHBoxLayout()
-                steps_row.setSpacing(8)
+                steps_row.setSpacing(6)
                 self.step_labels = []
                 for step_name in ("설정", "프로젝트", "파일", "상단 구조", "상단 필드", "매핑", "검증", "업로드", "결과"):
                     label = QLabel(step_name)
@@ -324,7 +324,7 @@ class MainWindow:
                 self.stack_card = QFrame()
                 self.stack_card.setObjectName("page_card")
                 stack_layout = QVBoxLayout(self.stack_card)
-                stack_layout.setContentsMargins(8, 8, 8, 8)
+                stack_layout.setContentsMargins(6, 6, 6, 6)
                 stack_layout.setSpacing(0)
                 self.stack = self.qt["QStackedWidget"]()
                 stack_layout.addWidget(self.stack)
@@ -342,8 +342,8 @@ class MainWindow:
                 busy_card = QFrame(self.busy_overlay)
                 busy_card.setObjectName("busy_card")
                 busy_card_layout = QVBoxLayout(busy_card)
-                busy_card_layout.setContentsMargins(22, 20, 22, 18)
-                busy_card_layout.setSpacing(10)
+                busy_card_layout.setContentsMargins(18, 16, 18, 14)
+                busy_card_layout.setSpacing(8)
 
                 busy_title = QLabel("작업 중")
                 busy_title.setObjectName("busy_title")
@@ -375,7 +375,7 @@ class MainWindow:
                 scroll_area.setFrameShape(QFrame.Shape.NoFrame)
                 scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
                 scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-                scroll_area.verticalScrollBar().setSingleStep(24)
+                scroll_area.verticalScrollBar().setSingleStep(20)
                 self.page_scroll_areas[page] = scroll_area
                 return scroll_area
 
@@ -766,21 +766,21 @@ class MainWindow:
                 dialog.setObjectName("alert_dialog")
                 dialog.setWindowTitle(header_text)
                 dialog.setModal(True)
-                dialog.setMinimumWidth(440)
+                dialog.setMinimumWidth(400)
 
                 root_layout = QVBoxLayout(dialog)
-                root_layout.setContentsMargins(14, 14, 14, 14)
+                root_layout.setContentsMargins(10, 10, 10, 10)
                 root_layout.setSpacing(0)
 
                 surface = QFrame(dialog)
                 surface.setObjectName("alert_surface")
                 surface.setProperty("tone", tone)
                 surface_layout = QVBoxLayout(surface)
-                surface_layout.setContentsMargins(20, 18, 20, 18)
-                surface_layout.setSpacing(14)
+                surface_layout.setContentsMargins(16, 14, 16, 14)
+                surface_layout.setSpacing(10)
 
                 header_row = QHBoxLayout()
-                header_row.setSpacing(14)
+                header_row.setSpacing(10)
 
                 badge = QLabel("!" if tone == "error" else "i")
                 badge.setObjectName("alert_badge")
@@ -790,7 +790,7 @@ class MainWindow:
                 header_row.addWidget(badge, 0, Qt.AlignmentFlag.AlignTop)
 
                 copy_layout = QVBoxLayout()
-                copy_layout.setSpacing(6)
+                copy_layout.setSpacing(4)
 
                 title_label = QLabel(header_text)
                 title_label.setObjectName("alert_title")
@@ -810,7 +810,7 @@ class MainWindow:
                     details.setObjectName("alert_details")
                     details.setReadOnly(True)
                     details.setPlainText(detail_text)
-                    details.setFixedHeight(116)
+                    details.setFixedHeight(104)
                     surface_layout.addWidget(details)
 
                 button_row = QHBoxLayout()
@@ -1525,6 +1525,8 @@ class MainWindow:
                     response_json = event.get("response_json")
                     if response_json not in (None, ""):
                         self.upload_page.response_view.setPlainText(str(response_json))
+                        if hasattr(self.upload_page, "detail_tabs") and hasattr(self.upload_page, "response_tab"):
+                            self.upload_page.detail_tabs.setCurrentWidget(self.upload_page.response_tab)
                 phase_name = self._phase_display_name(event.get("phase"))
 
                 self.upload_page.record_activity_finished(
@@ -1582,6 +1584,8 @@ class MainWindow:
                 self._update_upload_counter()
                 if failed_df is not None and not getattr(failed_df, "empty", True) and "error_response_json" in failed_df.columns:
                     self.upload_page.response_view.setPlainText(str(failed_df.iloc[0].get("error_response_json") or ""))
+                    if hasattr(self.upload_page, "detail_tabs") and hasattr(self.upload_page, "response_tab"):
+                        self.upload_page.detail_tabs.setCurrentWidget(self.upload_page.response_tab)
                 self._update_upload_time_label()
                 self.upload_page.eta_label.setText(f"예상 종료: 완료됨 ({self._format_clock()})")
                 self._append_timestamped_log("배치 업로드가 완료되었습니다.")

@@ -36,6 +36,21 @@ USER_HIDDEN_TABLE_COLUMNS = {
     "source_file_path",
 }
 
+PAGE_MARGIN = 4
+PAGE_SPACING = 6
+SECTION_SPACING = 6
+CARD_HORIZONTAL_MARGIN = 8
+CARD_VERTICAL_MARGIN = 6
+FORM_HORIZONTAL_SPACING = 8
+FORM_VERTICAL_SPACING = 4
+DEFAULT_FORM_FIELD_MIN_WIDTH = 210
+PREVIEW_TABLE_MAX_HEIGHT = 168
+PRIMARY_TABLE_MAX_HEIGHT = 220
+SECONDARY_TABLE_MAX_HEIGHT = 160
+DETAIL_PANE_MAX_HEIGHT = 108
+UPLOAD_DETAIL_TABS_MIN_HEIGHT = 220
+ACTIVITY_TABLE_MIN_HEIGHT = 160
+
 
 def _is_hidden_user_table_column(column_name: object) -> bool:
     text = str(column_name or "").strip()
@@ -253,6 +268,30 @@ def _configure_table_columns(table, minimum_widths: list[int]) -> None:
         header.setSectionResizeMode(table.columnCount() - 1, QHeaderView.Stretch)
 
 
+def _configure_page_layout(layout, *, top_align: bool = False) -> None:
+    qt = _require_qt()
+    Qt = qt["Qt"]
+    layout.setContentsMargins(PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN)
+    layout.setSpacing(PAGE_SPACING)
+    if top_align:
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+
+def _configure_card_layout(layout) -> None:
+    layout.setContentsMargins(
+        CARD_HORIZONTAL_MARGIN,
+        CARD_VERTICAL_MARGIN,
+        CARD_HORIZONTAL_MARGIN,
+        CARD_VERTICAL_MARGIN,
+    )
+    layout.setSpacing(SECTION_SPACING)
+
+
+def _configure_inline_layout(layout, *, spacing: int = SECTION_SPACING) -> None:
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(spacing)
+
+
 def _configure_form_layout(form) -> None:
     qt = _require_qt()
     Qt = qt["Qt"]
@@ -265,11 +304,11 @@ def _configure_form_layout(form) -> None:
     form.setLabelAlignment(
         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
     )
-    form.setHorizontalSpacing(14)
-    form.setVerticalSpacing(8)
+    form.setHorizontalSpacing(FORM_HORIZONTAL_SPACING)
+    form.setVerticalSpacing(FORM_VERTICAL_SPACING)
 
 
-def _configure_form_field(widget, *, minimum_width: int = 240) -> None:
+def _configure_form_field(widget, *, minimum_width: int = DEFAULT_FORM_FIELD_MIN_WIDTH) -> None:
     qt = _require_qt()
     QSizePolicy = qt["QSizePolicy"]
     widget.setMinimumWidth(minimum_width)
@@ -305,9 +344,7 @@ def create_settings_page(
     page = QWidget()
     page.setObjectName("settings_page")
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
-    layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+    _configure_page_layout(layout, top_align=True)
 
     form = QFormLayout()
     _configure_form_layout(form)
@@ -327,8 +364,7 @@ def create_settings_page(
     mode_badge.hide()
     mode_row_widget = QWidget()
     mode_row = QHBoxLayout(mode_row_widget)
-    mode_row.setContentsMargins(0, 0, 0, 0)
-    mode_row.setSpacing(8)
+    _configure_inline_layout(mode_row)
     mode_row.addStretch(1)
     mode_row.addWidget(mode_badge, 0, Qt.AlignmentFlag.AlignVCenter)
     mode_row.addWidget(mode_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -369,15 +405,13 @@ def create_settings_page(
 
     offline_schema_row_widget = QWidget()
     offline_schema_row = QHBoxLayout(offline_schema_row_widget)
-    offline_schema_row.setContentsMargins(0, 0, 0, 0)
-    offline_schema_row.setSpacing(8)
+    _configure_inline_layout(offline_schema_row)
     offline_schema_row.addWidget(offline_schema_path, 1)
     offline_schema_row.addWidget(offline_schema_button)
 
     offline_config_row_widget = QWidget()
     offline_config_row = QHBoxLayout(offline_config_row_widget)
-    offline_config_row.setContentsMargins(0, 0, 0, 0)
-    offline_config_row.setSpacing(8)
+    _configure_inline_layout(offline_config_row)
     offline_config_row.addWidget(offline_config_path, 1)
     offline_config_row.addWidget(offline_config_button)
 
@@ -393,8 +427,7 @@ def create_settings_page(
     offline_card = QFrame()
     offline_card.setObjectName("advanced_card")
     offline_layout = QVBoxLayout(offline_card)
-    offline_layout.setContentsMargins(14, 12, 14, 12)
-    offline_layout.setSpacing(8)
+    _configure_card_layout(offline_layout)
     offline_description = QLabel("테스트 모드에서만 사용하는 snapshot 경로입니다.")
     offline_description.setObjectName("section_label")
     offline_layout.addWidget(offline_description)
@@ -420,8 +453,7 @@ def create_settings_page(
     advanced_card.setObjectName("advanced_card")
     advanced_card.hide()
     advanced_layout = QVBoxLayout(advanced_card)
-    advanced_layout.setContentsMargins(14, 12, 14, 12)
-    advanced_layout.setSpacing(8)
+    _configure_card_layout(advanced_layout)
 
     advanced_description = QLabel("자주 바꾸지 않는 업로드 옵션입니다.")
     advanced_description.setObjectName("section_label")
@@ -457,6 +489,7 @@ def create_settings_page(
     page._current_settings = initial_settings
 
     buttons = QHBoxLayout()
+    _configure_inline_layout(buttons)
     load_button = QPushButton("불러오기")
     save_button = QPushButton("저장")
     next_button = QPushButton("다음")
@@ -687,9 +720,7 @@ def create_project_selection_page(
     page.selected_tracker_id = initial_settings.default_tracker_id
 
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
-    layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+    _configure_page_layout(layout, top_align=True)
 
     form = QFormLayout()
     _configure_form_layout(form)
@@ -708,6 +739,7 @@ def create_project_selection_page(
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
+    _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
     refresh_button = QPushButton(
         _project_selection_refresh_button_text(bool(getattr(initial_settings, "offline_mode", False)))
@@ -904,8 +936,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     page = QWidget()
     page.setObjectName("file_selection_page")
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
+    _configure_page_layout(layout, top_align=True)
 
     form = QFormLayout()
     _configure_form_layout(form)
@@ -914,8 +945,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     file_button = QPushButton("파일 선택")
     file_row_widget = QWidget()
     file_row = QHBoxLayout(file_row_widget)
-    file_row.setContentsMargins(0, 0, 0, 0)
-    file_row.setSpacing(8)
+    _configure_inline_layout(file_row)
     file_row.addWidget(file_path)
     file_row.addWidget(file_button)
     preview_file = QComboBox()
@@ -953,6 +983,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     preview_table.setItem(0, 1, QTableWidgetItem("담당자"))
     preview_table.setItem(1, 0, QTableWidgetItem("REQ-001"))
     preview_table.setItem(1, 1, QTableWidgetItem("홍길동"))
+    preview_table.setMaximumHeight(PREVIEW_TABLE_MAX_HEIGHT)
     _configure_table_columns(preview_table, [180, 180, 160, 160])
     layout.addWidget(preview_table)
 
@@ -961,6 +992,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
+    _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
     load_button = QPushButton("데이터 불러오기")
     next_button = QPushButton("다음")
@@ -1217,8 +1249,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
+    _configure_page_layout(layout, top_align=True)
 
     description_label = QLabel(
         (
@@ -1270,6 +1301,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
 
     preview_table = QTableWidget(0, 0)
     preview_table.setAlternatingRowColors(True)
+    preview_table.setMaximumHeight(PREVIEW_TABLE_MAX_HEIGHT)
     layout.addWidget(preview_table)
 
     field_label = QLabel("상단 폴더 필드 매핑")
@@ -1279,6 +1311,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
     field_table = QTableWidget(0, 6)
     field_table.setHorizontalHeaderLabels(["사용", "Codebeamer 필드", "타입", "필수", "값 방식", "값"])
     field_table.setAlternatingRowColors(True)
+    field_table.setMaximumHeight(PRIMARY_TABLE_MAX_HEIGHT)
     _configure_table_columns(field_table, [80, 240, 180, 90, 160, 240])
     layout.addWidget(field_table)
 
@@ -1287,6 +1320,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
+    _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
     next_button = QPushButton("다음")
     next_button.setObjectName("primary_button")
@@ -1623,8 +1657,7 @@ def create_placeholder_page(title_text: str, description: str):
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
+    _configure_page_layout(layout)
 
     body = QPlainTextEdit()
     body.setReadOnly(True)
@@ -1632,6 +1665,7 @@ def create_placeholder_page(title_text: str, description: str):
     layout.addWidget(body)
 
     buttons = QHBoxLayout()
+    _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
     next_button = QPushButton("다음")
     buttons.addWidget(previous_button)
@@ -1658,56 +1692,78 @@ def create_mapping_page(on_validate_requested, on_error=None):
     QCheckBox = qt["QCheckBox"]
     QComboBox = qt["QComboBox"]
     QLineEdit = qt["QLineEdit"]
+    QTabWidget = qt["QTabWidget"]
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
+    _configure_page_layout(layout, top_align=True)
     info_label = QLabel("")
     info_label.setObjectName("section_label")
     layout.addWidget(info_label)
 
+    mapping_tabs = QTabWidget()
+    mapping_tabs.setDocumentMode(True)
+
+    mapping_tab = QWidget()
+    mapping_tab_layout = QVBoxLayout(mapping_tab)
+    _configure_inline_layout(mapping_tab_layout)
     table = QTableWidget(0, 7)
     table.setHorizontalHeaderLabels(["생성", "수정", "Excel 컬럼", "Codebeamer 필드", "타입", "다중값", "지원 여부"])
     table.setAlternatingRowColors(True)
+    table.setMaximumHeight(PRIMARY_TABLE_MAX_HEIGHT)
     _configure_table_columns(table, [70, 70, 220, 220, 170, 90, 90])
-    layout.addWidget(table)
+    mapping_tab_layout.addWidget(table)
+    mapping_tabs.addTab(mapping_tab, "컬럼 매핑")
 
+    defaults_tab = QWidget()
+    defaults_tab_layout = QVBoxLayout(defaults_tab)
+    _configure_inline_layout(defaults_tab_layout)
     default_label = QLabel("공통 기본값")
     default_label.setObjectName("section_label")
-    layout.addWidget(default_label)
+    defaults_tab_layout.addWidget(default_label)
 
     default_help_label = QLabel("행 값이 있으면 행 값이 우선하고, 비어 있으면 아래 기본값을 사용합니다.")
     default_help_label.setWordWrap(True)
-    layout.addWidget(default_help_label)
+    defaults_tab_layout.addWidget(default_help_label)
 
     default_table = QTableWidget(0, 5)
     default_table.setHorizontalHeaderLabels(["적용", "Codebeamer 필드", "타입", "기본값", "필수"])
     default_table.setAlternatingRowColors(True)
+    default_table.setMaximumHeight(SECONDARY_TABLE_MAX_HEIGHT)
     _configure_table_columns(default_table, [70, 220, 170, 240, 90])
-    layout.addWidget(default_table)
+    defaults_tab_layout.addWidget(default_table)
+    mapping_tabs.addTab(defaults_tab, "기본값")
 
+    tracker_tab = QWidget()
+    tracker_tab_layout = QVBoxLayout(tracker_tab)
+    _configure_inline_layout(tracker_tab_layout)
     tracker_item_label = QLabel("Tracker Item 처리")
     tracker_item_label.setObjectName("section_label")
-    layout.addWidget(tracker_item_label)
+    tracker_tab_layout.addWidget(tracker_item_label)
 
     tracker_item_help_label = QLabel(
         "TrackerItemChoiceField 는 정규식으로 ID를 추출하거나, configuration 기반 source tracker에서 이름으로 미리 조회할 수 있습니다."
     )
     tracker_item_help_label.setWordWrap(True)
-    layout.addWidget(tracker_item_help_label)
+    tracker_tab_layout.addWidget(tracker_item_help_label)
 
     tracker_item_table = QTableWidget(0, 7)
     tracker_item_table.setHorizontalHeaderLabels(["Excel 컬럼", "Codebeamer 필드", "방식", "다건 결과", "정규식", "예시", "조회 소스"])
     tracker_item_table.setAlternatingRowColors(True)
+    tracker_item_table.setMaximumHeight(SECONDARY_TABLE_MAX_HEIGHT)
     _configure_table_columns(tracker_item_table, [220, 220, 140, 160, 260, 320, 200])
-    layout.addWidget(tracker_item_table)
+    tracker_tab_layout.addWidget(tracker_item_table)
+    mapping_tabs.addTab(tracker_tab, "Tracker Item")
+
+    page.mapping_tabs = mapping_tabs
+    layout.addWidget(mapping_tabs)
 
     status_label = QLabel("")
     status_label.setObjectName("status_label")
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
+    _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
     validate_button = QPushButton("검증 실행")
     next_button = QPushButton("다음")
@@ -2289,8 +2345,7 @@ def create_validation_page():
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
+    _configure_page_layout(layout, top_align=True)
     summary_label = QLabel("")
     summary_label.setObjectName("summary_label")
     layout.addWidget(summary_label)
@@ -2298,6 +2353,7 @@ def create_validation_page():
     table = QTableWidget(0, 7)
     table.setHorizontalHeaderLabels(["상태", "행", "항목", "컬럼", "입력값", "문제", "조치"])
     table.setAlternatingRowColors(True)
+    table.setMaximumHeight(PRIMARY_TABLE_MAX_HEIGHT)
     _configure_table_columns(table, [90, 120, 180, 160, 160, 260, 280])
     layout.addWidget(table)
 
@@ -2306,6 +2362,7 @@ def create_validation_page():
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
+    _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
     next_button = QPushButton("다음")
     next_button.setObjectName("primary_button")
@@ -2390,6 +2447,7 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
     QHBoxLayout = qt["QHBoxLayout"]
+    QTabWidget = qt["QTabWidget"]
     QLabel = qt["QLabel"]
     QPushButton = qt["QPushButton"]
     QPlainTextEdit = qt["QPlainTextEdit"]
@@ -2400,14 +2458,14 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
+    _configure_page_layout(layout, top_align=True)
 
     page.progress_bar = QProgressBar()
     page.progress_bar.setTextVisible(True)
     page.progress_bar.setFormat("0 / 0 (0.0%)")
     layout.addWidget(page.progress_bar)
     page.progress_label = QLabel("진행률 0.0% (0 / 0)")
+    page.progress_label.setObjectName("section_label")
     layout.addWidget(page.progress_label)
 
     page.phase_label = QLabel("현재 단계: -")
@@ -2418,61 +2476,54 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     page.counter_label = QLabel("성공 0 / 실패 0 / 재시도 0")
     page.status_label = QLabel("준비")
     page.status_label.setObjectName("status_label")
-    layout.addWidget(page.phase_label)
-    layout.addWidget(page.current_label)
-    layout.addWidget(page.total_label)
-    layout.addWidget(page.phase_total_label)
-    layout.addWidget(page.phase_counter_label)
-    layout.addWidget(page.counter_label)
-    layout.addWidget(page.status_label)
-
     page.time_label = QLabel("배치 시간: -")
     page.time_label.setObjectName("section_label")
-    layout.addWidget(page.time_label)
     page.eta_label = QLabel("예상 종료: -")
     page.eta_label.setObjectName("section_label")
-    layout.addWidget(page.eta_label)
+
+    summary_row = QHBoxLayout()
+    _configure_inline_layout(summary_row, spacing=10)
+
+    left_col = QVBoxLayout()
+    _configure_inline_layout(left_col, spacing=2)
+    left_col.addWidget(page.phase_label)
+    left_col.addWidget(page.current_label)
+    summary_row.addLayout(left_col, 2)
+
+    middle_col = QVBoxLayout()
+    _configure_inline_layout(middle_col, spacing=2)
+    middle_col.addWidget(page.total_label)
+    middle_col.addWidget(page.counter_label)
+    summary_row.addLayout(middle_col, 2)
+
+    phase_col = QVBoxLayout()
+    _configure_inline_layout(phase_col, spacing=2)
+    phase_col.addWidget(page.phase_total_label)
+    phase_col.addWidget(page.phase_counter_label)
+    summary_row.addLayout(phase_col, 3)
+
+    time_col = QVBoxLayout()
+    _configure_inline_layout(time_col, spacing=2)
+    time_col.addWidget(page.time_label)
+    time_col.addWidget(page.eta_label)
+    summary_row.addLayout(time_col, 2)
+
+    layout.addLayout(summary_row)
+    layout.addWidget(page.status_label)
 
     page.dry_run_checkbox = QCheckBox("Dry Run")
     page.continue_checkbox = QCheckBox("Continue on error")
     page.continue_checkbox.setChecked(True)
-    opts = QHBoxLayout()
-    opts.addWidget(page.dry_run_checkbox)
-    opts.addWidget(page.continue_checkbox)
-    opts.addStretch(1)
-    layout.addLayout(opts)
-
-    page.log_view = QPlainTextEdit()
-    page.log_view.setReadOnly(True)
-    page.log_view.setPlaceholderText("업로드 진행 로그와 시각이 여기에 표시됩니다.")
-    page.log_view.setMinimumHeight(120)
-    layout.addWidget(page.log_view)
-
-    activity_label = QLabel("항목별 진행 기록")
-    activity_label.setObjectName("section_label")
-    layout.addWidget(activity_label)
-
-    page.activity_table = QTableWidget(0, 8)
-    page.activity_table.setHorizontalHeaderLabels(["파일", "단계", "항목", "상태", "시작", "완료", "소요", "로그"])
-    page.activity_table.setAlternatingRowColors(True)
-    page.activity_table.setMinimumHeight(220)
-    _configure_table_columns(page.activity_table, [160, 90, 180, 100, 110, 110, 90, 300])
-    layout.addWidget(page.activity_table)
-
-    page._activity_row_map = {}
-
-    page.response_view = QPlainTextEdit()
-    page.response_view.setReadOnly(True)
-    page.response_view.setPlaceholderText("실패한 요청의 서버 응답 JSON이 여기에 표시됩니다.")
-    page.response_view.setMinimumHeight(100)
-    layout.addWidget(page.response_view)
-
-    buttons = QHBoxLayout()
+    controls = QHBoxLayout()
+    _configure_inline_layout(controls)
+    controls.addWidget(page.dry_run_checkbox)
+    controls.addWidget(page.continue_checkbox)
+    controls.addStretch(1)
     page.start_button = QPushButton("시작")
     page.pause_button = QPushButton("일시정지")
     page.resume_button = QPushButton("재개")
     page.cancel_button = QPushButton("중단")
-    page.result_button = QPushButton("결과 화면으로 이동")
+    page.result_button = QPushButton("결과 보기")
     page.start_button.setObjectName("primary_button")
     page.resume_button.setObjectName("primary_button")
     page.cancel_button.setObjectName("danger_button")
@@ -2481,13 +2532,52 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     page.resume_button.setEnabled(False)
     page.cancel_button.setEnabled(False)
     page.result_button.setEnabled(False)
-    buttons.addWidget(page.start_button)
-    buttons.addWidget(page.pause_button)
-    buttons.addWidget(page.resume_button)
-    buttons.addWidget(page.cancel_button)
-    buttons.addStretch(1)
-    buttons.addWidget(page.result_button)
-    layout.addLayout(buttons)
+    controls.addWidget(page.start_button)
+    controls.addWidget(page.pause_button)
+    controls.addWidget(page.resume_button)
+    controls.addWidget(page.cancel_button)
+    controls.addWidget(page.result_button)
+    layout.addLayout(controls)
+
+    page.detail_tabs = QTabWidget()
+    page.detail_tabs.setDocumentMode(True)
+    page.detail_tabs.setMinimumHeight(UPLOAD_DETAIL_TABS_MIN_HEIGHT)
+
+    activity_tab = QWidget()
+    activity_layout = QVBoxLayout(activity_tab)
+    _configure_inline_layout(activity_layout)
+    page.activity_table = QTableWidget(0, 8)
+    page.activity_table.setHorizontalHeaderLabels(["파일", "단계", "항목", "상태", "시작", "완료", "소요", "로그"])
+    page.activity_table.setAlternatingRowColors(True)
+    page.activity_table.setMinimumHeight(ACTIVITY_TABLE_MIN_HEIGHT)
+    _configure_table_columns(page.activity_table, [140, 80, 160, 90, 95, 95, 80, 260])
+    activity_layout.addWidget(page.activity_table)
+    page.detail_tabs.addTab(activity_tab, "진행 기록")
+
+    log_tab = QWidget()
+    log_layout = QVBoxLayout(log_tab)
+    _configure_inline_layout(log_layout)
+    page.log_view = QPlainTextEdit()
+    page.log_view.setReadOnly(True)
+    page.log_view.setPlaceholderText("업로드 진행 로그와 시각이 여기에 표시됩니다.")
+    log_layout.addWidget(page.log_view)
+    page.detail_tabs.addTab(log_tab, "실시간 로그")
+
+    response_tab = QWidget()
+    response_layout = QVBoxLayout(response_tab)
+    _configure_inline_layout(response_layout)
+    page.response_view = QPlainTextEdit()
+    page.response_view.setReadOnly(True)
+    page.response_view.setPlaceholderText("실패한 요청의 서버 응답 JSON이 여기에 표시됩니다.")
+    response_layout.addWidget(page.response_view)
+    page.detail_tabs.addTab(response_tab, "실패 응답")
+
+    page.activity_tab = activity_tab
+    page.log_tab = log_tab
+    page.response_tab = response_tab
+    layout.addWidget(page.detail_tabs)
+
+    page._activity_row_map = {}
 
     page.start_button.clicked.connect(on_start_requested)
     page.pause_button.clicked.connect(on_pause_requested)
@@ -2528,7 +2618,7 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
         _set_activity_cell(row_index, 5, "")
         _set_activity_cell(row_index, 6, "")
         _set_activity_cell(row_index, 7, "업로드 시작")
-        _configure_table_columns(page.activity_table, [160, 90, 180, 100, 110, 110, 90, 300])
+        _configure_table_columns(page.activity_table, [140, 80, 160, 90, 95, 95, 80, 260])
         page.activity_table.scrollToBottom()
 
     def record_activity_finished(
@@ -2549,7 +2639,7 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
         _set_activity_cell(row_index, 5, finished_at)
         _set_activity_cell(row_index, 6, duration_text)
         _set_activity_cell(row_index, 7, message)
-        _configure_table_columns(page.activity_table, [160, 90, 180, 100, 110, 110, 90, 300])
+        _configure_table_columns(page.activity_table, [140, 80, 160, 90, 95, 95, 80, 260])
         page.activity_table.scrollToBottom()
 
     def reset(total_count: int) -> None:
@@ -2596,10 +2686,10 @@ def create_result_page():
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(6, 6, 6, 6)
-    layout.setSpacing(10)
+    _configure_page_layout(layout, top_align=True)
 
     tabs = QTabWidget()
+    tabs.setDocumentMode(True)
     page.tables = {}
     for key, label in (
         ("success_df", "성공"),
@@ -2608,8 +2698,10 @@ def create_result_page():
     ):
         tab = QWidget()
         tab_layout = QVBoxLayout(tab)
+        _configure_inline_layout(tab_layout)
         table = QTableWidget(0, 0)
         table.setAlternatingRowColors(True)
+        table.setMaximumHeight(PRIMARY_TABLE_MAX_HEIGHT)
         tab_layout.addWidget(table)
         tabs.addTab(tab, label)
         page.tables[key] = table
@@ -2617,9 +2709,11 @@ def create_result_page():
 
     page.response_view = QPlainTextEdit()
     page.response_view.setReadOnly(True)
+    page.response_view.setMaximumHeight(DETAIL_PANE_MAX_HEIGHT)
     layout.addWidget(page.response_view)
 
     buttons = QHBoxLayout()
+    _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
     restart_button = QPushButton("새 업로드 시작")
     restart_button.setObjectName("primary_button")
