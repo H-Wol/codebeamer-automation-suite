@@ -12,6 +12,7 @@ from src.gui.pages import _project_selection_status_text
 from src.gui.pages import _settings_mode_description
 from src.gui.pages import _settings_mode_toggle_text
 from src.gui.pages import _build_tracker_item_regex_preview_text
+from src.gui.pages import _configure_constrained_panel
 from src.gui.pages import _tracker_item_sample_values
 from src.gui.pages import create_file_selection_page
 from src.gui.pages import create_mapping_page
@@ -194,6 +195,19 @@ class GuiPagesUploadPageTest(unittest.TestCase):
             result_page.tables["success_df"].sizePolicy().verticalPolicy(),
             self._expanding_policy,
         )
+
+    def test_constrained_panel_remains_horizontally_responsive(self) -> None:
+        from PySide6.QtWidgets import QWidget
+
+        panel = QWidget()
+
+        _configure_constrained_panel(panel)
+
+        self.assertEqual(
+            panel.sizePolicy().horizontalPolicy(),
+            self._expanding_policy,
+        )
+        self.assertGreaterEqual(panel.maximumWidth(), 1_000_000)
 
 
 if __name__ == "__main__":

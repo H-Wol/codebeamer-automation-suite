@@ -323,9 +323,9 @@ def _configure_form_field(widget, *, minimum_width: int = DEFAULT_FORM_FIELD_MIN
 def _configure_constrained_panel(widget, *, max_width: int = FORM_PANEL_MAX_WIDTH) -> None:
     qt = _require_qt()
     QSizePolicy = qt["QSizePolicy"]
-    widget.setMaximumWidth(max_width)
+    widget.setMaximumWidth(16777215)
     widget.setSizePolicy(
-        QSizePolicy.Policy.Preferred,
+        QSizePolicy.Policy.Expanding,
         QSizePolicy.Policy.Maximum,
     )
 
