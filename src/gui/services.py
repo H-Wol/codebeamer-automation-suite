@@ -27,6 +27,10 @@ from src.upload_pipeline import suggest_mapping_from_headers
 from src.wizard import CodebeamerUploadWizard
 from .settings_store import GUI_UPLOAD_MODE_CREATE
 from .settings_store import GUI_UPLOAD_MODE_UPDATE
+from .settings_store import GUI_UPLOAD_MODE_UPSERT
+from .settings_store import gui_upload_mode_action_label
+from .settings_store import gui_upload_mode_allows_root_items
+from .settings_store import gui_upload_mode_supports_update
 from .settings_store import normalize_gui_upload_mode
 
 
@@ -443,6 +447,8 @@ class BatchUploadJob:
     file_label: str
     root_item_specs: list["RootItemUploadSpec"]
     ready_count: int
+    insert_ready_count: int
+    update_ready_count: int
     output_dir: str
     wizard: CodebeamerUploadWizard
 
@@ -1913,7 +1919,7 @@ class GuiUploadPipelineService:
             "message",
             "action",
         ]
-        if normalize_gui_upload_mode(mapping_context.upload_mode) != GUI_UPLOAD_MODE_UPDATE:
+        if not gui_upload_mode_supports_update(mapping_context.upload_mode):
             return set(), pd.DataFrame(columns=issue_columns)
 
         occurrences_by_item_id: dict[int, list[dict[str, str]]] = {}
@@ -1981,6 +1987,28 @@ class GuiUploadPipelineService:
             })
 
         return duplicate_item_ids, pd.DataFrame(issues, columns=issue_columns)
+
+    def _build_upsert_root_item_issue_df(
+        self,
+        mapping_context: MappingContext,
+        *,
+        payload_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        del mapping_context, payload_df
+        return pd.DataFrame(columns=[
+            "severity",
+            "category",
+            "row_id",
+            "row_label",
+            "item_name",
+            "source_file",
+            "source_file_path",
+            "column",
+            "field",
+            "raw_value",
+            "message",
+            "action",
+        ])
 
     def prepare_mapping_context(self, settings, file_state: dict[str, Any]) -> MappingContext:
         file_paths = self._normalize_file_paths(file_state)
@@ -2060,9 +2088,18 @@ class GuiUploadPipelineService:
             None,
         )
 
+        default_root_item_config = self._default_root_item_config(mappable_schema_df)
+        upload_mode = normalize_gui_upload_mode(getattr(settings, "upload_mode", None))
+        if not gui_upload_mode_allows_root_items(upload_mode):
+            default_root_item_config["enabled"] = False
+            default_root_item_config["group_enabled"] = False
+        elif upload_mode == GUI_UPLOAD_MODE_UPSERT:
+            default_root_item_config["enabled"] = False
+            default_root_item_config["group_enabled"] = False
+
         return MappingContext(
             wizard=wizard,
-            upload_mode=normalize_gui_upload_mode(getattr(settings, "upload_mode", None)),
+            upload_mode=upload_mode,
             schema_df=mappable_schema_df,
             upload_columns=upload_columns,
             selected_mapping=selected_mapping,
@@ -2078,7 +2115,7 @@ class GuiUploadPipelineService:
             header_row=target_header_row,
             summary_column=target_summary_column,
             preview_data=preview,
-            root_item_config=self._default_root_item_config(mappable_schema_df),
+            root_item_config=default_root_item_config,
             existing_item_cache={},
             batch_duplicate_update_item_ids=set(),
         )
@@ -2211,7 +2248,7 @@ class GuiUploadPipelineService:
             selected_mapping,
             selected_default_values=normalized_default_values,
             selected_tracker_item_settings=normalized_tracker_item_settings,
-            fetch_existing_items=normalize_gui_upload_mode(mapping_context.upload_mode) != GUI_UPLOAD_MODE_UPDATE,
+            fetch_existing_items=not gui_upload_mode_supports_update(mapping_context.upload_mode),
         )
         comparison_df = self._gui_visible_comparison_df(validation_result.comparison_df)
         option_check_frames = [
@@ -2259,7 +2296,7 @@ class GuiUploadPipelineService:
                 selected_mapping,
                 selected_default_values=normalized_default_values,
                 selected_tracker_item_settings=normalized_tracker_item_settings,
-                fetch_existing_items=normalize_gui_upload_mode(mapping_context.upload_mode) != GUI_UPLOAD_MODE_UPDATE,
+                fetch_existing_items=not gui_upload_mode_supports_update(mapping_context.upload_mode),
             )
             self._sync_validation_wizard_caches(wizard, batch_wizard)
             option_check_frames.append(
@@ -2321,7 +2358,7 @@ class GuiUploadPipelineService:
             selected_default_values=normalized_default_values,
         )
         mapping_context.batch_duplicate_update_item_ids = set()
-        if normalize_gui_upload_mode(mapping_context.upload_mode) == GUI_UPLOAD_MODE_UPDATE:
+        if gui_upload_mode_supports_update(mapping_context.upload_mode):
             file_upload_dfs = {
                 file_path: self._upload_df_for_file(
                     mapping_context,
@@ -2338,6 +2375,13 @@ class GuiUploadPipelineService:
             if not duplicate_issue_df.empty:
                 issue_df = pd.concat([issue_df, duplicate_issue_df], ignore_index=True)
                 issue_df = self._finalize_issue_df(issue_df)
+        upsert_root_issue_df = self._build_upsert_root_item_issue_df(
+            mapping_context,
+            payload_df=payload_df,
+        )
+        if not upsert_root_issue_df.empty:
+            issue_df = pd.concat([issue_df, upsert_root_issue_df], ignore_index=True)
+            issue_df = self._finalize_issue_df(issue_df)
         summary_stats = self._build_summary_stats(issue_df, row_context_df)
         summary_stats["file_count"] = len(mapping_context.file_paths)
         summary_stats["batch_total_rows"] = self._count_batch_upload_rows(
@@ -2706,18 +2750,45 @@ class GuiUploadPipelineService:
         wizard: CodebeamerUploadWizard,
         root_item_specs: list[RootItemUploadSpec] | None = None,
     ) -> int:
+        insert_count, update_count = GuiUploadPipelineService._phase_ready_counts(
+            wizard,
+            root_item_specs=root_item_specs,
+        )
+        return insert_count + update_count
+
+    @staticmethod
+    def _phase_ready_counts(
+        wizard: CodebeamerUploadWizard,
+        root_item_specs: list[RootItemUploadSpec] | None = None,
+    ) -> tuple[int, int]:
         payload_df = wizard.state.payload_df if wizard.state.payload_df is not None else wizard.build_payloads()
         if payload_df is None or payload_df.empty:
-            return 0
+            return (0, 0)
 
-        ready_count = int((payload_df["payload_status"] == PayloadStatus.READY.value).sum())
+        ready_df = payload_df[payload_df["payload_status"] == PayloadStatus.READY.value].copy()
+        upload_mode = normalize_gui_upload_mode(getattr(wizard.state, "upload_mode", GUI_UPLOAD_MODE_CREATE))
+        if ready_df.empty:
+            return (0, 0)
+
+        if upload_mode == GUI_UPLOAD_MODE_UPDATE:
+            return (0, int(len(ready_df)))
+
+        if upload_mode == GUI_UPLOAD_MODE_UPSERT and "_operation" in ready_df.columns:
+            operation_series = ready_df["_operation"].fillna("").astype(str).str.lower()
+            insert_count = int(operation_series.eq("create").sum())
+            update_count = int(operation_series.eq("update").sum())
+            if insert_count > 0 and root_item_specs:
+                insert_count += len(root_item_specs)
+            return (insert_count, update_count)
+
+        insert_count = int(len(ready_df))
         if (
-            ready_count > 0
+            insert_count > 0
             and root_item_specs
-            and str(getattr(wizard.state, "upload_mode", GUI_UPLOAD_MODE_CREATE)) == GUI_UPLOAD_MODE_CREATE
+            and gui_upload_mode_allows_root_items(upload_mode)
         ):
-            ready_count += len(root_item_specs)
-        return ready_count
+            insert_count += len(root_item_specs)
+        return (insert_count, 0)
 
     @staticmethod
     def _annotate_batch_result_frame(
@@ -2783,7 +2854,7 @@ class GuiUploadPipelineService:
         )
         wizard.build_payloads(
             force=True,
-            fetch_existing_items=normalize_gui_upload_mode(mapping_context.upload_mode) != GUI_UPLOAD_MODE_UPDATE,
+            fetch_existing_items=not gui_upload_mode_supports_update(mapping_context.upload_mode),
         )
         return wizard
 
@@ -2806,12 +2877,12 @@ class GuiUploadPipelineService:
         if not mapping_context.selected_mapping:
             raise ValueError("검증된 매핑이 없습니다.")
         upload_mode = normalize_gui_upload_mode(mapping_context.upload_mode)
-        if upload_mode == GUI_UPLOAD_MODE_UPDATE and bool(getattr(settings, "offline_mode", False)):
-            raise ValueError("테스트 모드에서는 업데이트 작업을 실행할 수 없습니다.")
-        if upload_mode == GUI_UPLOAD_MODE_UPDATE and mapping_context.batch_duplicate_update_item_ids:
+        if gui_upload_mode_supports_update(upload_mode) and bool(getattr(settings, "offline_mode", False)):
+            raise ValueError("테스트 모드에서는 기존 수정 또는 혼합 처리 작업을 실행할 수 없습니다.")
+        if gui_upload_mode_supports_update(upload_mode) and mapping_context.batch_duplicate_update_item_ids:
             duplicate_ids = ", ".join(str(item_id) for item_id in sorted(mapping_context.batch_duplicate_update_item_ids))
             raise ValueError(f"배치 전체에서 중복된 업데이트 대상 id가 있습니다: {duplicate_ids}")
-        action_label = "업데이트" if upload_mode == GUI_UPLOAD_MODE_UPDATE else "업로드"
+        action_label = gui_upload_mode_action_label(upload_mode)
 
         sheet_name = str(file_state["sheet_name"])
         header_row = int(file_state["header_row"])
@@ -2823,6 +2894,11 @@ class GuiUploadPipelineService:
         unresolved_frames: list[pd.DataFrame] = []
         created_map_by_file: dict[str, dict[Any, Any]] = {}
         total_count = 0
+        phase_total_counts = {"insert": 0, "update": 0}
+        phase_results = {
+            "insert": {"total": 0, "success": 0, "failed": 0, "unresolved": 0},
+            "update": {"total": 0, "success": 0, "failed": 0, "unresolved": 0},
+        }
 
         def _emit(event: dict[str, Any]) -> None:
             if event_callback is not None:
@@ -2857,17 +2933,22 @@ class GuiUploadPipelineService:
                     header_row=header_row,
                     summary_col=summary_col,
                 )
-                if upload_mode == GUI_UPLOAD_MODE_CREATE:
+                if gui_upload_mode_allows_root_items(upload_mode):
                     root_item_specs = self.build_root_item_payload_specs(mapping_context, wizard, file_path)
                 else:
                     root_item_specs = []
-                ready_count = self._ready_upload_count(wizard, root_item_specs)
+                insert_ready_count, update_ready_count = self._phase_ready_counts(wizard, root_item_specs)
+                ready_count = insert_ready_count + update_ready_count
                 total_count += ready_count
+                phase_total_counts["insert"] += insert_ready_count
+                phase_total_counts["update"] += update_ready_count
                 prepared_jobs.append(BatchUploadJob(
                     file_path=file_path,
                     file_label=file_label,
                     root_item_specs=root_item_specs,
                     ready_count=ready_count,
+                    insert_ready_count=insert_ready_count,
+                    update_ready_count=update_ready_count,
                     output_dir=self._batch_output_dir(output_dir, file_path, index),
                     wizard=wizard,
                 ))
@@ -2892,6 +2973,7 @@ class GuiUploadPipelineService:
         _emit({
             "type": "batch_total",
             "total": total_count,
+            "phase_totals": dict(phase_total_counts),
         })
 
         for job_index, job in enumerate(prepared_jobs, start=1):
@@ -2923,6 +3005,25 @@ class GuiUploadPipelineService:
                 result = job.wizard.update_items(
                     dry_run=dry_run,
                     continue_on_error=continue_on_error,
+                    event_callback=_forward_event,
+                    cancel_requested=cancel_requested,
+                    pause_requested=pause_requested,
+                )
+            elif upload_mode == GUI_UPLOAD_MODE_UPSERT:
+                result = job.wizard.upsert_items(
+                    dry_run=dry_run,
+                    continue_on_error=continue_on_error,
+                    top_level_parent_specs=[
+                        {
+                            "key": spec.key,
+                            "name": spec.name,
+                            "field_values": dict(spec.field_values),
+                            "row_ids": list(spec.row_ids),
+                            "parent_key": spec.parent_key,
+                            "kind": spec.kind,
+                        }
+                        for spec in job.root_item_specs
+                    ],
                     event_callback=_forward_event,
                     cancel_requested=cancel_requested,
                     pause_requested=pause_requested,
@@ -2972,14 +3073,36 @@ class GuiUploadPipelineService:
             if not unresolved_df.empty:
                 unresolved_frames.append(unresolved_df)
 
+            for phase_name in ("insert", "update"):
+                if not success_df.empty and "phase" in success_df.columns:
+                    phase_results[phase_name]["success"] += int(
+                        success_df["phase"].fillna("").astype(str).str.lower().eq(phase_name).sum()
+                    )
+                if not failed_df.empty and "phase" in failed_df.columns:
+                    phase_results[phase_name]["failed"] += int(
+                        failed_df["phase"].fillna("").astype(str).str.lower().eq(phase_name).sum()
+                    )
+                if not unresolved_df.empty and "phase" in unresolved_df.columns:
+                    phase_results[phase_name]["unresolved"] += int(
+                        unresolved_df["phase"].fillna("").astype(str).str.lower().eq(phase_name).sum()
+                    )
+
             if not continue_on_error and (not failed_df.empty or not unresolved_df.empty):
                 break
+
+        for phase_name in ("insert", "update"):
+            phase_results[phase_name]["total"] = (
+                int(phase_results[phase_name]["success"])
+                + int(phase_results[phase_name]["failed"])
+                + int(phase_results[phase_name]["unresolved"])
+            )
 
         return {
             "created_map_by_file": created_map_by_file,
             "success_df": pd.concat(success_frames, ignore_index=True) if success_frames else pd.DataFrame(),
             "failed_df": pd.concat(failed_frames, ignore_index=True) if failed_frames else pd.DataFrame(),
             "unresolved_df": pd.concat(unresolved_frames, ignore_index=True) if unresolved_frames else pd.DataFrame(),
+            "phase_results": phase_results,
         }
 
     @classmethod
@@ -3225,6 +3348,20 @@ class GuiUploadPipelineService:
                 field or "id",
                 "기존 item 정보를 조회하지 못해 업데이트 payload를 만들 수 없습니다.",
                 "id 값과 서버 연결 상태를 확인한 뒤 다시 검증하세요.",
+            )
+        if code == "UPSERT_PARENT_ID_REQUIRED":
+            return (
+                column or "id",
+                field or "id",
+                "계층형 신규 행을 연결할 기존 부모 item id가 없습니다.",
+                "부모 행에 기존 id를 넣거나, 계층을 제거한 뒤 다시 검증하세요.",
+            )
+        if code == "UPSERT_UPDATE_WITH_NEW_ANCESTOR":
+            return (
+                column or "id",
+                field or "id",
+                "기존 수정 행의 상위 계층에 신규 생성 행이 섞여 있습니다.",
+                "상위 계층에도 기존 id를 넣거나, 해당 하위 행을 신규 생성으로 분리한 뒤 다시 검증하세요.",
             )
 
         if detail:

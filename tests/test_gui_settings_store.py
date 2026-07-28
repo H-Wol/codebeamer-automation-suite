@@ -8,6 +8,7 @@ from pathlib import Path
 from src.gui.settings_store import GuiSettings
 from src.gui.settings_store import GuiSettingsStore
 from src.gui.settings_store import GuiWorkflowPreset
+from src.gui.settings_store import GUI_UPLOAD_MODE_UPSERT
 from src.gui.settings_store import GUI_UPLOAD_MODE_UPDATE
 from src.gui.styles import DEFAULT_GUI_THEME
 
@@ -177,3 +178,16 @@ class GuiSettingsStoreTest(unittest.TestCase):
             loaded = store.load()
 
             self.assertEqual(loaded.upload_mode, "create")
+
+    def test_load_preserves_upsert_upload_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = GuiSettingsStore(Path(tmp_dir))
+            store.root_dir.mkdir(parents=True, exist_ok=True)
+            store.settings_path.write_text(
+                json.dumps({"upload_mode": GUI_UPLOAD_MODE_UPSERT, "password_encrypted": ""}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            loaded = store.load()
+
+            self.assertEqual(loaded.upload_mode, GUI_UPLOAD_MODE_UPSERT)

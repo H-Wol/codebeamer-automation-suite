@@ -14,6 +14,7 @@ from src.gui.services import GuiUploadPipelineService
 from src.gui.services import ROOT_ITEM_MODE_GROUP_BY_COLUMN
 from src.gui.services import ROOT_SOURCE_GROUP_VALUE
 from src.gui.settings_store import GuiSettings
+from src.gui.settings_store import GUI_UPLOAD_MODE_UPSERT
 from src.gui.settings_store import GUI_UPLOAD_MODE_UPDATE
 from src.models import MappingStatus
 from src.models import PayloadStatus
@@ -192,6 +193,23 @@ class UpdateModeFakeClient(FakeClient):
     def update_item(self, item_id: int, payload: dict):
         self.__class__.all_update_calls.append((int(item_id), dict(payload)))
         return {"id": int(item_id)}
+
+
+class UpsertModeFakeClient(UpdateModeFakeClient):
+    all_create_item_calls: list[dict[str, object]] = []
+
+    @classmethod
+    def reset_calls(cls) -> None:
+        super().reset_calls()
+        cls.all_create_item_calls = []
+
+    def create_item(self, tracker_id: int, payload: dict, parent_item_id: int | None = None):
+        self.__class__.all_create_item_calls.append({
+            "tracker_id": int(tracker_id),
+            "payload": dict(payload),
+            "parent_item_id": parent_item_id,
+        })
+        return {"id": 1000 + len(self.__class__.all_create_item_calls)}
 
 
 class TrackerItemQueryFakeClient(FakeClient):
@@ -749,6 +767,88 @@ class GuiUploadPipelineServiceTest(unittest.TestCase):
                 "보존",
             )
             self.assertEqual(mapping_context.representative_file_path, str(path))
+
+    def test_run_batch_upload_uses_upsert_mode_for_create_and_update_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            UpsertModeFakeClient.reset_calls()
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["id", "Summary", "담당자"])
+            sheet.append([101, "REQ-101", "홍길동"])
+            sheet.append([None, "REQ-NEW", "신규담당자"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=UpsertModeFakeClient,
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                upload_mode=GUI_UPLOAD_MODE_UPSERT,
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+            file_state = {
+                "file_path": str(path),
+                "file_paths": [str(path)],
+                "preview_file_path": str(path),
+                "sheet_name": "Main",
+                "header_row": 1,
+                "summary_column": "Summary",
+            }
+
+            mapping_context = service.prepare_mapping_context(settings, file_state)
+            validation_context = service.validate_mapping(
+                mapping_context,
+                {"Summary": "Summary", "담당자": "담당자"},
+                {"Status": "Review"},
+            )
+
+            self.assertFalse(validation_context.has_blocking_issues)
+            emitted_events: list[dict[str, object]] = []
+
+            result = service.run_batch_upload(
+                settings,
+                file_state,
+                mapping_context,
+                dry_run=False,
+                continue_on_error=True,
+                output_dir=str(Path(tmp_dir) / "output"),
+                event_callback=lambda event: emitted_events.append(dict(event)),
+            )
+
+            self.assertEqual(len(result["success_df"]), 2)
+            self.assertEqual(result["success_df"]["phase"].tolist(), ["insert", "update"])
+            self.assertEqual(
+                result["phase_results"],
+                {
+                    "insert": {"total": 1, "success": 1, "failed": 0, "unresolved": 0},
+                    "update": {"total": 1, "success": 1, "failed": 0, "unresolved": 0},
+                },
+            )
+            self.assertEqual(len(UpsertModeFakeClient.all_create_item_calls), 1)
+            self.assertEqual(UpsertModeFakeClient.all_create_item_calls[0]["payload"]["name"], "REQ-NEW")
+            self.assertIsNone(UpsertModeFakeClient.all_create_item_calls[0]["parent_item_id"])
+            self.assertEqual(UpsertModeFakeClient.all_update_calls[0][0], 101)
+            self.assertEqual(UpsertModeFakeClient.all_update_calls[0][1]["name"], "REQ-101")
+            phase_started_events = [event for event in emitted_events if event.get("type") == "phase_started"]
+            phase_finished_events = [event for event in emitted_events if event.get("type") == "phase_finished"]
+            self.assertEqual(
+                [(event.get("phase"), event.get("total")) for event in phase_started_events],
+                [("insert", 1), ("update", 1)],
+            )
+            self.assertEqual(
+                [(event.get("phase"), event.get("success"), event.get("failed")) for event in phase_finished_events],
+                [("insert", 1, 0), ("update", 1, 0)],
+            )
 
     def test_validate_mapping_blocks_duplicate_update_ids_across_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

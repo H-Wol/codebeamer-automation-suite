@@ -12,6 +12,8 @@ from .services import ROOT_ITEM_MODE_GROUP_BY_COLUMN
 from .services import gui_display_text
 from .settings_store import GUI_UPLOAD_MODE_CREATE
 from .settings_store import GUI_UPLOAD_MODE_UPDATE
+from .settings_store import GUI_UPLOAD_MODE_UPSERT
+from .settings_store import gui_upload_mode_supports_update
 from .settings_store import normalize_gui_upload_mode
 from .styles import GUI_THEME_CHOICES
 from .styles import normalize_gui_theme_name
@@ -54,8 +56,9 @@ def _settings_mode_toggle_text(is_offline: bool) -> str:
 
 def _settings_upload_mode_choices() -> list[tuple[str, str]]:
     return [
-        (GUI_UPLOAD_MODE_CREATE, "업로드"),
-        (GUI_UPLOAD_MODE_UPDATE, "업데이트"),
+        (GUI_UPLOAD_MODE_CREATE, "신규 생성"),
+        (GUI_UPLOAD_MODE_UPDATE, "기존 수정"),
+        (GUI_UPLOAD_MODE_UPSERT, "혼합 처리"),
     ]
 
 
@@ -460,7 +463,7 @@ def create_settings_page(
         bool(
             getattr(initial_settings, "offline_mode", False)
             and str(getattr(initial_settings, "offline_schema_path", "") or "").strip()
-            and normalize_gui_upload_mode(getattr(initial_settings, "upload_mode", None)) != GUI_UPLOAD_MODE_UPDATE
+            and not gui_upload_mode_supports_update(getattr(initial_settings, "upload_mode", None))
         ) or bool(initial_settings.base_url and initial_settings.username and initial_settings.password)
     )
     buttons.addWidget(load_button)
@@ -471,10 +474,10 @@ def create_settings_page(
     layout.addStretch(1)
 
     def _update_next_button_state() -> None:
-        is_update_mode = normalize_gui_upload_mode(upload_mode_combo.currentData()) == GUI_UPLOAD_MODE_UPDATE
+        blocks_offline_mode = gui_upload_mode_supports_update(upload_mode_combo.currentData())
         if mode_toggle.isChecked():
             next_button.setEnabled(
-                bool(Path(offline_schema_path.text().strip()).is_file()) and not is_update_mode
+                bool(Path(offline_schema_path.text().strip()).is_file()) and not blocks_offline_mode
             )
             return
         next_button.setEnabled(bool(base_url.text().strip() and username.text().strip() and password.text()))
@@ -604,8 +607,8 @@ def create_settings_page(
     def _go_next():
         current = _collect_settings()
         if current.offline_mode:
-            if current.upload_mode == GUI_UPLOAD_MODE_UPDATE:
-                _set_status("테스트 모드에서는 업데이트 작업을 지원하지 않습니다.")
+            if gui_upload_mode_supports_update(current.upload_mode):
+                _set_status("테스트 모드에서는 기존 수정 또는 혼합 처리를 지원하지 않습니다.")
                 return
             if not current.offline_schema_path:
                 _set_status("테스트 모드에서는 schema snapshot JSON 경로가 필요합니다.")
@@ -2210,13 +2213,19 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     page.progress_label = QLabel("진행률 0.0% (0 / 0)")
     layout.addWidget(page.progress_label)
 
+    page.phase_label = QLabel("현재 단계: -")
     page.current_label = QLabel("현재 항목: -")
     page.total_label = QLabel("총 대상 0건 / 완료 0건")
+    page.phase_total_label = QLabel("단계별 총 대상: 생성 0건 / 수정 0건")
+    page.phase_counter_label = QLabel("단계별 결과: 생성 성공 0 / 실패 0 | 수정 성공 0 / 실패 0")
     page.counter_label = QLabel("성공 0 / 실패 0 / 재시도 0")
     page.status_label = QLabel("준비")
     page.status_label.setObjectName("status_label")
+    layout.addWidget(page.phase_label)
     layout.addWidget(page.current_label)
     layout.addWidget(page.total_label)
+    layout.addWidget(page.phase_total_label)
+    layout.addWidget(page.phase_counter_label)
     layout.addWidget(page.counter_label)
     layout.addWidget(page.status_label)
 
@@ -2246,11 +2255,11 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     activity_label.setObjectName("section_label")
     layout.addWidget(activity_label)
 
-    page.activity_table = QTableWidget(0, 7)
-    page.activity_table.setHorizontalHeaderLabels(["파일", "항목", "상태", "시작", "완료", "소요", "로그"])
+    page.activity_table = QTableWidget(0, 8)
+    page.activity_table.setHorizontalHeaderLabels(["파일", "단계", "항목", "상태", "시작", "완료", "소요", "로그"])
     page.activity_table.setAlternatingRowColors(True)
     page.activity_table.setMinimumHeight(220)
-    _configure_table_columns(page.activity_table, [160, 180, 100, 110, 110, 90, 320])
+    _configure_table_columns(page.activity_table, [160, 90, 180, 100, 110, 110, 90, 300])
     layout.addWidget(page.activity_table)
 
     page._activity_row_map = {}
@@ -2297,7 +2306,7 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
             return
         item.setText(value)
 
-    def _ensure_activity_row(row_key: str, file_label: str, item_name: str) -> int:
+    def _ensure_activity_row(row_key: str, file_label: str, phase_name: str, item_name: str) -> int:
         if row_key in page._activity_row_map:
             row_index = int(page._activity_row_map[row_key])
         else:
@@ -2305,22 +2314,30 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
             page.activity_table.insertRow(row_index)
             page._activity_row_map[row_key] = row_index
         _set_activity_cell(row_index, 0, file_label)
-        _set_activity_cell(row_index, 1, item_name)
+        _set_activity_cell(row_index, 1, phase_name)
+        _set_activity_cell(row_index, 2, item_name)
         return row_index
 
-    def record_activity_started(row_key: str, file_label: str, item_name: str, started_at: str) -> None:
-        row_index = _ensure_activity_row(row_key, file_label, item_name)
-        _set_activity_cell(row_index, 2, "진행 중")
-        _set_activity_cell(row_index, 3, started_at)
-        _set_activity_cell(row_index, 4, "")
+    def record_activity_started(
+        row_key: str,
+        file_label: str,
+        phase_name: str,
+        item_name: str,
+        started_at: str,
+    ) -> None:
+        row_index = _ensure_activity_row(row_key, file_label, phase_name, item_name)
+        _set_activity_cell(row_index, 3, "진행 중")
+        _set_activity_cell(row_index, 4, started_at)
         _set_activity_cell(row_index, 5, "")
-        _set_activity_cell(row_index, 6, "업로드 시작")
-        _configure_table_columns(page.activity_table, [160, 180, 100, 110, 110, 90, 320])
+        _set_activity_cell(row_index, 6, "")
+        _set_activity_cell(row_index, 7, "업로드 시작")
+        _configure_table_columns(page.activity_table, [160, 90, 180, 100, 110, 110, 90, 300])
         page.activity_table.scrollToBottom()
 
     def record_activity_finished(
         row_key: str,
         file_label: str,
+        phase_name: str,
         item_name: str,
         *,
         status: str,
@@ -2328,14 +2345,14 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
         duration_text: str,
         message: str,
     ) -> None:
-        row_index = _ensure_activity_row(row_key, file_label, item_name)
-        _set_activity_cell(row_index, 2, status)
-        if not page.activity_table.item(row_index, 3):
-            _set_activity_cell(row_index, 3, finished_at)
-        _set_activity_cell(row_index, 4, finished_at)
-        _set_activity_cell(row_index, 5, duration_text)
-        _set_activity_cell(row_index, 6, message)
-        _configure_table_columns(page.activity_table, [160, 180, 100, 110, 110, 90, 320])
+        row_index = _ensure_activity_row(row_key, file_label, phase_name, item_name)
+        _set_activity_cell(row_index, 3, status)
+        if not page.activity_table.item(row_index, 4):
+            _set_activity_cell(row_index, 4, finished_at)
+        _set_activity_cell(row_index, 5, finished_at)
+        _set_activity_cell(row_index, 6, duration_text)
+        _set_activity_cell(row_index, 7, message)
+        _configure_table_columns(page.activity_table, [160, 90, 180, 100, 110, 110, 90, 300])
         page.activity_table.scrollToBottom()
 
     def reset(total_count: int) -> None:
@@ -2343,8 +2360,11 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
         page.progress_bar.setValue(0)
         page.progress_bar.setFormat("0 / 0 (0.0%)" if total_count <= 0 else f"0 / {total_count} (0.0%)")
         page.progress_label.setText(f"진행률 0.0% (0 / {max(total_count, 0)})")
+        page.phase_label.setText("현재 단계: -")
         page.current_label.setText("현재 항목: -")
         page.total_label.setText("총 대상 0건 / 완료 0건")
+        page.phase_total_label.setText("단계별 총 대상: 생성 0건 / 수정 0건")
+        page.phase_counter_label.setText("단계별 결과: 생성 성공 0 / 실패 0 | 수정 성공 0 / 실패 0")
         page.counter_label.setText("성공 0 / 실패 0 / 재시도 0")
         page.status_label.setText("준비")
         page.time_label.setText("배치 시간: -")

@@ -55,6 +55,25 @@ class FailingSchemaClient(StaticSchemaClient):
         raise UploadError()
 
 
+class UpsertSchemaClient(StaticSchemaClient):
+    def __init__(self, schema: list[dict[str, Any]]) -> None:
+        super().__init__(schema)
+        self.get_item_calls: list[int] = []
+        self.update_item_calls: list[tuple[int, dict[str, Any]]] = []
+
+    def get_item(self, item_id: int) -> dict[str, Any]:
+        self.get_item_calls.append(int(item_id))
+        return {
+            "id": int(item_id),
+            "name": f"기존-{item_id}",
+            "customFields": [],
+        }
+
+    def update_item(self, item_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        self.update_item_calls.append((int(item_id), dict(payload)))
+        return {"id": int(item_id)}
+
+
 class CountingWizard(CodebeamerUploadWizard):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -248,6 +267,95 @@ class PayloadCacheWizardTest(unittest.TestCase):
 
         self.assertEqual(self.client.create_item_calls[0]["payload"]["name"], "ROOT-CUSTOM")
         self.assertEqual(upload_result["success_df"].iloc[0]["upload_name"], "sample")
+
+    def test_upsert_can_create_child_under_existing_parent_id_anchor(self) -> None:
+        client = UpsertSchemaClient(self.schema)
+        wizard = CountingWizard(
+            client=client,
+            processor=HierarchyProcessor(summary_col="요약"),
+            mapper=self.mapper,
+        )
+        wizard.select_project(1)
+        wizard.select_tracker(2)
+        wizard.state.upload_mode = "upsert"
+        raw_df = pd.DataFrame([
+            {"id": 101, "요약": "Parent", "_excel_row": 2, "_summary_indent": 0},
+            {"id": None, "요약": "Child", "_excel_row": 3, "_summary_indent": 1},
+        ], dtype=object)
+        wizard.load_raw_dataframe(raw_df, list_cols=[])
+        wizard.load_schema_and_compare({"요약": "Summary"})
+        wizard.process_option_mapping({"요약": "Summary"})
+
+        payload_df = wizard.build_payloads(fetch_existing_items=False)
+
+        self.assertEqual(payload_df["_operation"].tolist(), ["update", "create"])
+        self.assertEqual(payload_df["payload_status"].tolist(), [PayloadStatus.READY.value, PayloadStatus.READY.value])
+
+        upload_result = wizard.upsert_items(dry_run=False)
+
+        self.assertEqual(client.get_item_calls, [101])
+        self.assertEqual(client.update_item_calls[0][0], 101)
+        self.assertEqual(client.create_item_calls[0]["payload"]["name"], "Child")
+        self.assertEqual(client.create_item_calls[0]["parent_item_id"], 101)
+        self.assertEqual(len(upload_result["success_df"]), 2)
+
+    def test_upsert_allows_new_hierarchy_without_existing_parent_id_anchor(self) -> None:
+        wizard = CountingWizard(
+            client=self.client,
+            processor=HierarchyProcessor(summary_col="요약"),
+            mapper=self.mapper,
+        )
+        wizard.select_project(1)
+        wizard.select_tracker(2)
+        wizard.state.upload_mode = "upsert"
+        raw_df = pd.DataFrame([
+            {"id": None, "요약": "Parent", "_excel_row": 2, "_summary_indent": 0},
+            {"id": None, "요약": "Child", "_excel_row": 3, "_summary_indent": 1},
+        ], dtype=object)
+        wizard.load_raw_dataframe(raw_df, list_cols=[])
+        wizard.load_schema_and_compare({"요약": "Summary"})
+        wizard.process_option_mapping({"요약": "Summary"})
+
+        payload_df = wizard.build_payloads(fetch_existing_items=False)
+
+        self.assertEqual(payload_df["_operation"].tolist(), ["create", "create"])
+        self.assertEqual(payload_df["payload_status"].tolist(), [PayloadStatus.READY.value, PayloadStatus.READY.value])
+
+        upload_result = wizard.upsert_items(dry_run=False)
+
+        self.assertEqual(
+            [call["payload"]["name"] for call in self.client.create_item_calls],
+            ["Parent", "Child"],
+        )
+        self.assertEqual(
+            [call["parent_item_id"] for call in self.client.create_item_calls],
+            [None, 1001],
+        )
+        self.assertEqual(len(upload_result["success_df"]), 2)
+
+    def test_upsert_blocks_update_row_with_new_ancestor(self) -> None:
+        client = UpsertSchemaClient(self.schema)
+        wizard = CountingWizard(
+            client=client,
+            processor=HierarchyProcessor(summary_col="요약"),
+            mapper=self.mapper,
+        )
+        wizard.select_project(1)
+        wizard.select_tracker(2)
+        wizard.state.upload_mode = "upsert"
+        raw_df = pd.DataFrame([
+            {"id": None, "요약": "Parent", "_excel_row": 2, "_summary_indent": 0},
+            {"id": 101, "요약": "Child", "_excel_row": 3, "_summary_indent": 1},
+        ], dtype=object)
+        wizard.load_raw_dataframe(raw_df, list_cols=[])
+        wizard.load_schema_and_compare({"요약": "Summary"})
+        wizard.process_option_mapping({"요약": "Summary"})
+
+        payload_df = wizard.build_payloads(fetch_existing_items=False)
+
+        self.assertEqual(payload_df["_operation"].tolist(), ["create", "update"])
+        self.assertEqual(payload_df["payload_status"].tolist(), [PayloadStatus.READY.value, PayloadStatus.FAILED.value])
+        self.assertIn("UPSERT_UPDATE_WITH_NEW_ANCESTOR", str(payload_df.iloc[1]["payload_error"]))
 
     def test_upload_root_field_values_can_apply_static_option_field(self) -> None:
         schema = [
