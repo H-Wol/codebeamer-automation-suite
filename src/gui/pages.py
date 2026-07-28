@@ -44,10 +44,12 @@ CARD_VERTICAL_MARGIN = 6
 FORM_HORIZONTAL_SPACING = 8
 FORM_VERTICAL_SPACING = 4
 DEFAULT_FORM_FIELD_MIN_WIDTH = 210
-PREVIEW_TABLE_MAX_HEIGHT = 168
-PRIMARY_TABLE_MAX_HEIGHT = 220
-SECONDARY_TABLE_MAX_HEIGHT = 160
-DETAIL_PANE_MAX_HEIGHT = 108
+FORM_PANEL_MAX_WIDTH = 760
+WIDE_FORM_PANEL_MAX_WIDTH = 860
+PREVIEW_TABLE_MIN_HEIGHT = 180
+PRIMARY_TABLE_MIN_HEIGHT = 240
+SECONDARY_TABLE_MIN_HEIGHT = 220
+DETAIL_PANE_MIN_HEIGHT = 110
 UPLOAD_DETAIL_TABS_MIN_HEIGHT = 220
 ACTIVITY_TABLE_MIN_HEIGHT = 160
 
@@ -318,6 +320,26 @@ def _configure_form_field(widget, *, minimum_width: int = DEFAULT_FORM_FIELD_MIN
     )
 
 
+def _configure_constrained_panel(widget, *, max_width: int = FORM_PANEL_MAX_WIDTH) -> None:
+    qt = _require_qt()
+    QSizePolicy = qt["QSizePolicy"]
+    widget.setMaximumWidth(max_width)
+    widget.setSizePolicy(
+        QSizePolicy.Policy.Preferred,
+        QSizePolicy.Policy.Maximum,
+    )
+
+
+def _configure_data_table(widget, *, minimum_height: int) -> None:
+    qt = _require_qt()
+    QSizePolicy = qt["QSizePolicy"]
+    widget.setMinimumHeight(minimum_height)
+    widget.setSizePolicy(
+        QSizePolicy.Policy.Expanding,
+        QSizePolicy.Policy.Expanding,
+    )
+
+
 def create_settings_page(
     settings_store,
     initial_settings,
@@ -422,10 +444,14 @@ def create_settings_page(
     form.addRow("작업 모드", upload_mode_combo)
     form.addRow("테마", theme_combo)
     form.addRow("", mode_row_widget)
-    layout.addLayout(form)
+    form_container = QWidget()
+    form_container.setLayout(form)
+    _configure_constrained_panel(form_container, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
+    layout.addWidget(form_container)
 
     offline_card = QFrame()
     offline_card.setObjectName("advanced_card")
+    _configure_constrained_panel(offline_card, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     offline_layout = QVBoxLayout(offline_card)
     _configure_card_layout(offline_layout)
     offline_description = QLabel("테스트 모드에서만 사용하는 snapshot 경로입니다.")
@@ -452,6 +478,7 @@ def create_settings_page(
     advanced_card = QFrame()
     advanced_card.setObjectName("advanced_card")
     advanced_card.hide()
+    _configure_constrained_panel(advanced_card, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     advanced_layout = QVBoxLayout(advanced_card)
     _configure_card_layout(advanced_layout)
 
@@ -485,6 +512,7 @@ def create_settings_page(
     status_label = QLabel("")
     status_label.setObjectName("status_label")
     status_label.hide()
+    _configure_constrained_panel(status_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(status_label)
     page._current_settings = initial_settings
 
@@ -732,10 +760,14 @@ def create_project_selection_page(
     _configure_form_field(tracker_combo)
     form.addRow("프로젝트", project_combo)
     form.addRow("트래커", tracker_combo)
-    layout.addLayout(form)
+    form_container = QWidget()
+    form_container.setLayout(form)
+    _configure_constrained_panel(form_container)
+    layout.addWidget(form_container)
 
     status_label = QLabel(_project_selection_status_text(bool(getattr(initial_settings, "offline_mode", False))))
     status_label.setObjectName("status_label")
+    _configure_constrained_panel(status_label)
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
@@ -936,7 +968,7 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     page = QWidget()
     page.setObjectName("file_selection_page")
     layout = QVBoxLayout(page)
-    _configure_page_layout(layout, top_align=True)
+    _configure_page_layout(layout)
 
     form = QFormLayout()
     _configure_form_layout(form)
@@ -971,7 +1003,10 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     form.addRow("시트", sheet_name)
     form.addRow("헤더 행", header_row)
     form.addRow("Summary 컬럼", summary_column)
-    layout.addLayout(form)
+    form_container = QWidget()
+    form_container.setLayout(form)
+    _configure_constrained_panel(form_container, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
+    layout.addWidget(form_container)
 
     preview_label = QLabel("미리보기")
     preview_label.setObjectName("section_label")
@@ -983,12 +1018,14 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     preview_table.setItem(0, 1, QTableWidgetItem("담당자"))
     preview_table.setItem(1, 0, QTableWidgetItem("REQ-001"))
     preview_table.setItem(1, 1, QTableWidgetItem("홍길동"))
-    preview_table.setMaximumHeight(PREVIEW_TABLE_MAX_HEIGHT)
+    _configure_data_table(preview_table, minimum_height=PREVIEW_TABLE_MIN_HEIGHT)
     _configure_table_columns(preview_table, [180, 180, 160, 160])
-    layout.addWidget(preview_table)
+    page.preview_table = preview_table
+    layout.addWidget(preview_table, 1)
 
     status_label = QLabel("Excel 파일과 옵션을 정한 뒤 '데이터 불러오기'를 누르세요.")
     status_label.setObjectName("status_label")
+    _configure_constrained_panel(status_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
@@ -1249,7 +1286,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    _configure_page_layout(layout, top_align=True)
+    _configure_page_layout(layout)
 
     description_label = QLabel(
         (
@@ -1261,6 +1298,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
     )
     description_label.setWordWrap(True)
     description_label.setObjectName("section_label")
+    _configure_constrained_panel(description_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(description_label)
 
     enable_root_item = QCheckBox("파일별 최상단 폴더 생성")
@@ -1274,6 +1312,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
     structure_summary_label = QLabel("")
     structure_summary_label.setWordWrap(True)
     structure_summary_label.setObjectName("status_label")
+    _configure_constrained_panel(structure_summary_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(structure_summary_label)
 
     form = QFormLayout()
@@ -1293,6 +1332,7 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
     form.addRow("정규식", regex_pattern)
     form_container = QWidget()
     form_container.setLayout(form)
+    _configure_constrained_panel(form_container, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(form_container)
 
     preview_label = QLabel("상단 데이터 소스 미리보기" if is_structure_page else "상단 폴더 미리보기")
@@ -1301,8 +1341,9 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
 
     preview_table = QTableWidget(0, 0)
     preview_table.setAlternatingRowColors(True)
-    preview_table.setMaximumHeight(PREVIEW_TABLE_MAX_HEIGHT)
-    layout.addWidget(preview_table)
+    _configure_data_table(preview_table, minimum_height=PREVIEW_TABLE_MIN_HEIGHT)
+    page.preview_table = preview_table
+    layout.addWidget(preview_table, 1)
 
     field_label = QLabel("상단 폴더 필드 매핑")
     field_label.setObjectName("section_label")
@@ -1311,12 +1352,14 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
     field_table = QTableWidget(0, 6)
     field_table.setHorizontalHeaderLabels(["사용", "Codebeamer 필드", "타입", "필수", "값 방식", "값"])
     field_table.setAlternatingRowColors(True)
-    field_table.setMaximumHeight(PRIMARY_TABLE_MAX_HEIGHT)
+    _configure_data_table(field_table, minimum_height=PRIMARY_TABLE_MIN_HEIGHT)
     _configure_table_columns(field_table, [80, 240, 180, 90, 160, 240])
-    layout.addWidget(field_table)
+    page.field_table = field_table
+    layout.addWidget(field_table, 2)
 
     status_label = QLabel("")
     status_label.setObjectName("status_label")
+    _configure_constrained_panel(status_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
@@ -1662,7 +1705,7 @@ def create_placeholder_page(title_text: str, description: str):
     body = QPlainTextEdit()
     body.setReadOnly(True)
     body.setPlainText(description)
-    layout.addWidget(body)
+    layout.addWidget(body, 1)
 
     buttons = QHBoxLayout()
     _configure_inline_layout(buttons)
@@ -1696,9 +1739,10 @@ def create_mapping_page(on_validate_requested, on_error=None):
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    _configure_page_layout(layout, top_align=True)
+    _configure_page_layout(layout)
     info_label = QLabel("")
     info_label.setObjectName("section_label")
+    _configure_constrained_panel(info_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(info_label)
 
     mapping_tabs = QTabWidget()
@@ -1710,9 +1754,10 @@ def create_mapping_page(on_validate_requested, on_error=None):
     table = QTableWidget(0, 7)
     table.setHorizontalHeaderLabels(["생성", "수정", "Excel 컬럼", "Codebeamer 필드", "타입", "다중값", "지원 여부"])
     table.setAlternatingRowColors(True)
-    table.setMaximumHeight(PRIMARY_TABLE_MAX_HEIGHT)
+    _configure_data_table(table, minimum_height=PRIMARY_TABLE_MIN_HEIGHT)
     _configure_table_columns(table, [70, 70, 220, 220, 170, 90, 90])
-    mapping_tab_layout.addWidget(table)
+    page.mapping_table = table
+    mapping_tab_layout.addWidget(table, 1)
     mapping_tabs.addTab(mapping_tab, "컬럼 매핑")
 
     defaults_tab = QWidget()
@@ -1724,14 +1769,16 @@ def create_mapping_page(on_validate_requested, on_error=None):
 
     default_help_label = QLabel("행 값이 있으면 행 값이 우선하고, 비어 있으면 아래 기본값을 사용합니다.")
     default_help_label.setWordWrap(True)
+    _configure_constrained_panel(default_help_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     defaults_tab_layout.addWidget(default_help_label)
 
     default_table = QTableWidget(0, 5)
     default_table.setHorizontalHeaderLabels(["적용", "Codebeamer 필드", "타입", "기본값", "필수"])
     default_table.setAlternatingRowColors(True)
-    default_table.setMaximumHeight(SECONDARY_TABLE_MAX_HEIGHT)
+    _configure_data_table(default_table, minimum_height=SECONDARY_TABLE_MIN_HEIGHT)
     _configure_table_columns(default_table, [70, 220, 170, 240, 90])
-    defaults_tab_layout.addWidget(default_table)
+    page.default_table = default_table
+    defaults_tab_layout.addWidget(default_table, 1)
     mapping_tabs.addTab(defaults_tab, "기본값")
 
     tracker_tab = QWidget()
@@ -1745,21 +1792,24 @@ def create_mapping_page(on_validate_requested, on_error=None):
         "TrackerItemChoiceField 는 정규식으로 ID를 추출하거나, configuration 기반 source tracker에서 이름으로 미리 조회할 수 있습니다."
     )
     tracker_item_help_label.setWordWrap(True)
+    _configure_constrained_panel(tracker_item_help_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     tracker_tab_layout.addWidget(tracker_item_help_label)
 
     tracker_item_table = QTableWidget(0, 7)
     tracker_item_table.setHorizontalHeaderLabels(["Excel 컬럼", "Codebeamer 필드", "방식", "다건 결과", "정규식", "예시", "조회 소스"])
     tracker_item_table.setAlternatingRowColors(True)
-    tracker_item_table.setMaximumHeight(SECONDARY_TABLE_MAX_HEIGHT)
+    _configure_data_table(tracker_item_table, minimum_height=SECONDARY_TABLE_MIN_HEIGHT)
     _configure_table_columns(tracker_item_table, [220, 220, 140, 160, 260, 320, 200])
-    tracker_tab_layout.addWidget(tracker_item_table)
+    page.tracker_item_table = tracker_item_table
+    tracker_tab_layout.addWidget(tracker_item_table, 1)
     mapping_tabs.addTab(tracker_tab, "Tracker Item")
 
     page.mapping_tabs = mapping_tabs
-    layout.addWidget(mapping_tabs)
+    layout.addWidget(mapping_tabs, 1)
 
     status_label = QLabel("")
     status_label.setObjectName("status_label")
+    _configure_constrained_panel(status_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
@@ -2345,20 +2395,23 @@ def create_validation_page():
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    _configure_page_layout(layout, top_align=True)
+    _configure_page_layout(layout)
     summary_label = QLabel("")
     summary_label.setObjectName("summary_label")
+    _configure_constrained_panel(summary_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(summary_label)
 
     table = QTableWidget(0, 7)
     table.setHorizontalHeaderLabels(["상태", "행", "항목", "컬럼", "입력값", "문제", "조치"])
     table.setAlternatingRowColors(True)
-    table.setMaximumHeight(PRIMARY_TABLE_MAX_HEIGHT)
+    _configure_data_table(table, minimum_height=PRIMARY_TABLE_MIN_HEIGHT)
     _configure_table_columns(table, [90, 120, 180, 160, 160, 260, 280])
-    layout.addWidget(table)
+    page.issue_table = table
+    layout.addWidget(table, 1)
 
     status_label = QLabel("")
     status_label.setObjectName("status_label")
+    _configure_constrained_panel(status_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(status_label)
 
     buttons = QHBoxLayout()
@@ -2458,7 +2511,7 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    _configure_page_layout(layout, top_align=True)
+    _configure_page_layout(layout)
 
     page.progress_bar = QProgressBar()
     page.progress_bar.setTextVisible(True)
@@ -2575,7 +2628,7 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     page.activity_tab = activity_tab
     page.log_tab = log_tab
     page.response_tab = response_tab
-    layout.addWidget(page.detail_tabs)
+    layout.addWidget(page.detail_tabs, 1)
 
     page._activity_row_map = {}
 
@@ -2686,10 +2739,11 @@ def create_result_page():
 
     page = QWidget()
     layout = QVBoxLayout(page)
-    _configure_page_layout(layout, top_align=True)
+    _configure_page_layout(layout)
 
     tabs = QTabWidget()
     tabs.setDocumentMode(True)
+    page.result_tabs = tabs
     page.tables = {}
     for key, label in (
         ("success_df", "성공"),
@@ -2701,15 +2755,15 @@ def create_result_page():
         _configure_inline_layout(tab_layout)
         table = QTableWidget(0, 0)
         table.setAlternatingRowColors(True)
-        table.setMaximumHeight(PRIMARY_TABLE_MAX_HEIGHT)
-        tab_layout.addWidget(table)
+        _configure_data_table(table, minimum_height=PRIMARY_TABLE_MIN_HEIGHT)
+        tab_layout.addWidget(table, 1)
         tabs.addTab(tab, label)
         page.tables[key] = table
-    layout.addWidget(tabs)
+    layout.addWidget(tabs, 1)
 
     page.response_view = QPlainTextEdit()
     page.response_view.setReadOnly(True)
-    page.response_view.setMaximumHeight(DETAIL_PANE_MAX_HEIGHT)
+    page.response_view.setMinimumHeight(DETAIL_PANE_MIN_HEIGHT)
     layout.addWidget(page.response_view)
 
     buttons = QHBoxLayout()

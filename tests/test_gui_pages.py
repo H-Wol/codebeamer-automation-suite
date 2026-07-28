@@ -13,7 +13,12 @@ from src.gui.pages import _settings_mode_description
 from src.gui.pages import _settings_mode_toggle_text
 from src.gui.pages import _build_tracker_item_regex_preview_text
 from src.gui.pages import _tracker_item_sample_values
+from src.gui.pages import create_file_selection_page
+from src.gui.pages import create_mapping_page
+from src.gui.pages import create_result_page
 from src.gui.pages import create_upload_page
+from src.gui.pages import create_validation_page
+from src.gui.settings_store import GuiSettings
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -100,8 +105,10 @@ class GuiPagesUploadPageTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QSizePolicy
 
         cls._app = QApplication.instance() or QApplication([])
+        cls._expanding_policy = QSizePolicy.Policy.Expanding
 
     def test_upload_page_reset_restores_start_button_state(self) -> None:
         page = create_upload_page(
@@ -126,6 +133,67 @@ class GuiPagesUploadPageTest(unittest.TestCase):
         self.assertFalse(page.result_button.isEnabled())
         self.assertEqual(page.progress_label.text(), "진행률 0.0% (0 / 3)")
         self.assertEqual(page.eta_label.text(), "예상 종료: -")
+
+    def test_file_selection_preview_table_uses_expanding_layout_space(self) -> None:
+        page = create_file_selection_page(
+            GuiSettings(),
+            lambda _state: None,
+            lambda _state: None,
+        )
+
+        layout = page.layout()
+        preview_index = layout.indexOf(page.preview_table)
+
+        self.assertEqual(layout.stretch(preview_index), 1)
+        self.assertEqual(
+            page.preview_table.sizePolicy().verticalPolicy(),
+            self._expanding_policy,
+        )
+
+    def test_mapping_page_keeps_tabs_and_tables_expandable(self) -> None:
+        page = create_mapping_page(lambda *_args: None)
+
+        layout = page.layout()
+        tabs_index = layout.indexOf(page.mapping_tabs)
+
+        self.assertEqual(page.mapping_tabs.count(), 3)
+        self.assertEqual(layout.stretch(tabs_index), 1)
+        self.assertEqual(
+            page.mapping_table.sizePolicy().verticalPolicy(),
+            self._expanding_policy,
+        )
+        self.assertEqual(
+            page.default_table.sizePolicy().verticalPolicy(),
+            self._expanding_policy,
+        )
+        self.assertEqual(
+            page.tracker_item_table.sizePolicy().verticalPolicy(),
+            self._expanding_policy,
+        )
+
+    def test_validation_and_result_pages_prioritize_data_areas(self) -> None:
+        validation_page = create_validation_page()
+        result_page = create_result_page()
+
+        validation_layout = validation_page.layout()
+        result_layout = result_page.layout()
+
+        self.assertEqual(
+            validation_layout.stretch(validation_layout.indexOf(validation_page.issue_table)),
+            1,
+        )
+        self.assertEqual(
+            validation_page.issue_table.sizePolicy().verticalPolicy(),
+            self._expanding_policy,
+        )
+        self.assertEqual(
+            result_layout.stretch(result_layout.indexOf(result_page.result_tabs)),
+            1,
+        )
+        self.assertEqual(
+            result_page.tables["success_df"].sizePolicy().verticalPolicy(),
+            self._expanding_policy,
+        )
 
 
 if __name__ == "__main__":
