@@ -12,6 +12,7 @@ class GuiStylesTest(unittest.TestCase):
         self.assertEqual(normalize_gui_theme_name(None), DEFAULT_GUI_THEME)
         self.assertEqual(normalize_gui_theme_name(""), DEFAULT_GUI_THEME)
         self.assertEqual(normalize_gui_theme_name("unknown"), DEFAULT_GUI_THEME)
+        self.assertEqual(normalize_gui_theme_name("kepico"), DEFAULT_GUI_THEME)
 
     def test_build_gui_stylesheet_includes_igloo_palette_overrides(self) -> None:
         stylesheet = build_gui_stylesheet("igloo")
@@ -21,7 +22,7 @@ class GuiStylesTest(unittest.TestCase):
         self.assertIn("QPushButton#primary_button", stylesheet)
         self.assertIn("QPushButton#mode_toggle", stylesheet)
 
-    def test_build_gui_stylesheet_defaults_to_kepico_when_theme_is_invalid(self) -> None:
+    def test_build_gui_stylesheet_defaults_to_kefico_when_theme_is_invalid(self) -> None:
         default_stylesheet = build_gui_stylesheet(DEFAULT_GUI_THEME)
         invalid_stylesheet = build_gui_stylesheet("nope")
 

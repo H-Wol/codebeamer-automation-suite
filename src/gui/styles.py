@@ -6,9 +6,9 @@ from pathlib import Path
 _ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 _COMBO_ARROW_PATH = (_ASSETS_DIR / "chevron-down.svg").as_posix()
 
-DEFAULT_GUI_THEME = "kepico"
+DEFAULT_GUI_THEME = "kefico"
 GUI_THEME_LABELS = {
-    "kepico": "케피코",
+    "kefico": "케피코",
     "igloo": "이글루",
 }
 GUI_THEME_CHOICES = [(key, label) for key, label in GUI_THEME_LABELS.items()]
@@ -629,13 +629,15 @@ QScrollBar::handle:vertical:hover {
 """
 
 _THEME_OVERRIDES = {
-    "kepico": "",
+    "kefico": "",
     "igloo": _IGLOO_THEME_OVERRIDES,
 }
 
 
 def normalize_gui_theme_name(theme_name: str | None) -> str:
     normalized = str(theme_name or "").strip().lower()
+    if normalized == "kepico":
+        normalized = DEFAULT_GUI_THEME
     return normalized if normalized in GUI_THEME_LABELS else DEFAULT_GUI_THEME
 
 

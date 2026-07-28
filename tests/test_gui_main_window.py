@@ -98,7 +98,7 @@ class GuiMainWindowPreferencesTest(unittest.TestCase):
             window_height=900,
             window_is_maximized=False,
             window_is_fullscreen=True,
-            theme_name="kepico",
+            theme_name="kefico",
         )
         incoming = GuiSettings(
             window_width=1160,
