@@ -316,8 +316,8 @@ status 처리:
 
 현재 가장 권장되는 실행 조합:
 - `cli_main.py`
-- `src/mapping_service.py`
-- `src/wizard.py`
+- `src/mapping_service.py` facade + `src/mapping_reference.py`, `src/mapping_schema.py`, `src/mapping_option.py`
+- `src/wizard.py` facade + `src/wizard_data.py`, `src/wizard_user_lookup.py`, `src/wizard_tracker_lookup.py`, `src/wizard_payload.py`, `src/wizard_operations.py`
 - `src/models/`
 
 ## UML 문서

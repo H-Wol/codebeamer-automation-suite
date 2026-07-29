@@ -6,11 +6,19 @@
 
 현재 기준:
 - `cli_main.py`
-- `src/mapping_service.py`
-- `src/wizard.py`
+- `src/mapping_service.py` facade
+- `src/mapping_reference.py`
+- `src/mapping_schema.py`
+- `src/mapping_option.py`
+- `src/wizard.py` facade
+- `src/wizard_data.py`
+- `src/wizard_user_lookup.py`
+- `src/wizard_tracker_lookup.py`
+- `src/wizard_payload.py`
+- `src/wizard_operations.py`
 - `src/models/`
 
-위 경로들이 기본 경로이며, 과거 `v2` 변경 내용은 이미 이 파일들에 흡수되어 있습니다.
+위 경로들이 현재 기본 경로이며, 과거 `v2` 변경 내용은 facade와 내부 분리 모듈에 이미 흡수되어 있습니다.
 
 ## 초기에 도입된 핵심 개선
 

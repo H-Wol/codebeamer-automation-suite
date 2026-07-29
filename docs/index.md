@@ -54,6 +54,9 @@
 
 - `cli_main.py`
 - `src/mapping_service.py`
+  facade이며 실제 schema/reference/option 로직은 `src/mapping_reference.py`, `src/mapping_schema.py`, `src/mapping_option.py` 로 분리되어 있습니다.
 - `src/wizard.py`
+  facade이며 실제 데이터 준비, lookup, payload, 실행 로직은 `src/wizard_data.py`, `src/wizard_user_lookup.py`, `src/wizard_tracker_lookup.py`, `src/wizard_payload.py`, `src/wizard_operations.py` 로 분리되어 있습니다.
 - `src/models/`
 - `src/gui/`
+  메인 진입점은 `src/gui/main_window.py`, `src/gui/pages.py`, `src/gui/services.py` 이고, 내부 책임은 page/window/service 하위 모듈로 분리되어 있습니다.
