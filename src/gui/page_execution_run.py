@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from PySide6.QtWidgets import QWidget as QtWidget
+
 from src.models import TrackerItemQueryMatchStrategy
 from src.models import TrackerItemResolutionMode
 from src.upload_policy import DEFAULT_TRACKER_ITEM_ID_REGEX
@@ -144,8 +146,13 @@ def create_validation_page():
     return page
 
 
-def create_upload_page(on_start_requested, on_pause_requested, on_resume_requested, on_cancel_requested):
-    """`create_upload_page` 화면을 구성한다."""
+def _initialize_upload_page(
+    page,
+    on_start_requested,
+    on_pause_requested,
+    on_resume_requested,
+    on_cancel_requested,
+):
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -159,7 +166,6 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     QTableWidget = qt["QTableWidget"]
     QTableWidgetItem = qt["QTableWidgetItem"]
 
-    page = QWidget()
     layout = QVBoxLayout(page)
     _configure_page_layout(layout)
 
@@ -380,6 +386,41 @@ def create_upload_page(on_start_requested, on_pause_requested, on_resume_request
     return page
 
 
+class UploadPage(QtWidget):
+    """배치 업로드 실행 상태와 활동 로그를 소유하는 페이지."""
+
+    def __init__(
+        self,
+        on_start_requested,
+        on_pause_requested,
+        on_resume_requested,
+        on_cancel_requested,
+    ) -> None:
+        super().__init__()
+        _initialize_upload_page(
+            self,
+            on_start_requested,
+            on_pause_requested,
+            on_resume_requested,
+            on_cancel_requested,
+        )
+
+
+def create_upload_page(
+    on_start_requested,
+    on_pause_requested,
+    on_resume_requested,
+    on_cancel_requested,
+):
+    """기존 factory 호출 계약으로 `UploadPage`를 생성한다."""
+    return UploadPage(
+        on_start_requested,
+        on_pause_requested,
+        on_resume_requested,
+        on_cancel_requested,
+    )
+
+
 def create_result_page():
     """`create_result_page` 화면을 구성한다."""
     qt = _require_qt()
@@ -467,5 +508,4 @@ def create_result_page():
     restart_button.clicked.connect(lambda: page.request_restart())
     page.set_results = set_results
     return page
-
 

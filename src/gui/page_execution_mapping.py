@@ -10,6 +10,7 @@ from src.upload_policy import default_operation_scope
 from src.upload_policy import normalize_all_or_none_operation_scope
 from src.upload_policy import normalize_operation_scope
 from src.upload_policy import normalize_upload_mode as normalize_gui_upload_mode
+from PySide6.QtWidgets import QWidget as QtWidget
 
 from .page_common import ACTIVITY_TABLE_MIN_HEIGHT
 from .page_common import DETAIL_PANE_MIN_HEIGHT
@@ -29,8 +30,7 @@ from .page_common import _tracker_item_sample_values
 from .services import gui_display_text
 
 
-def create_mapping_page(on_validate_requested, on_error=None):
-    """`create_mapping_page` 화면을 구성한다."""
+def _initialize_mapping_page(page, on_validate_requested, on_error=None):
     qt = _require_qt()
     Qt = qt["Qt"]
     QColor = qt["QColor"]
@@ -46,7 +46,6 @@ def create_mapping_page(on_validate_requested, on_error=None):
     QLineEdit = qt["QLineEdit"]
     QTabWidget = qt["QTabWidget"]
 
-    page = QWidget()
     layout = QVBoxLayout(page)
     _configure_page_layout(layout)
     info_label = QLabel("")
@@ -690,5 +689,17 @@ def create_mapping_page(on_validate_requested, on_error=None):
     page.get_selected_tracker_item_settings = get_selected_tracker_item_settings
     return page
 
+
+class MappingPage(QtWidget):
+    """Excel 컬럼과 Codebeamer 필드 매핑 상태를 소유하는 페이지."""
+
+    def __init__(self, on_validate_requested, on_error=None) -> None:
+        super().__init__()
+        _initialize_mapping_page(self, on_validate_requested, on_error)
+
+
+def create_mapping_page(on_validate_requested, on_error=None):
+    """기존 factory 호출 계약으로 `MappingPage`를 생성한다."""
+    return MappingPage(on_validate_requested, on_error)
 
 

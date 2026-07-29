@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .page_setup_file import FileSelectionPage
+from .page_setup_file import RootItemPage
 from .page_setup_file import create_file_selection_page
 from .page_setup_file import create_placeholder_page
 from .page_setup_file import create_root_item_page
@@ -12,4 +14,6 @@ __all__ = [
     "create_project_selection_page",
     "create_root_item_page",
     "create_settings_page",
+    "FileSelectionPage",
+    "RootItemPage",
 ]

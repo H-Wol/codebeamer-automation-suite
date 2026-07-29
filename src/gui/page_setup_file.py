@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtWidgets import QWidget as QtWidget
+
 from src.upload_policy import normalize_upload_mode as normalize_gui_upload_mode
 from src.upload_policy import upload_mode_supports_update as gui_upload_mode_supports_update
 
@@ -31,8 +33,13 @@ from .styles import GUI_THEME_CHOICES
 from .styles import normalize_gui_theme_name
 
 
-def create_file_selection_page(initial_settings, on_file_state_changed, on_file_preview_requested, on_error=None):
-    """`create_file_selection_page` 화면을 구성한다."""
+def _initialize_file_selection_page(
+    page,
+    initial_settings,
+    on_file_state_changed,
+    on_file_preview_requested,
+    on_error=None,
+):
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -47,7 +54,6 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     QTableWidgetItem = qt["QTableWidgetItem"]
     QFileDialog = qt["QFileDialog"]
 
-    page = QWidget()
     page.setObjectName("file_selection_page")
     layout = QVBoxLayout(page)
     _configure_page_layout(layout)
@@ -363,8 +369,47 @@ def create_file_selection_page(initial_settings, on_file_state_changed, on_file_
     return page
 
 
-def create_root_item_page(on_preview_requested, *, page_mode: str = "structure"):
-    """`create_root_item_page` 화면을 구성한다."""
+class FileSelectionPage(QtWidget):
+    """선택 파일과 명시적 데이터 로딩 상태를 소유하는 페이지."""
+
+    def __init__(
+        self,
+        initial_settings,
+        on_file_state_changed,
+        on_file_preview_requested,
+        on_error=None,
+    ) -> None:
+        super().__init__()
+        _initialize_file_selection_page(
+            self,
+            initial_settings,
+            on_file_state_changed,
+            on_file_preview_requested,
+            on_error,
+        )
+
+
+def create_file_selection_page(
+    initial_settings,
+    on_file_state_changed,
+    on_file_preview_requested,
+    on_error=None,
+):
+    """기존 factory 호출 계약으로 `FileSelectionPage`를 생성한다."""
+    return FileSelectionPage(
+        initial_settings,
+        on_file_state_changed,
+        on_file_preview_requested,
+        on_error,
+    )
+
+
+def _initialize_root_item_page(
+    page,
+    on_preview_requested,
+    *,
+    page_mode: str = "structure",
+):
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -381,7 +426,6 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
     is_structure_page = str(page_mode or "structure").strip() != "fields"
     is_field_page = not is_structure_page
 
-    page = QWidget()
     layout = QVBoxLayout(page)
     _configure_page_layout(layout)
 
@@ -800,6 +844,28 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
     return page
 
 
+class RootItemPage(QtWidget):
+    """루트 구조 또는 루트 필드 할당 상태를 소유하는 페이지."""
+
+    def __init__(
+        self,
+        on_preview_requested,
+        *,
+        page_mode: str = "structure",
+    ) -> None:
+        super().__init__()
+        _initialize_root_item_page(
+            self,
+            on_preview_requested,
+            page_mode=page_mode,
+        )
+
+
+def create_root_item_page(on_preview_requested, *, page_mode: str = "structure"):
+    """기존 factory 호출 계약으로 `RootItemPage`를 생성한다."""
+    return RootItemPage(on_preview_requested, page_mode=page_mode)
+
+
 def create_placeholder_page(title_text: str, description: str):
     """`create_placeholder_page` 화면을 구성한다."""
     qt = _require_qt()
@@ -831,5 +897,4 @@ def create_placeholder_page(title_text: str, description: str):
     previous_button.clicked.connect(lambda: page.request_previous())
     next_button.clicked.connect(lambda: page.request_next())
     return page
-
 

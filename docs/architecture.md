@@ -205,6 +205,11 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 시간 측정값은 `UploadProgressState` 하나에서 관리합니다. Window mixin 사이의 호출은
 현재 클래스 구성만으로 명확하므로 별도 `Protocol`은 추가하지 않습니다.
 
+상태와 callback이 많은 파일 선택, 루트 항목, 매핑, 업로드 화면은 각각
+`FileSelectionPage`, `RootItemPage`, `MappingPage`, `UploadPage`라는 `QWidget`
+하위 클래스입니다. 기존 `create_*_page` 함수는 외부 호출 계약을 보존하는 얇은
+생성 façade로 유지합니다.
+
 ### API 접근
 
 `src/codebeamer_client.py`

@@ -8,10 +8,14 @@ from .page_common import _project_selection_status_text
 from .page_common import _settings_mode_description
 from .page_common import _settings_mode_toggle_text
 from .page_common import _tracker_item_sample_values
+from .page_execution import MappingPage
+from .page_execution import UploadPage
 from .page_execution import create_mapping_page
 from .page_execution import create_result_page
 from .page_execution import create_upload_page
 from .page_execution import create_validation_page
+from .page_setup import FileSelectionPage
+from .page_setup import RootItemPage
 from .page_setup import create_file_selection_page
 from .page_setup import create_placeholder_page
 from .page_setup import create_project_selection_page
@@ -36,4 +40,8 @@ __all__ = [
     "create_settings_page",
     "create_upload_page",
     "create_validation_page",
+    "FileSelectionPage",
+    "MappingPage",
+    "RootItemPage",
+    "UploadPage",
 ]

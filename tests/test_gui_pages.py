@@ -14,9 +14,14 @@ from src.gui.pages import _settings_mode_toggle_text
 from src.gui.pages import _build_tracker_item_regex_preview_text
 from src.gui.pages import _configure_constrained_panel
 from src.gui.pages import _tracker_item_sample_values
+from src.gui.pages import FileSelectionPage
+from src.gui.pages import MappingPage
+from src.gui.pages import RootItemPage
+from src.gui.pages import UploadPage
 from src.gui.pages import create_file_selection_page
 from src.gui.pages import create_mapping_page
 from src.gui.pages import create_result_page
+from src.gui.pages import create_root_item_page
 from src.gui.pages import create_upload_page
 from src.gui.pages import create_validation_page
 from src.gui.settings_store import GuiSettings
@@ -119,6 +124,7 @@ class GuiPagesUploadPageTest(unittest.TestCase):
             lambda: None,
         )
 
+        self.assertIsInstance(page, UploadPage)
         page.start_button.setEnabled(False)
         page.pause_button.setEnabled(True)
         page.resume_button.setEnabled(True)
@@ -142,6 +148,7 @@ class GuiPagesUploadPageTest(unittest.TestCase):
             lambda _state: None,
         )
 
+        self.assertIsInstance(page, FileSelectionPage)
         layout = page.layout()
         preview_index = layout.indexOf(page.preview_table)
 
@@ -154,6 +161,7 @@ class GuiPagesUploadPageTest(unittest.TestCase):
     def test_mapping_page_keeps_tabs_and_tables_expandable(self) -> None:
         page = create_mapping_page(lambda *_args: None)
 
+        self.assertIsInstance(page, MappingPage)
         layout = page.layout()
         tabs_index = layout.indexOf(page.mapping_tabs)
 
@@ -171,6 +179,11 @@ class GuiPagesUploadPageTest(unittest.TestCase):
             page.tracker_item_table.sizePolicy().verticalPolicy(),
             self._expanding_policy,
         )
+
+    def test_root_item_page_is_a_concrete_widget_subclass(self) -> None:
+        page = create_root_item_page(lambda *_args: None)
+
+        self.assertIsInstance(page, RootItemPage)
 
     def test_validation_and_result_pages_prioritize_data_areas(self) -> None:
         validation_page = create_validation_page()
