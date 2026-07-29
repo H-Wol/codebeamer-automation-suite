@@ -13,7 +13,8 @@
 7. [GUI 사용 가이드](./gui-plan.md)
 8. [트러블슈팅](./troubleshooting.md)
 9. [호환 경로 감사](./compatibility.md)
-10. [v2 변경 사항](./v2-changes.md)
+10. [샘플 데이터 및 자격증명 감사](./security-audit.md)
+11. [v2 변경 사항](./v2-changes.md)
 
 ## 문서별 역할
 
@@ -43,6 +44,9 @@
 
 - [호환 경로 감사](./compatibility.md)
   과거 entry point와 Excel wrapper의 사용 여부, 유지 근거, 제거 조건을 기록합니다.
+
+- [샘플 데이터 및 자격증명 감사](./security-audit.md)
+  offline sample과 fixture의 익명화, 자격증명 파일 추적 여부, 자동 회귀 검사를 기록합니다.
 
 - [v2 변경 사항](./v2-changes.md)
   예전 `v2` 도입 배경과 이후 원본 경로에 반영된 주요 개선 이력을 기록합니다.
