@@ -143,13 +143,17 @@
 - 데이터 준비: `src/wizard_data.py`
 - 사용자/멤버 lookup: `src/wizard_user_lookup.py`
 - tracker item lookup: `src/wizard_tracker_lookup.py`
-- payload 구성: `src/wizard_payload.py`
+- payload 호환 façade와 루트 항목 처리: `src/wizard_payload.py`
+- option 해석과 적용: `src/wizard_option_resolution.py`
+- create payload와 `TableFieldValue` 구성: `src/wizard_item_builder.py`
+- payload dataframe cache와 preview: `src/wizard_payload_cache.py`
 - update/upsert 대상 판정과 기존 item 병합: `src/wizard_update_payload.py`
-- 실행 오케스트레이션: `src/wizard_operations.py`
+- 업로드 실행과 결과 저장: `src/wizard_operations.py`
 
-`CodebeamerUploadWizard` 는 `WizardUpdatePayloadService` 를 조합하고 기존 payload 메서드를
-façade로 유지합니다. 이 구조는 update 전용 규칙을 create payload 구성과 분리하면서도
-GUI, CLI, 실행 오케스트레이션의 호출 계약을 보존합니다.
+`CodebeamerUploadWizard` 는 option 해석, create payload 구성, update payload 구성,
+payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서드를 façade로 유지합니다.
+이 구조는 각 단계의 규칙과 cache 생명주기를 분리하면서도 GUI, CLI와 테스트 subclass가
+사용하는 기존 호출 계약을 보존합니다.
 
 ### GUI 계층
 
@@ -352,7 +356,7 @@ status 처리:
 현재 가장 권장되는 실행 조합:
 - `cli_main.py`
 - `src/mapping_service.py` facade + `src/mapping_reference.py`, `src/mapping_schema.py`, `src/mapping_option.py`
-- `src/wizard.py` facade + `src/wizard_data.py`, `src/wizard_user_lookup.py`, `src/wizard_tracker_lookup.py`, `src/wizard_payload.py`, `src/wizard_operations.py`
+- `src/wizard.py` facade + `src/wizard_data.py`, `src/wizard_user_lookup.py`, `src/wizard_tracker_lookup.py`, `src/wizard_option_resolution.py`, `src/wizard_item_builder.py`, `src/wizard_payload_cache.py`, `src/wizard_update_payload.py`, `src/wizard_operations.py`
 - `src/models/`
 
 ## UML 문서
