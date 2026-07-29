@@ -186,12 +186,15 @@ GUI, CLI, 실행 오케스트레이션의 호출 계약을 보존합니다.
 - GUI 서비스 분리: `src/gui/service_core.py`, `src/gui/upload_service.py`
 - 업로드 context 모델: `src/gui/upload_context.py`
 - TRACKER configuration 해석: `src/gui/tracker_config.py`
+- 다중 파일 cache·validation 집계: `src/gui/batch_validation.py`
+- 파일별 wizard 준비·batch 실행·결과 집계: `src/gui/batch_upload.py`
 - 검증 이슈와 사용자 메시지 변환: `src/gui/validation_presenter.py`
 - 파일·그룹 루트 항목 설정, 미리보기와 업로드 명세: `src/gui/root_item_service.py`
 
 `src/gui/upload_service.py` 는 위 구성 요소를 조합하는 façade 역할을 유지합니다.
 페이지는 기존 공개 메서드를 계속 호출하며, 루트 항목의 정규식 해석과 그룹 할당 규칙은
-`RootItemService` 안에서 독립적으로 검증됩니다.
+`RootItemService` 안에서 독립적으로 검증됩니다. 다중 파일 검증과 업로드는 각각
+`BatchValidationService`, `BatchUploadService`가 담당합니다.
 
 ### API 접근
 
