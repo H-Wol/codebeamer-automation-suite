@@ -1,4 +1,9 @@
-.env
+.env*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
 __pycache__/
 *.pyc
 .tools/

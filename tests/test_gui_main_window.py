@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+import tempfile
 import unittest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from src.gui.main_window import _estimate_upload_remaining_seconds
 from src.gui.main_window import _format_clock_text
@@ -9,10 +14,22 @@ from src.gui.main_window import _format_upload_progress_text
 from src.gui.main_window import _merge_root_item_page_configs
 from src.gui.main_window import _merge_window_preferences
 from src.gui.main_window import _window_size_from_settings
+from src.gui.main_window import MainWindow
 from src.gui.settings_store import GuiSettings
+from src.gui.settings_store import GuiSettingsStore
+from src.gui.window_support import GuiSessionState
+from src.gui.window_support import UploadProgressState
 
 
 class GuiMainWindowProgressTest(unittest.TestCase):
+    def test_upload_progress_state_uses_independent_mutable_defaults(self) -> None:
+        first = UploadProgressState()
+        second = UploadProgressState()
+
+        first.phase_counts["insert_success"] = 1
+
+        self.assertEqual(second.phase_counts["insert_success"], 0)
+
     def test_estimate_upload_remaining_seconds_returns_none_without_completed_rows(self) -> None:
         self.assertIsNone(_estimate_upload_remaining_seconds(12.0, 0, 10))
 
@@ -115,6 +132,31 @@ class GuiMainWindowPreferencesTest(unittest.TestCase):
         self.assertFalse(merged.window_is_maximized)
         self.assertTrue(merged.window_is_fullscreen)
         self.assertEqual(merged.theme_name, "igloo")
+
+
+class GuiMainWindowSmokeTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        cls._app = QApplication.instance() or QApplication([])
+
+    def test_main_window_can_be_created_and_shown(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = GuiSettingsStore(root_dir=Path(temp_dir))
+
+            window = MainWindow(store)
+            window.show()
+            self._app.processEvents()
+
+            self.assertIs(type(window), MainWindow)
+            self.assertIsInstance(window.session_state, GuiSessionState)
+            self.assertIsInstance(window.upload_progress, UploadProgressState)
+            self.assertTrue(window.isVisible())
+            self.assertIs(window.stack.currentWidget(), window.page_scroll_areas[window.settings_page])
+
+            window.close()
+            self._app.processEvents()
 
 
 if __name__ == "__main__":

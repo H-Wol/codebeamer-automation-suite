@@ -7,8 +7,16 @@
 
 대상 경로:
 
-- `src/mapping_service.py`
-- `src/wizard.py`
+- `src/mapping_service.py` (public facade)
+- `src/mapping_reference.py`
+- `src/mapping_schema.py`
+- `src/mapping_option.py`
+- `src/wizard.py` (public facade)
+- `src/wizard_data.py`
+- `src/wizard_user_lookup.py`
+- `src/wizard_tracker_lookup.py`
+- `src/wizard_payload.py`
+- `src/wizard_operations.py`
 - `src/models/tracker_item.py`
 - `src/models/field_values.py`
 - `src/models/common.py`
@@ -348,8 +356,16 @@ workflow transition 제약을 반영한 단계별 상태 전이는 아직 구현
 
 ## 관련 코드 경로
 
-- `src/mapping_service.py`
-- `src/wizard.py`
+- `src/mapping_service.py` (public facade)
+- `src/mapping_reference.py`
+- `src/mapping_schema.py`
+- `src/mapping_option.py`
+- `src/wizard.py` (public facade)
+- `src/wizard_data.py`
+- `src/wizard_user_lookup.py`
+- `src/wizard_tracker_lookup.py`
+- `src/wizard_payload.py`
+- `src/wizard_operations.py`
 - `src/models/common.py`
 - `src/models/tracker_item.py`
 - `src/models/field_values.py`

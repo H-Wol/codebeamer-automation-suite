@@ -75,8 +75,28 @@
 - `Status` 는 transition 기반 후처리가 필요하므로 TODO 로 분리
 - 정적 option이 없는 일반 reference field는 `LOOKUP_REQUIRED` 또는 `FIELD_UNSUPPORTED` 로 조기 노출
 
+현재 내부 구조:
+- public façade: `src/mapping_service.py`
+- reference 파싱: `src/mapping_reference.py`
+- schema 해석: `src/mapping_schema.py`
+- option 검증/적용: `src/mapping_option.py`
+
 확장 참고:
 - 새로운 field type 지원 절차는 [필드 지원 추가 가이드](./field-support-guide.md)에 정리되어 있습니다.
+
+### 업로드 정책
+
+`src/upload_policy.py`
+
+주요 책임:
+- create/update/upsert 모드 정규화
+- 모드별 create/update 지원 여부와 루트 item 허용 여부 판정
+- 매핑과 기본값의 operation scope 정규화
+- tracker item ID 기본 정규식 공유
+- GUI와 wizard가 함께 사용하는 차단 상태와 lookup 실패 상태 관리
+
+`src/gui/settings_store.py` 는 기존 GUI import 호환성을 위해 정책 이름을 다시 노출하지만,
+실제 판정 로직의 단일 출처는 `src/upload_policy.py` 입니다.
 
 ### payload 모델과 상태
 
@@ -118,6 +138,23 @@
 - 실행 산출물 저장
 - GUI upload worker가 재사용할 progress/pause/cancel hook 제공
 
+현재 내부 구조:
+- public façade: `src/wizard.py`
+- 데이터 준비: `src/wizard_data.py`
+- 사용자/멤버 lookup: `src/wizard_user_lookup.py`
+- tracker item lookup: `src/wizard_tracker_lookup.py`
+- payload 호환 façade와 루트 항목 처리: `src/wizard_payload.py`
+- option 해석과 적용: `src/wizard_option_resolution.py`
+- create payload와 `TableFieldValue` 구성: `src/wizard_item_builder.py`
+- payload dataframe cache와 preview: `src/wizard_payload_cache.py`
+- update/upsert 대상 판정과 기존 item 병합: `src/wizard_update_payload.py`
+- 업로드 실행과 결과 저장: `src/wizard_operations.py`
+
+`CodebeamerUploadWizard` 는 option 해석, create payload 구성, update payload 구성,
+payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서드를 façade로 유지합니다.
+이 구조는 각 단계의 규칙과 cache 생명주기를 분리하면서도 GUI, CLI와 테스트 subclass가
+사용하는 기존 호출 계약을 보존합니다.
+
 ### GUI 계층
 
 `src/gui/`
@@ -141,6 +178,37 @@
 - `src/gui/services.py`
 - `src/gui/settings_store.py`
 - `src/gui/worker.py`
+
+현재 내부 구조:
+- 페이지 공통 요소: `src/gui/page_common.py`
+- 설정·프로젝트 화면: `src/gui/page_setup_settings.py`
+- 파일·루트 항목 화면: `src/gui/page_setup_file.py`
+- 매핑 화면: `src/gui/page_execution_mapping.py`
+- 검증·업로드·결과 화면: `src/gui/page_execution_run.py`
+- 페이지 호환 façade: `src/gui/page_setup.py`, `src/gui/page_execution.py`
+- 메인 윈도우 셸/워크플로/업로드 분리: `src/gui/main_window.py`, `src/gui/window_support.py`, `src/gui/window_shell.py`, `src/gui/window_workflow.py`, `src/gui/window_upload.py`
+- GUI 서비스 분리: `src/gui/service_core.py`, `src/gui/upload_service.py`
+- 업로드 context 모델: `src/gui/upload_context.py`
+- TRACKER configuration 해석: `src/gui/tracker_config.py`
+- 다중 파일 cache·validation 집계: `src/gui/batch_validation.py`
+- 파일별 wizard 준비·batch 실행·결과 집계: `src/gui/batch_upload.py`
+- 검증 이슈와 사용자 메시지 변환: `src/gui/validation_presenter.py`
+- 파일·그룹 루트 항목 설정, 미리보기와 업로드 명세: `src/gui/root_item_service.py`
+
+`src/gui/upload_service.py` 는 위 구성 요소를 조합하는 façade 역할을 유지합니다.
+페이지는 기존 공개 메서드를 계속 호출하며, 루트 항목의 정규식 해석과 그룹 할당 규칙은
+`RootItemService` 안에서 독립적으로 검증됩니다. 다중 파일 검증과 업로드는 각각
+`BatchValidationService`, `BatchUploadService`가 담당합니다.
+
+`MainWindow` 는 런타임에 내부 클래스를 조립하지 않고 `QMainWindow`를 직접 상속합니다.
+세션의 mapping/validation context는 실제 dataclass 타입으로 선언하며, 업로드 건수·단계·
+시간 측정값은 `UploadProgressState` 하나에서 관리합니다. Window mixin 사이의 호출은
+현재 클래스 구성만으로 명확하므로 별도 `Protocol`은 추가하지 않습니다.
+
+상태와 callback이 많은 파일 선택, 루트 항목, 매핑, 업로드 화면은 각각
+`FileSelectionPage`, `RootItemPage`, `MappingPage`, `UploadPage`라는 `QWidget`
+하위 클래스입니다. 기존 `create_*_page` 함수는 외부 호출 계약을 보존하는 얇은
+생성 façade로 유지합니다.
 
 ### API 접근
 
@@ -297,8 +365,8 @@ status 처리:
 
 현재 가장 권장되는 실행 조합:
 - `cli_main.py`
-- `src/mapping_service.py`
-- `src/wizard.py`
+- `src/mapping_service.py` facade + `src/mapping_reference.py`, `src/mapping_schema.py`, `src/mapping_option.py`
+- `src/wizard.py` facade + `src/wizard_data.py`, `src/wizard_user_lookup.py`, `src/wizard_tracker_lookup.py`, `src/wizard_option_resolution.py`, `src/wizard_item_builder.py`, `src/wizard_payload_cache.py`, `src/wizard_update_payload.py`, `src/wizard_operations.py`
 - `src/models/`
 
 ## UML 문서

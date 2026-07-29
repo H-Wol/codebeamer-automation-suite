@@ -118,12 +118,19 @@ GUI `테스트 모드`를 바로 눌러볼 수 있는 샘플 세트는 `data/gui
 - `src/excel_reader.py`: Excel 파일을 raw DataFrame으로 읽는 입력 계층
 - `src/hierarchy_processor.py`: raw DataFrame을 merged/hierarchy/upload DataFrame으로 후처리
 - `src/excel_processor.py`: 기존 import 호환용 통합 래퍼
-- `src/mapping_service.py`: schema flattening, 컬럼 비교, option/reference 처리
-- `src/wizard.py`: 업로드 오케스트레이션, preview, 업로드, 상태 저장
+- `src/cli_excel_utils.py`: 기존 CLI Excel helper import 호환 래퍼
+- `src/upload_policy.py`: create/update/upsert 모드, 작업 범위, 루트 허용 여부, 공통 검증 상태 정책
+- `src/mapping_service.py`: schema 해석용 façade
+  내부 구현은 `src/mapping_reference.py`, `src/mapping_schema.py`, `src/mapping_option.py` 로 분리
+- `src/wizard.py`: 업로드 오케스트레이션 façade
+  내부 구현은 데이터, lookup, option 해석, create/update payload, payload cache, 실행 서비스로 분리
 - `src/models/`: reference, field value, tracker item, user info, wizard state 모델
 - `src/gui/`: PySide6 기반 단계형 GUI, 서비스 계층, upload worker
+  내부 구현은 `pages.py`/`main_window.py`/`services.py` façade 아래에 `page_*`, `window_*`, `service_*` 모듈로 분리
 - `data/gui-offline-sample/`: GUI 테스트 모드용 snapshot, 다중 Excel 샘플, 사용 안내
 - `docs/`: 사용 가이드와 아키텍처 문서
+
+호환 wrapper의 유지·제거 기준은 [호환 경로 감사](./docs/compatibility.md)에 정리되어 있습니다.
 - `output/`: 실행 결과 산출물 저장 디렉터리
 
 ## 빠른 시작

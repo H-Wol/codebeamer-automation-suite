@@ -7,6 +7,15 @@ from dataclasses import field
 from pathlib import Path
 from typing import Any
 
+from src.upload_policy import UPLOAD_MODE_CREATE as GUI_UPLOAD_MODE_CREATE
+from src.upload_policy import UPLOAD_MODE_UPDATE as GUI_UPLOAD_MODE_UPDATE
+from src.upload_policy import UPLOAD_MODE_UPSERT as GUI_UPLOAD_MODE_UPSERT
+from src.upload_policy import normalize_upload_mode as normalize_gui_upload_mode
+from src.upload_policy import upload_mode_action_label as gui_upload_mode_action_label
+from src.upload_policy import upload_mode_allows_root_items as gui_upload_mode_allows_root_items
+from src.upload_policy import upload_mode_supports_create as gui_upload_mode_supports_create
+from src.upload_policy import upload_mode_supports_update as gui_upload_mode_supports_update
+
 from .styles import DEFAULT_GUI_THEME
 from .styles import normalize_gui_theme_name
 
@@ -15,39 +24,6 @@ APP_DIR_NAME = ".codebeamer-automation-suite"
 SETTINGS_FILE_NAME = "gui_settings.json"
 KEY_FILE_NAME = "gui_settings.key"
 WORKFLOW_PRESET_FILE_NAME = "gui_workflow_preset.json"
-GUI_UPLOAD_MODE_CREATE = "create"
-GUI_UPLOAD_MODE_UPDATE = "update"
-GUI_UPLOAD_MODE_UPSERT = "upsert"
-
-
-def normalize_gui_upload_mode(upload_mode: str | None) -> str:
-    normalized = str(upload_mode or "").strip().lower()
-    if normalized in {GUI_UPLOAD_MODE_CREATE, GUI_UPLOAD_MODE_UPDATE, GUI_UPLOAD_MODE_UPSERT}:
-        return normalized
-    return GUI_UPLOAD_MODE_CREATE
-
-
-def gui_upload_mode_supports_create(upload_mode: str | None) -> bool:
-    normalized = normalize_gui_upload_mode(upload_mode)
-    return normalized in {GUI_UPLOAD_MODE_CREATE, GUI_UPLOAD_MODE_UPSERT}
-
-
-def gui_upload_mode_supports_update(upload_mode: str | None) -> bool:
-    normalized = normalize_gui_upload_mode(upload_mode)
-    return normalized in {GUI_UPLOAD_MODE_UPDATE, GUI_UPLOAD_MODE_UPSERT}
-
-
-def gui_upload_mode_allows_root_items(upload_mode: str | None) -> bool:
-    return normalize_gui_upload_mode(upload_mode) in {GUI_UPLOAD_MODE_CREATE, GUI_UPLOAD_MODE_UPSERT}
-
-
-def gui_upload_mode_action_label(upload_mode: str | None) -> str:
-    normalized = normalize_gui_upload_mode(upload_mode)
-    if normalized == GUI_UPLOAD_MODE_UPDATE:
-        return "업데이트"
-    if normalized == GUI_UPLOAD_MODE_UPSERT:
-        return "혼합 처리"
-    return "업로드"
 
 
 @dataclass
