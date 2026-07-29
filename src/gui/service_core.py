@@ -24,14 +24,14 @@ from src.upload_pipeline import load_tracker_schema_df
 from src.upload_pipeline import prepare_upload_dataframe
 from src.upload_pipeline import run_validation_pipeline
 from src.upload_pipeline import suggest_mapping_from_headers
+from src.upload_policy import UPLOAD_MODE_CREATE as GUI_UPLOAD_MODE_CREATE
+from src.upload_policy import UPLOAD_MODE_UPDATE as GUI_UPLOAD_MODE_UPDATE
+from src.upload_policy import UPLOAD_MODE_UPSERT as GUI_UPLOAD_MODE_UPSERT
+from src.upload_policy import normalize_upload_mode as normalize_gui_upload_mode
+from src.upload_policy import upload_mode_action_label as gui_upload_mode_action_label
+from src.upload_policy import upload_mode_allows_root_items as gui_upload_mode_allows_root_items
+from src.upload_policy import upload_mode_supports_update as gui_upload_mode_supports_update
 from src.wizard import CodebeamerUploadWizard
-from .settings_store import GUI_UPLOAD_MODE_CREATE
-from .settings_store import GUI_UPLOAD_MODE_UPDATE
-from .settings_store import GUI_UPLOAD_MODE_UPSERT
-from .settings_store import gui_upload_mode_action_label
-from .settings_store import gui_upload_mode_allows_root_items
-from .settings_store import gui_upload_mode_supports_update
-from .settings_store import normalize_gui_upload_mode
 
 
 @dataclass

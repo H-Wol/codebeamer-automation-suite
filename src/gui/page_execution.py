@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from src.models import TrackerItemQueryMatchStrategy
 from src.models import TrackerItemResolutionMode
+from src.upload_policy import DEFAULT_TRACKER_ITEM_ID_REGEX
+from src.upload_policy import UPLOAD_MODE_CREATE as GUI_UPLOAD_MODE_CREATE
+from src.upload_policy import UPLOAD_MODE_UPDATE as GUI_UPLOAD_MODE_UPDATE
+from src.upload_policy import UPLOAD_MODE_UPSERT as GUI_UPLOAD_MODE_UPSERT
+from src.upload_policy import default_operation_scope
+from src.upload_policy import normalize_all_or_none_operation_scope
+from src.upload_policy import normalize_operation_scope
+from src.upload_policy import normalize_upload_mode as normalize_gui_upload_mode
 
 from .page_common import ACTIVITY_TABLE_MIN_HEIGHT
 from .page_common import DETAIL_PANE_MIN_HEIGHT
@@ -18,12 +26,7 @@ from .page_common import _configure_table_columns
 from .page_common import _is_hidden_user_table_column
 from .page_common import _require_qt
 from .page_common import _tracker_item_sample_values
-from .services import DEFAULT_TRACKER_ITEM_ID_REGEX
 from .services import gui_display_text
-from .settings_store import GUI_UPLOAD_MODE_CREATE
-from .settings_store import GUI_UPLOAD_MODE_UPDATE
-from .settings_store import GUI_UPLOAD_MODE_UPSERT
-from .settings_store import normalize_gui_upload_mode
 
 
 def create_mapping_page(on_validate_requested, on_error=None):
@@ -405,36 +408,9 @@ def create_mapping_page(on_validate_requested, on_error=None):
         _populate_tracker_item_table(get_selected_mapping(), get_selected_tracker_item_settings())
         _mark_dirty()
 
-    def _default_scope_for_upload_mode(upload_mode: str) -> dict[str, bool]:
-        """`default_scope_for_upload_mode` 기본값을 계산한다."""
-        normalized_mode = normalize_gui_upload_mode(upload_mode)
-        if normalized_mode == GUI_UPLOAD_MODE_UPDATE:
-            return {"create": False, "update": True}
-        if normalized_mode == GUI_UPLOAD_MODE_UPSERT:
-            return {"create": True, "update": True}
-        return {"create": True, "update": False}
-
-    def _normalize_scope(raw_scope: dict[str, object] | None, *, upload_mode: str) -> dict[str, bool]:
-        """`normalize_scope` 값을 정규화한다."""
-        default_scope = _default_scope_for_upload_mode(upload_mode)
-        payload = dict(raw_scope or {})
-        return {
-            "create": bool(payload.get("create", default_scope["create"])),
-            "update": bool(payload.get("update", default_scope["update"])),
-        }
-
     def _normalize_default_value_scope(raw_scope: dict[str, object] | None, *, upload_mode: str) -> dict[str, bool]:
         """`normalize_default_value_scope` 값을 정규화한다."""
-        payload = dict(raw_scope or {})
-        if not payload:
-            return _default_scope_for_upload_mode(upload_mode)
-        normalized_scope = _normalize_scope(payload, upload_mode=upload_mode)
-        normalized_mode = normalize_gui_upload_mode(upload_mode)
-        if normalized_mode == GUI_UPLOAD_MODE_UPDATE:
-            return _default_scope_for_upload_mode(upload_mode) if bool(normalized_scope.get("update", False)) else {"create": False, "update": False}
-        if normalized_mode == GUI_UPLOAD_MODE_UPSERT:
-            return _default_scope_for_upload_mode(upload_mode) if bool(normalized_scope.get("create", False) or normalized_scope.get("update", False)) else {"create": False, "update": False}
-        return _default_scope_for_upload_mode(upload_mode) if bool(normalized_scope.get("create", False)) else {"create": False, "update": False}
+        return normalize_all_or_none_operation_scope(raw_scope, upload_mode=upload_mode)
 
     def _sync_mapping_scope_checkboxes(create_widget, update_widget, *, upload_mode: str) -> None:
         """`sync_mapping_scope_checkboxes` 상태를 동기화한다."""
@@ -482,7 +458,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
             update_widget = QCheckBox()
             is_selected = column_name in selected_mapping
             scope = (
-                _normalize_scope(
+                normalize_operation_scope(
                     (selected_mapping_modes or {}).get(column_name),
                     upload_mode=normalized_upload_mode,
                 )
@@ -640,7 +616,7 @@ def create_mapping_page(on_validate_requested, on_error=None):
             if not bool(create_widget.isChecked()):
                 default_value_modes[field_item.text()] = {"create": False, "update": False}
                 continue
-            upload_mode_scope = _default_scope_for_upload_mode(
+            upload_mode_scope = default_operation_scope(
                 getattr(page, "_mapping_upload_mode", GUI_UPLOAD_MODE_CREATE)
             )
             default_value_modes[field_item.text()] = {

@@ -10,10 +10,10 @@ from .models import OptionMapKind
 from .models import ReferenceType
 from .models import TrackerItemQueryMatchStrategy
 from .models import TrackerItemResolutionMode
+from .upload_policy import DEFAULT_TRACKER_ITEM_ID_REGEX
 
 
 TrackerItemLookupCacheEntry = tuple[Any, str | None, str | None]
-DEFAULT_TRACKER_ITEM_ID_REGEX = r"\[(?:[^:\]]+:)?(\d+)[^\]]*\]|^(\d+)(?:\.0)?$"
 
 
 class WizardTrackerItemLookupMixin:

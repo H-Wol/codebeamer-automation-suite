@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import time
 
-from .settings_store import gui_upload_mode_action_label
+from src.upload_policy import upload_mode_action_label as gui_upload_mode_action_label
+
 from .window_support import _format_clock_text
 from .window_support import _format_duration_text
 from .window_support import _format_upload_eta_text

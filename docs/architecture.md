@@ -84,6 +84,20 @@
 확장 참고:
 - 새로운 field type 지원 절차는 [필드 지원 추가 가이드](./field-support-guide.md)에 정리되어 있습니다.
 
+### 업로드 정책
+
+`src/upload_policy.py`
+
+주요 책임:
+- create/update/upsert 모드 정규화
+- 모드별 create/update 지원 여부와 루트 item 허용 여부 판정
+- 매핑과 기본값의 operation scope 정규화
+- tracker item ID 기본 정규식 공유
+- GUI와 wizard가 함께 사용하는 차단 상태와 lookup 실패 상태 관리
+
+`src/gui/settings_store.py` 는 기존 GUI import 호환성을 위해 정책 이름을 다시 노출하지만,
+실제 판정 로직의 단일 출처는 `src/upload_policy.py` 입니다.
+
 ### payload 모델과 상태
 
 `src/models/`

@@ -23,42 +23,25 @@ from src.upload_pipeline import load_tracker_schema_df
 from src.upload_pipeline import prepare_upload_dataframe
 from src.upload_pipeline import run_validation_pipeline
 from src.upload_pipeline import suggest_mapping_from_headers
+from src.upload_policy import BLOCKING_OPTION_STATUSES
+from src.upload_policy import DEFAULT_TRACKER_ITEM_ID_REGEX
+from src.upload_policy import UPLOAD_MODE_CREATE as GUI_UPLOAD_MODE_CREATE
+from src.upload_policy import UPLOAD_MODE_UPDATE as GUI_UPLOAD_MODE_UPDATE
+from src.upload_policy import UPLOAD_MODE_UPSERT as GUI_UPLOAD_MODE_UPSERT
+from src.upload_policy import USER_LOOKUP_FAILURE_SUFFIXES
+from src.upload_policy import default_operation_scope
+from src.upload_policy import normalize_operation_scope
+from src.upload_policy import normalize_upload_mode as normalize_gui_upload_mode
+from src.upload_policy import scope_applies_to_upload_mode
+from src.upload_policy import upload_mode_action_label as gui_upload_mode_action_label
+from src.upload_policy import upload_mode_allows_root_items as gui_upload_mode_allows_root_items
+from src.upload_policy import upload_mode_supports_update as gui_upload_mode_supports_update
 from src.wizard import CodebeamerUploadWizard
 
 from .service_core import GuiExcelService
 from .service_core import PreviewData
 from .service_core import _build_gui_client
 from .service_core import gui_display_text
-from .settings_store import GUI_UPLOAD_MODE_CREATE
-from .settings_store import GUI_UPLOAD_MODE_UPDATE
-from .settings_store import GUI_UPLOAD_MODE_UPSERT
-from .settings_store import gui_upload_mode_action_label
-from .settings_store import gui_upload_mode_allows_root_items
-from .settings_store import gui_upload_mode_supports_update
-from .settings_store import normalize_gui_upload_mode
-
-
-BLOCKING_OPTION_STATUSES = {
-    OptionCheckStatus.DIRECT_PARSE_FAILED.value,
-    OptionCheckStatus.DF_COLUMN_MISSING.value,
-    OptionCheckStatus.FIELD_UNSUPPORTED.value,
-    OptionCheckStatus.LOOKUP_REQUIRED.value,
-    OptionCheckStatus.OPTION_MAP_MISSING.value,
-    OptionCheckStatus.OPTION_NOT_FOUND.value,
-    OptionCheckStatus.OPTION_SOURCE_UNAVAILABLE.value,
-    OptionCheckStatus.TRACKER_ITEM_LOOKUP_AMBIGUOUS.value,
-    OptionCheckStatus.TRACKER_ITEM_LOOKUP_NOT_FOUND.value,
-    OptionCheckStatus.TRACKER_ITEM_REGEX_MISSING.value,
-}
-USER_LOOKUP_FAILURE_SUFFIXES = (
-    "USER_LOOKUP_NOT_RUN",
-    "USER_LOOKUP_FAILED",
-    "USER_LOOKUP_AMBIGUOUS",
-    "USER_NOT_FOUND",
-    "MEMBER_LOOKUP_FAILED",
-    "MEMBER_LOOKUP_AMBIGUOUS",
-    "MEMBER_NOT_FOUND",
-)
 GUI_EXCLUDED_MAPPING_COLUMNS = {
     "id",
     "parent",
@@ -89,7 +72,6 @@ ROOT_ITEM_MODE_FILE = "file"
 ROOT_ITEM_MODE_GROUP_BY_COLUMN = "group_by_column"
 ROOT_ASSIGNMENT_MODE_FILE_SOURCE = "file_source"
 ROOT_ASSIGNMENT_MODE_FIXED_VALUE = "fixed_value"
-DEFAULT_TRACKER_ITEM_ID_REGEX = r"\[(?:[^:\]]+:)?(\d+)[^\]]*\]|^(\d+)(?:\.0)?$"
 GUI_VALUE_KIND_STATIC_OPTIONS = "static_options"
 GUI_VALUE_KIND_BOOL = "bool"
 GUI_VALUE_KIND_SCALAR = "scalar"
@@ -233,42 +215,6 @@ class GuiUploadPipelineService:
         self.reader_cls = reader_cls
         self.excel_service = excel_service or GuiExcelService(logger=logger, reader_cls=reader_cls)
 
-    @staticmethod
-    def _default_operation_scope(upload_mode: str | None) -> dict[str, bool]:
-        """`default_operation_scope` 기본값을 계산한다."""
-        normalized_mode = normalize_gui_upload_mode(upload_mode)
-        if normalized_mode == GUI_UPLOAD_MODE_UPDATE:
-            return {"create": False, "update": True}
-        if normalized_mode == GUI_UPLOAD_MODE_UPSERT:
-            return {"create": True, "update": True}
-        return {"create": True, "update": False}
-
-    @classmethod
-    def _normalize_operation_scope(
-        cls,
-        raw_scope: Any,
-        *,
-        upload_mode: str | None,
-    ) -> dict[str, bool]:
-        """`normalize_operation_scope` 값을 정규화한다."""
-        default_scope = cls._default_operation_scope(upload_mode)
-        scope_payload = dict(raw_scope) if isinstance(raw_scope, dict) else {}
-        return {
-            "create": bool(scope_payload.get("create", default_scope["create"])),
-            "update": bool(scope_payload.get("update", default_scope["update"])),
-        }
-
-    @classmethod
-    def _scope_applies_to_upload_mode(cls, raw_scope: Any, *, upload_mode: str | None) -> bool:
-        """`scope_applies_to_upload_mode` 적용 범위를 판정한다."""
-        normalized_mode = normalize_gui_upload_mode(upload_mode)
-        scope = cls._normalize_operation_scope(raw_scope, upload_mode=upload_mode)
-        if normalized_mode == GUI_UPLOAD_MODE_UPDATE:
-            return bool(scope.get("update", False))
-        if normalized_mode == GUI_UPLOAD_MODE_UPSERT:
-            return bool(scope.get("create", False) or scope.get("update", False))
-        return bool(scope.get("create", False))
-
     @classmethod
     def _normalize_mapping_modes(
         cls,
@@ -283,7 +229,7 @@ class GuiUploadPipelineService:
             normalized_column = str(df_column).strip()
             if not normalized_column:
                 continue
-            normalized_modes[normalized_column] = cls._normalize_operation_scope(
+            normalized_modes[normalized_column] = normalize_operation_scope(
                 (selected_mapping_modes or {}).get(normalized_column),
                 upload_mode=upload_mode,
             )
@@ -299,13 +245,13 @@ class GuiUploadPipelineService:
     ) -> dict[str, dict[str, bool]]:
         """`normalize_default_value_modes` 값을 정규화한다."""
         normalized_modes: dict[str, dict[str, bool]] = {}
-        default_scope = cls._default_operation_scope(upload_mode)
+        default_scope = default_operation_scope(upload_mode)
         for schema_field in selected_default_values.keys():
             normalized_field = str(schema_field).strip()
             if not normalized_field:
                 continue
             raw_scope = (selected_default_value_modes or {}).get(normalized_field)
-            is_enabled = cls._scope_applies_to_upload_mode(raw_scope, upload_mode=upload_mode)
+            is_enabled = scope_applies_to_upload_mode(raw_scope, upload_mode=upload_mode)
             normalized_modes[normalized_field] = dict(default_scope) if is_enabled else {"create": False, "update": False}
         return normalized_modes
 
@@ -2593,7 +2539,7 @@ class GuiUploadPipelineService:
         query_mapping: dict[str, str] = {}
         for df_column, schema_field in mapping_context.selected_mapping.items():
             scope = dict((mapping_context.selected_mapping_modes or {}).get(str(df_column).strip()) or {})
-            if not GuiUploadPipelineService._scope_applies_to_upload_mode(
+            if not scope_applies_to_upload_mode(
                 scope,
                 upload_mode=mapping_context.upload_mode,
             ):

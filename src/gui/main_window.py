@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from src.upload_policy import normalize_upload_mode as normalize_gui_upload_mode
+
 from .services import GuiCodebeamerService
 from .services import GuiExcelService
 from .services import GuiUploadPipelineService
 from .settings_store import GuiSettings
 from .settings_store import GuiSettingsStore
 from .settings_store import GuiWorkflowPreset
-from .settings_store import normalize_gui_upload_mode
 from .window_shell import WindowShellMixin
 from .window_support import GuiSessionState
 from .window_support import _estimate_upload_remaining_seconds

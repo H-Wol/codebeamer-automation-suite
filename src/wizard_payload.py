@@ -16,6 +16,10 @@ from .models import TableFieldValue
 from .models import TrackerItemBase
 from .models import UserLookupStatus
 from .models.field_values import _build_field_value
+from .upload_policy import normalize_operation_scope
+from .upload_policy import normalize_upload_mode
+from .upload_policy import scope_applies_to_operation
+from .upload_policy import scope_applies_to_upload_mode
 
 
 DEFAULT_VALUE_COLUMN_LABEL = "(기본값)"
@@ -30,7 +34,7 @@ class WizardPayloadMixin:
         id_column_name: str | None,
     ) -> str:
         """옵션 검증 시 현재 행이 생성/수정 중 어느 흐름인지 판단한다."""
-        normalized_mode = self._normalize_upload_mode(upload_mode)
+        normalized_mode = normalize_upload_mode(upload_mode)
         if normalized_mode == "update":
             return "update"
         if normalized_mode != "upsert":
@@ -56,7 +60,7 @@ class WizardPayloadMixin:
             return upload_df.copy()
 
         work = upload_df.copy()
-        upload_mode = self._normalize_upload_mode(self.state.upload_mode)
+        upload_mode = normalize_upload_mode(self.state.upload_mode)
         id_column_name = self._update_item_id_column_name(work) if upload_mode == "upsert" else None
         row_operations = [
             self._option_processing_operation(
@@ -73,7 +77,7 @@ class WizardPayloadMixin:
             scope = self.state.selected_mapping_modes.get(str(df_col).strip())
             inactive_mask = pd.Series(
                 [
-                    not self._scope_applies_to_operation(
+                    not scope_applies_to_operation(
                         scope,
                         operation,
                         upload_mode=upload_mode,
@@ -118,9 +122,9 @@ class WizardPayloadMixin:
 
         option_fields = self.mapper.get_option_field_candidates(self.state.schema_df)
         self.state.option_candidates_df = option_fields
-        upload_mode = self._normalize_upload_mode(self.state.upload_mode)
+        upload_mode = normalize_upload_mode(self.state.upload_mode)
         normalized_mapping_modes = {
-            str(df_column).strip(): self._normalize_operation_scope(
+            str(df_column).strip(): normalize_operation_scope(
                 (selected_mapping_modes or {}).get(str(df_column).strip()),
                 upload_mode=upload_mode,
             )
@@ -132,7 +136,7 @@ class WizardPayloadMixin:
         effective_selected_mapping = {
             excel_col: schema_field
             for excel_col, schema_field in selected_mapping.items()
-            if self._scope_applies_to_upload_mode(
+            if scope_applies_to_upload_mode(
                 normalized_mapping_modes.get(str(excel_col).strip()),
                 upload_mode,
             )
@@ -159,7 +163,7 @@ class WizardPayloadMixin:
 
         self.state.selected_default_values = normalized_default_values
         normalized_default_value_modes = {
-            schema_field: self._normalize_operation_scope(
+            schema_field: normalize_operation_scope(
                 (selected_default_value_modes or {}).get(schema_field),
                 upload_mode=upload_mode,
             )
@@ -169,7 +173,7 @@ class WizardPayloadMixin:
         effective_default_values = {
             schema_field: raw_value
             for schema_field, raw_value in normalized_default_values.items()
-            if self._scope_applies_to_upload_mode(
+            if scope_applies_to_upload_mode(
                 normalized_default_value_modes.get(schema_field),
                 upload_mode,
             )
@@ -947,7 +951,7 @@ class WizardPayloadMixin:
                 continue
             if not self._has_configured_value(raw_value):
                 continue
-            if not self._scope_applies_to_operation(
+            if not scope_applies_to_operation(
                 self.state.selected_default_value_modes.get(schema_field),
                 operation,
                 upload_mode=self.state.upload_mode,
@@ -1066,7 +1070,7 @@ class WizardPayloadMixin:
         applied_schema_fields: set[str] = set()
 
         for df_col, schema_field in self.state.selected_mapping.items():
-            if not self._scope_applies_to_operation(
+            if not scope_applies_to_operation(
                 self.state.selected_mapping_modes.get(df_col),
                 operation,
                 upload_mode=self.state.upload_mode,
@@ -1147,64 +1151,6 @@ class WizardPayloadMixin:
             if normalized.casefold() == "id" and exact_match is None:
                 exact_match = normalized
         return exact_match
-
-    @staticmethod
-    def _normalize_upload_mode(upload_mode: Any) -> str:
-        """내부 업로드 모드 이름을 create/update/upsert 중 하나로 정규화한다."""
-        normalized = str(upload_mode or "create").strip().lower()
-        if normalized in {"update", "upsert"}:
-            return normalized
-        return "create"
-
-    @classmethod
-    def _upload_mode_supports_update(cls, upload_mode: Any) -> bool:
-        """현재 모드가 기존 item ID 기반 수정 경로를 포함하는지 돌려준다."""
-        return cls._normalize_upload_mode(upload_mode) in {"update", "upsert"}
-
-    @classmethod
-    def _default_operation_scope(cls, upload_mode: Any) -> dict[str, bool]:
-        """`default_operation_scope` 기본값을 계산한다."""
-        normalized_mode = cls._normalize_upload_mode(upload_mode)
-        if normalized_mode == "update":
-            return {"create": False, "update": True}
-        if normalized_mode == "upsert":
-            return {"create": True, "update": True}
-        return {"create": True, "update": False}
-
-    @classmethod
-    def _normalize_operation_scope(
-        cls,
-        raw_scope: Any,
-        *,
-        upload_mode: Any,
-    ) -> dict[str, bool]:
-        """`normalize_operation_scope` 값을 정규화한다."""
-        default_scope = cls._default_operation_scope(upload_mode)
-        scope_payload = dict(raw_scope) if isinstance(raw_scope, dict) else {}
-        return {
-            "create": bool(scope_payload.get("create", default_scope["create"])),
-            "update": bool(scope_payload.get("update", default_scope["update"])),
-        }
-
-    @classmethod
-    def _scope_applies_to_operation(cls, raw_scope: Any, operation: str, *, upload_mode: Any) -> bool:
-        """`scope_applies_to_operation` 적용 범위를 판정한다."""
-        scope = cls._normalize_operation_scope(raw_scope, upload_mode=upload_mode)
-        normalized_operation = str(operation or "create").strip().lower()
-        if normalized_operation == "update":
-            return bool(scope.get("update", False))
-        return bool(scope.get("create", False))
-
-    @classmethod
-    def _scope_applies_to_upload_mode(cls, raw_scope: Any, upload_mode: Any) -> bool:
-        """`scope_applies_to_upload_mode` 적용 범위를 판정한다."""
-        normalized_mode = cls._normalize_upload_mode(upload_mode)
-        scope = cls._normalize_operation_scope(raw_scope, upload_mode=upload_mode)
-        if normalized_mode == "update":
-            return bool(scope.get("update", False))
-        if normalized_mode == "upsert":
-            return bool(scope.get("create", False) or scope.get("update", False))
-        return bool(scope.get("create", False))
 
     @staticmethod
     def _parse_update_item_id(raw_value: Any) -> int:

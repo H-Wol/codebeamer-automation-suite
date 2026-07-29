@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from .settings_store import GUI_UPLOAD_MODE_UPDATE
+from src.upload_policy import UPLOAD_MODE_UPDATE as GUI_UPLOAD_MODE_UPDATE
+from src.upload_policy import normalize_upload_mode as normalize_gui_upload_mode
+from src.upload_policy import upload_mode_action_label as gui_upload_mode_action_label
+
 from .settings_store import GuiSettings
 from .settings_store import GuiWorkflowPreset
-from .settings_store import gui_upload_mode_action_label
-from .settings_store import normalize_gui_upload_mode
 from .window_support import _merge_root_item_page_configs
 from .window_support import _merge_window_preferences
 

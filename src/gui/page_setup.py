@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src.upload_policy import normalize_upload_mode as normalize_gui_upload_mode
+from src.upload_policy import upload_mode_supports_update as gui_upload_mode_supports_update
+
 from .page_common import PREVIEW_TABLE_MIN_HEIGHT
 from .page_common import PRIMARY_TABLE_MIN_HEIGHT
 from .page_common import WIDE_FORM_PANEL_MAX_WIDTH
@@ -24,8 +27,6 @@ from .services import ROOT_ASSIGNMENT_MODE_FILE_SOURCE
 from .services import ROOT_ASSIGNMENT_MODE_FIXED_VALUE
 from .services import ROOT_ITEM_MODE_FILE
 from .services import ROOT_ITEM_MODE_GROUP_BY_COLUMN
-from .settings_store import gui_upload_mode_supports_update
-from .settings_store import normalize_gui_upload_mode
 from .styles import GUI_THEME_CHOICES
 from .styles import normalize_gui_theme_name
 

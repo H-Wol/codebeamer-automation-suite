@@ -9,6 +9,8 @@ import pandas as pd
 
 from .models import PayloadStatus
 from .models import UploadStatus
+from .upload_policy import normalize_upload_mode
+from .upload_policy import upload_mode_supports_update
 
 
 class WizardOperationMixin:
@@ -27,11 +29,11 @@ class WizardOperationMixin:
 
         source_df = self._payload_source_df()
         payload_rows: list[dict[str, Any]] = []
-        upload_mode = self._normalize_upload_mode(self.state.upload_mode)
+        upload_mode = normalize_upload_mode(self.state.upload_mode)
         id_column_name = None
         duplicate_item_ids: set[int] = set()
 
-        if self._upload_mode_supports_update(upload_mode):
+        if upload_mode_supports_update(upload_mode):
             id_column_name = self._update_item_id_column_name(source_df)
             if id_column_name is not None:
                 item_id_counts: dict[int, int] = {}

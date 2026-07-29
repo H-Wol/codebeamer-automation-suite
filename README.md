@@ -118,6 +118,7 @@ GUI `테스트 모드`를 바로 눌러볼 수 있는 샘플 세트는 `data/gui
 - `src/excel_reader.py`: Excel 파일을 raw DataFrame으로 읽는 입력 계층
 - `src/hierarchy_processor.py`: raw DataFrame을 merged/hierarchy/upload DataFrame으로 후처리
 - `src/excel_processor.py`: 기존 import 호환용 통합 래퍼
+- `src/upload_policy.py`: create/update/upsert 모드, 작업 범위, 루트 허용 여부, 공통 검증 상태 정책
 - `src/mapping_service.py`: schema 해석용 façade
   내부 구현은 `src/mapping_reference.py`, `src/mapping_schema.py`, `src/mapping_option.py` 로 분리
 - `src/wizard.py`: 업로드 오케스트레이션 façade
