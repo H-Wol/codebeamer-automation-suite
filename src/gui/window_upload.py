@@ -9,6 +9,7 @@ from .window_support import _format_clock_text
 from .window_support import _format_duration_text
 from .window_support import _format_upload_eta_text
 from .window_support import _format_upload_progress_text
+from .window_support import UploadProgressState
 from .worker import UploadWorker
 
 
@@ -25,22 +26,9 @@ class WindowUploadMixin:
             return
         output_dir = str(Path(self.session_state.settings.output_dir))
         self.upload_page.reset(0)
-        self.upload_success_count = 0
-        self.upload_failed_count = 0
-        self.upload_retry_count = 0
-        self.upload_total_count = 0
-        self.upload_phase_totals = {"insert": 0, "update": 0}
-        self.upload_phase_counts = {
-            "insert_success": 0,
-            "insert_failed": 0,
-            "update_success": 0,
-            "update_failed": 0,
-        }
-        self.upload_current_phase = ""
-        self._upload_progress_current = 0
-        self._upload_progress_total = 0
-        self._upload_event_started_at = {}
-        self._upload_batch_started_at = time.perf_counter()
+        self.upload_progress = UploadProgressState(
+            batch_started_at=time.perf_counter()
+        )
         self.upload_worker = UploadWorker(
             self.pipeline_service,
             settings=self.session_state.settings,
@@ -147,30 +135,31 @@ class WindowUploadMixin:
 
     def _update_upload_counter(self) -> None:
         """`update_upload_counter` 상태를 갱신한다."""
+        progress = self.upload_progress
         self.upload_page.counter_label.setText(
-            f"성공 {self.upload_success_count} / 실패 {self.upload_failed_count} / 재시도 {self.upload_retry_count}"
+            f"성공 {progress.success_count} / 실패 {progress.failed_count} / 재시도 {progress.retry_count}"
         )
-        completed_count = self.upload_success_count + self.upload_failed_count
+        completed_count = progress.success_count + progress.failed_count
         self.upload_page.total_label.setText(
-            f"총 대상 {self.upload_total_count}건 / 완료 {completed_count}건"
+            f"총 대상 {progress.total_count}건 / 완료 {completed_count}건"
         )
         self.upload_page.phase_total_label.setText(
             "단계별 총 대상: "
-            f"생성 {int(self.upload_phase_totals.get('insert', 0))}건 / "
-            f"수정 {int(self.upload_phase_totals.get('update', 0))}건"
+            f"생성 {int(progress.phase_totals.get('insert', 0))}건 / "
+            f"수정 {int(progress.phase_totals.get('update', 0))}건"
         )
         self.upload_page.phase_counter_label.setText(
             "단계별 결과: "
-            f"생성 성공 {int(self.upload_phase_counts.get('insert_success', 0))} / "
-            f"실패 {int(self.upload_phase_counts.get('insert_failed', 0))} | "
-            f"수정 성공 {int(self.upload_phase_counts.get('update_success', 0))} / "
-            f"실패 {int(self.upload_phase_counts.get('update_failed', 0))}"
+            f"생성 성공 {int(progress.phase_counts.get('insert_success', 0))} / "
+            f"실패 {int(progress.phase_counts.get('insert_failed', 0))} | "
+            f"수정 성공 {int(progress.phase_counts.get('update_success', 0))} / "
+            f"실패 {int(progress.phase_counts.get('update_failed', 0))}"
         )
 
     def _update_upload_progress_widgets(self) -> None:
         """`update_upload_progress_widgets` 상태를 갱신한다."""
-        total = max(int(self._upload_progress_total), 0)
-        completed = max(int(self._upload_progress_current), 0)
+        total = max(int(self.upload_progress.total), 0)
+        completed = max(int(self.upload_progress.current), 0)
         clamped_completed = min(completed, total) if total > 0 else 0
         self.upload_page.progress_bar.setMaximum(max(total, 1))
         self.upload_page.progress_bar.setValue(clamped_completed)
@@ -180,11 +169,11 @@ class WindowUploadMixin:
 
     def _update_upload_time_label(self) -> None:
         """`update_upload_time_label` 상태를 갱신한다."""
-        if self._upload_batch_started_at is None:
+        if self.upload_progress.batch_started_at is None:
             self.upload_page.time_label.setText("배치 시간: -")
             self.upload_page.eta_label.setText("예상 종료: -")
             return
-        elapsed = time.perf_counter() - self._upload_batch_started_at
+        elapsed = time.perf_counter() - self.upload_progress.batch_started_at
         self.upload_page.time_label.setText(
             f"배치 시간: {self._format_duration(elapsed)} 경과 (현재 시각 {self._format_clock()})"
         )
@@ -192,8 +181,8 @@ class WindowUploadMixin:
             _format_upload_eta_text(
                 now_timestamp=time.time(),
                 elapsed_seconds=elapsed,
-                completed_count=self._upload_progress_current,
-                total_count=self._upload_progress_total,
+                completed_count=self.upload_progress.current,
+                total_count=self.upload_progress.total,
             )
         )
 
@@ -213,21 +202,27 @@ class WindowUploadMixin:
             return
 
         if event_type == "batch_total":
-            self.upload_total_count = int(event.get("total") or 0)
+            self.upload_progress.total_count = int(event.get("total") or 0)
             phase_totals = event.get("phase_totals") or {}
-            self.upload_phase_totals = {
+            self.upload_progress.phase_totals = {
                 "insert": int(phase_totals.get("insert") or 0),
                 "update": int(phase_totals.get("update") or 0),
             }
-            self._upload_progress_total = self.upload_total_count
+            self.upload_progress.total = self.upload_progress.total_count
             self._update_upload_progress_widgets()
             self._update_upload_counter()
-            self._append_timestamped_log(f"총 업로드 예정 건수: {self.upload_total_count}")
+            self._append_timestamped_log(
+                f"총 업로드 예정 건수: {self.upload_progress.total_count}"
+            )
             return
 
         if event_type == "phase_started":
-            self.upload_current_phase = self._normalize_phase_key(event.get("phase"))
-            phase_name = self._phase_display_name(self.upload_current_phase)
+            self.upload_progress.current_phase = self._normalize_phase_key(
+                event.get("phase")
+            )
+            phase_name = self._phase_display_name(
+                self.upload_progress.current_phase
+            )
             total = int(event.get("total") or 0)
             self.upload_page.phase_label.setText(f"현재 단계: {phase_name} ({total}건)")
             self.upload_page.status_label.setText(f"{phase_name} 단계 실행 중")
@@ -243,13 +238,13 @@ class WindowUploadMixin:
             self._append_timestamped_log(
                 f"{phase_name} 단계 완료 | 성공 {success_count} / 실패 {failed_count} / 미해결 {unresolved_count}"
             )
-            if self.upload_current_phase == phase_key:
+            if self.upload_progress.current_phase == phase_key:
                 self.upload_page.phase_label.setText(f"현재 단계: {phase_name} 완료")
             return
 
         if event_type == "row_started":
             started_at = time.perf_counter()
-            self._upload_event_started_at[row_key] = started_at
+            self.upload_progress.event_started_at[row_key] = started_at
             phase_name = self._phase_display_name(event.get("phase"))
             self.upload_page.record_activity_started(
                 row_key,
@@ -264,25 +259,25 @@ class WindowUploadMixin:
         if event_type not in {"row_success", "row_failed"}:
             return
 
-        started_at = self._upload_event_started_at.get(row_key)
+        started_at = self.upload_progress.event_started_at.get(row_key)
         elapsed = None if started_at is None else (time.perf_counter() - started_at)
         if event_type == "row_success":
-            self.upload_success_count += 1
+            self.upload_progress.success_count += 1
             phase_key = self._normalize_phase_key(event.get("phase"))
             if phase_key == "insert":
-                self.upload_phase_counts["insert_success"] += 1
+                self.upload_progress.phase_counts["insert_success"] += 1
             elif phase_key == "update":
-                self.upload_phase_counts["update_success"] += 1
+                self.upload_progress.phase_counts["update_success"] += 1
             status_text = "성공"
             if not message:
                 message = "업로드 완료"
         else:
-            self.upload_failed_count += 1
+            self.upload_progress.failed_count += 1
             phase_key = self._normalize_phase_key(event.get("phase"))
             if phase_key == "insert":
-                self.upload_phase_counts["insert_failed"] += 1
+                self.upload_progress.phase_counts["insert_failed"] += 1
             elif phase_key == "update":
-                self.upload_phase_counts["update_failed"] += 1
+                self.upload_progress.phase_counts["update_failed"] += 1
             status_text = "실패"
             if not message:
                 message = "업로드 실패"
@@ -309,10 +304,10 @@ class WindowUploadMixin:
 
     def _on_upload_progress(self, current: int, total: int, upload_name: str) -> None:
         """`on_upload_progress` 이벤트를 처리한다."""
-        self._upload_progress_current = max(int(current), 0)
-        self._upload_progress_total = max(int(total), 0)
+        self.upload_progress.current = max(int(current), 0)
+        self.upload_progress.total = max(int(total), 0)
         self._update_upload_progress_widgets()
-        phase_name = self._phase_display_name(self.upload_current_phase)
+        phase_name = self._phase_display_name(self.upload_progress.current_phase)
         if phase_name != "-":
             self.upload_page.current_label.setText(f"현재 항목: [{phase_name}] {upload_name or '-'}")
         else:
@@ -326,14 +321,18 @@ class WindowUploadMixin:
         success_df = result.get("success_df")
         failed_df = result.get("failed_df")
         unresolved_df = result.get("unresolved_df")
-        self.upload_success_count = 0 if success_df is None else len(success_df)
-        self.upload_failed_count = 0 if failed_df is None else len(failed_df)
+        self.upload_progress.success_count = (
+            0 if success_df is None else len(success_df)
+        )
+        self.upload_progress.failed_count = (
+            0 if failed_df is None else len(failed_df)
+        )
         phase_results = result.get("phase_results") or {}
-        self.upload_phase_totals = {
-            "insert": int((phase_results.get("insert") or {}).get("total", self.upload_phase_totals.get("insert", 0)) or 0),
-            "update": int((phase_results.get("update") or {}).get("total", self.upload_phase_totals.get("update", 0)) or 0),
+        self.upload_progress.phase_totals = {
+            "insert": int((phase_results.get("insert") or {}).get("total", self.upload_progress.phase_totals.get("insert", 0)) or 0),
+            "update": int((phase_results.get("update") or {}).get("total", self.upload_progress.phase_totals.get("update", 0)) or 0),
         }
-        self.upload_phase_counts = {
+        self.upload_progress.phase_counts = {
             "insert_success": int((phase_results.get("insert") or {}).get("success", self._count_phase_rows(success_df, "insert")) or 0),
             "insert_failed": int(
                 ((phase_results.get("insert") or {}).get("failed", 0) or 0)
@@ -345,7 +344,9 @@ class WindowUploadMixin:
                 + self._count_phase_rows(unresolved_df, "update")
             ),
         }
-        self._upload_progress_current = self.upload_success_count + self.upload_failed_count
+        self.upload_progress.current = (
+            self.upload_progress.success_count + self.upload_progress.failed_count
+        )
         self._update_upload_progress_widgets()
         self._update_upload_counter()
         if failed_df is not None and not getattr(failed_df, "empty", True) and "error_response_json" in failed_df.columns:
@@ -363,10 +364,10 @@ class WindowUploadMixin:
         self.upload_page.cancel_button.setEnabled(False)
         self.upload_page.result_button.setEnabled(True)
         unresolved_count = 0 if unresolved_df is None else len(unresolved_df)
-        if self.upload_failed_count or unresolved_count:
+        if self.upload_progress.failed_count or unresolved_count:
             self._show_error_dialog(
                 "업로드 결과 확인 필요",
-                f"배치 업로드는 종료되었지만 실패 {self.upload_failed_count}건, 미해결 {unresolved_count}건이 남아 있습니다.",
+                f"배치 업로드는 종료되었지만 실패 {self.upload_progress.failed_count}건, 미해결 {unresolved_count}건이 남아 있습니다.",
             )
 
     def _on_upload_failed(self, message: str) -> None:

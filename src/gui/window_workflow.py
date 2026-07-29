@@ -9,6 +9,7 @@ from src.upload_policy import upload_mode_action_label as gui_upload_mode_action
 from .settings_store import GuiSettings
 from .settings_store import GuiWorkflowPreset
 from .window_support import _merge_root_item_page_configs
+from .window_support import UploadProgressState
 from .window_support import _merge_window_preferences
 
 
@@ -331,14 +332,7 @@ class WindowWorkflowMixin:
         """`restart_upload_flow` 관련 처리를 수행한다."""
         self.session_state.validation_context = None
         self.session_state.upload_result = None
-        self.upload_success_count = 0
-        self.upload_failed_count = 0
-        self.upload_retry_count = 0
-        self.upload_total_count = 0
-        self._upload_progress_current = 0
-        self._upload_progress_total = 0
-        self._upload_event_started_at = {}
-        self._upload_batch_started_at = None
+        self.upload_progress = UploadProgressState()
         self._show_page(self.project_page)
 
     def _on_prepare_root_item_context(self) -> None:

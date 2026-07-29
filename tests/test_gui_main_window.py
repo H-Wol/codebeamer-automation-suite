@@ -17,9 +17,19 @@ from src.gui.main_window import _window_size_from_settings
 from src.gui.main_window import MainWindow
 from src.gui.settings_store import GuiSettings
 from src.gui.settings_store import GuiSettingsStore
+from src.gui.window_support import GuiSessionState
+from src.gui.window_support import UploadProgressState
 
 
 class GuiMainWindowProgressTest(unittest.TestCase):
+    def test_upload_progress_state_uses_independent_mutable_defaults(self) -> None:
+        first = UploadProgressState()
+        second = UploadProgressState()
+
+        first.phase_counts["insert_success"] = 1
+
+        self.assertEqual(second.phase_counts["insert_success"], 0)
+
     def test_estimate_upload_remaining_seconds_returns_none_without_completed_rows(self) -> None:
         self.assertIsNone(_estimate_upload_remaining_seconds(12.0, 0, 10))
 
@@ -139,6 +149,9 @@ class GuiMainWindowSmokeTest(unittest.TestCase):
             window.show()
             self._app.processEvents()
 
+            self.assertIs(type(window), MainWindow)
+            self.assertIsInstance(window.session_state, GuiSessionState)
+            self.assertIsInstance(window.upload_progress, UploadProgressState)
             self.assertTrue(window.isVisible())
             self.assertIs(window.stack.currentWidget(), window.page_scroll_areas[window.settings_page])
 

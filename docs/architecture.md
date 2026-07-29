@@ -186,7 +186,7 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - 매핑 화면: `src/gui/page_execution_mapping.py`
 - 검증·업로드·결과 화면: `src/gui/page_execution_run.py`
 - 페이지 호환 façade: `src/gui/page_setup.py`, `src/gui/page_execution.py`
-- 메인 윈도우 셸/워크플로/업로드 분리: `src/gui/window_support.py`, `src/gui/window_shell.py`, `src/gui/window_workflow.py`, `src/gui/window_upload.py`
+- 메인 윈도우 셸/워크플로/업로드 분리: `src/gui/main_window.py`, `src/gui/window_support.py`, `src/gui/window_shell.py`, `src/gui/window_workflow.py`, `src/gui/window_upload.py`
 - GUI 서비스 분리: `src/gui/service_core.py`, `src/gui/upload_service.py`
 - 업로드 context 모델: `src/gui/upload_context.py`
 - TRACKER configuration 해석: `src/gui/tracker_config.py`
@@ -199,6 +199,11 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 페이지는 기존 공개 메서드를 계속 호출하며, 루트 항목의 정규식 해석과 그룹 할당 규칙은
 `RootItemService` 안에서 독립적으로 검증됩니다. 다중 파일 검증과 업로드는 각각
 `BatchValidationService`, `BatchUploadService`가 담당합니다.
+
+`MainWindow` 는 런타임에 내부 클래스를 조립하지 않고 `QMainWindow`를 직접 상속합니다.
+세션의 mapping/validation context는 실제 dataclass 타입으로 선언하며, 업로드 건수·단계·
+시간 측정값은 `UploadProgressState` 하나에서 관리합니다. Window mixin 사이의 호출은
+현재 클래스 구성만으로 명확하므로 별도 `Protocol`은 추가하지 않습니다.
 
 ### API 접근
 

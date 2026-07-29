@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import field
 from dataclasses import replace
 from datetime import datetime
 import time
+from typing import Any
 
 from .settings_store import GuiSettings
 from .settings_store import GuiWorkflowPreset
+from .upload_context import MappingContext
+from .upload_context import ValidationContext
 
 
 def _require_qt():
@@ -60,9 +64,33 @@ class GuiSessionState:
     projects: list[dict[str, object]]
     trackers: list[dict[str, object]]
     workflow_preset: GuiWorkflowPreset | None
-    mapping_context: object | None
-    validation_context: object | None
-    upload_result: dict[str, object] | None
+    mapping_context: MappingContext | None
+    validation_context: ValidationContext | None
+    upload_result: dict[str, Any] | None
+
+
+@dataclass
+class UploadProgressState:
+    success_count: int = 0
+    failed_count: int = 0
+    retry_count: int = 0
+    total_count: int = 0
+    phase_totals: dict[str, int] = field(
+        default_factory=lambda: {"insert": 0, "update": 0}
+    )
+    phase_counts: dict[str, int] = field(
+        default_factory=lambda: {
+            "insert_success": 0,
+            "insert_failed": 0,
+            "update_success": 0,
+            "update_failed": 0,
+        }
+    )
+    current_phase: str = ""
+    current: int = 0
+    total: int = 0
+    event_started_at: dict[str, float] = field(default_factory=dict)
+    batch_started_at: float | None = None
 
 
 def _format_duration_text(seconds: float | None) -> str:
