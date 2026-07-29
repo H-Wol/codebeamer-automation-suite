@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from .mapping_support import *  # noqa: F403
+import re
+from typing import Any
+
+import pandas as pd
+
+from .models import ReferenceType
+from .models import TrackerItemField
+from .models import TrackerSchemaName
 
 
 class MappingReferenceMixin:

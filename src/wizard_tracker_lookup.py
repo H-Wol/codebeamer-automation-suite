@@ -1,6 +1,19 @@
 from __future__ import annotations
 
-from .wizard_support import *  # noqa: F403
+from difflib import SequenceMatcher
+from typing import Any
+
+import pandas as pd
+
+from .models import OptionCheckStatus
+from .models import OptionMapKind
+from .models import ReferenceType
+from .models import TrackerItemQueryMatchStrategy
+from .models import TrackerItemResolutionMode
+
+
+TrackerItemLookupCacheEntry = tuple[Any, str | None, str | None]
+DEFAULT_TRACKER_ITEM_ID_REGEX = r"\[(?:[^:\]]+:)?(\d+)[^\]]*\]|^(\d+)(?:\.0)?$"
 
 
 class WizardTrackerItemLookupMixin:

@@ -360,6 +360,3 @@ def _configure_data_table(widget, *, minimum_height: int) -> None:
         QSizePolicy.Policy.Expanding,
         QSizePolicy.Policy.Expanding,
     )
-
-
-__all__ = [name for name in globals() if not name.startswith("__")]

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .wizard_support import *  # noqa: F403
+import pandas as pd
 
 
 class WizardDataPreparationMixin:

@@ -352,6 +352,3 @@ class GuiExcelService:
             raw_df=raw_df,
             raw_df_by_file=raw_df_by_file,
         )
-
-
-__all__ = [name for name in globals() if not name.startswith("__")]

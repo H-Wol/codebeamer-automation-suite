@@ -1,6 +1,20 @@
 from __future__ import annotations
 
-from .wizard_support import *  # noqa: F403
+from typing import Any
+
+import pandas as pd
+
+from .models import GroupReference
+from .models import OptionMapKind
+from .models import ReferenceType
+from .models import RoleReference
+from .models import UserGroupReference
+from .models import UserInfo
+from .models import UserLookupStatus
+
+
+UserLookupCacheEntry = tuple[dict[str, Any] | None, dict[str, Any] | None, str, str | None]
+MemberLookupCacheEntry = tuple[dict[str, Any] | None, dict[str, Any] | None, str, str | None]
 
 
 class WizardUserLookupMixin:
