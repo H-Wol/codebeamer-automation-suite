@@ -177,6 +177,11 @@
 - 업로드 context 모델: `src/gui/upload_context.py`
 - TRACKER configuration 해석: `src/gui/tracker_config.py`
 - 검증 이슈와 사용자 메시지 변환: `src/gui/validation_presenter.py`
+- 파일·그룹 루트 항목 설정, 미리보기와 업로드 명세: `src/gui/root_item_service.py`
+
+`src/gui/upload_service.py` 는 위 구성 요소를 조합하는 façade 역할을 유지합니다.
+페이지는 기존 공개 메서드를 계속 호출하며, 루트 항목의 정규식 해석과 그룹 할당 규칙은
+`RootItemService` 안에서 독립적으로 검증됩니다.
 
 ### API 접근
 
