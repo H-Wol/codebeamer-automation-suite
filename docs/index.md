@@ -14,7 +14,8 @@
 8. [트러블슈팅](./troubleshooting.md)
 9. [호환 경로 감사](./compatibility.md)
 10. [샘플 데이터 및 자격증명 감사](./security-audit.md)
-11. [v2 변경 사항](./v2-changes.md)
+11. [GUI 리팩토링 진행 및 검증 기록](./refactoring-progress.md)
+12. [v2 변경 사항](./v2-changes.md)
 
 ## 문서별 역할
 
@@ -47,6 +48,9 @@
 
 - [샘플 데이터 및 자격증명 감사](./security-audit.md)
   offline sample과 fixture의 익명화, 자격증명 파일 추적 여부, 자동 회귀 검사를 기록합니다.
+
+- [GUI 리팩토링 진행 및 검증 기록](./refactoring-progress.md)
+  책임 분리 결과, 자동 테스트, 일반·최대화 창과 테마를 포함한 수동 GUI 검증 근거를 기록합니다.
 
 - [v2 변경 사항](./v2-changes.md)
   예전 `v2` 도입 배경과 이후 원본 경로에 반영된 주요 개선 이력을 기록합니다.
