@@ -176,7 +176,12 @@ GUI, CLI, 실행 오케스트레이션의 호출 계약을 보존합니다.
 - `src/gui/worker.py`
 
 현재 내부 구조:
-- 페이지 공통/설정/실행 분리: `src/gui/page_common.py`, `src/gui/page_setup.py`, `src/gui/page_execution.py`
+- 페이지 공통 요소: `src/gui/page_common.py`
+- 설정·프로젝트 화면: `src/gui/page_setup_settings.py`
+- 파일·루트 항목 화면: `src/gui/page_setup_file.py`
+- 매핑 화면: `src/gui/page_execution_mapping.py`
+- 검증·업로드·결과 화면: `src/gui/page_execution_run.py`
+- 페이지 호환 façade: `src/gui/page_setup.py`, `src/gui/page_execution.py`
 - 메인 윈도우 셸/워크플로/업로드 분리: `src/gui/window_support.py`, `src/gui/window_shell.py`, `src/gui/window_workflow.py`, `src/gui/window_upload.py`
 - GUI 서비스 분리: `src/gui/service_core.py`, `src/gui/upload_service.py`
 - 업로드 context 모델: `src/gui/upload_context.py`

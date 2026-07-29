@@ -33,6 +33,15 @@ class ImportBoundaryTest(unittest.TestCase):
             [],
         )
 
+    def test_gui_page_facades_preserve_public_factories(self) -> None:
+        from src.gui.page_execution import create_mapping_page
+        from src.gui.page_execution_mapping import create_mapping_page as mapping_factory
+        from src.gui.page_setup import create_settings_page
+        from src.gui.page_setup_settings import create_settings_page as settings_factory
+
+        self.assertIs(create_mapping_page, mapping_factory)
+        self.assertIs(create_settings_page, settings_factory)
+
 
 if __name__ == "__main__":
     unittest.main()
