@@ -144,7 +144,12 @@
 - 사용자/멤버 lookup: `src/wizard_user_lookup.py`
 - tracker item lookup: `src/wizard_tracker_lookup.py`
 - payload 구성: `src/wizard_payload.py`
+- update/upsert 대상 판정과 기존 item 병합: `src/wizard_update_payload.py`
 - 실행 오케스트레이션: `src/wizard_operations.py`
+
+`CodebeamerUploadWizard` 는 `WizardUpdatePayloadService` 를 조합하고 기존 payload 메서드를
+façade로 유지합니다. 이 구조는 update 전용 규칙을 create payload 구성과 분리하면서도
+GUI, CLI, 실행 오케스트레이션의 호출 계약을 보존합니다.
 
 ### GUI 계층
 

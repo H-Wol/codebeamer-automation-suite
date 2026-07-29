@@ -9,6 +9,7 @@ from .wizard_data import WizardDataPreparationMixin
 from .wizard_operations import WizardOperationMixin
 from .wizard_payload import WizardPayloadMixin
 from .wizard_tracker_lookup import WizardTrackerItemLookupMixin
+from .wizard_update_payload import WizardUpdatePayloadService
 from .wizard_user_lookup import WizardUserLookupMixin
 
 
@@ -36,6 +37,13 @@ class CodebeamerUploadWizard(
         self.mapper = mapper
         self.logger = logger
         self.state = WizardState()
+        self.update_payloads = WizardUpdatePayloadService(
+            state=self.state,
+            client=self.client,
+            build_row_item=self._build_row_item,
+            serialize_payload_value=self._serialize_payload_value,
+            raise_payload_error=self._raise_payload_error,
+        )
 
 
 __all__ = ["CodebeamerUploadWizard"]
