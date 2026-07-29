@@ -176,6 +176,7 @@
 - GUI 서비스 분리: `src/gui/service_core.py`, `src/gui/upload_service.py`
 - 업로드 context 모델: `src/gui/upload_context.py`
 - TRACKER configuration 해석: `src/gui/tracker_config.py`
+- 검증 이슈와 사용자 메시지 변환: `src/gui/validation_presenter.py`
 
 ### API 접근
 
