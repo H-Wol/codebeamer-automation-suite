@@ -12,7 +12,8 @@
 6. [필드 지원 추가 가이드](./field-support-guide.md)
 7. [GUI 사용 가이드](./gui-plan.md)
 8. [트러블슈팅](./troubleshooting.md)
-9. [v2 변경 사항](./v2-changes.md)
+9. [호환 경로 감사](./compatibility.md)
+10. [v2 변경 사항](./v2-changes.md)
 
 ## 문서별 역할
 
@@ -40,6 +41,9 @@
 - [트러블슈팅](./troubleshooting.md)
   자주 발생하는 에러와 대응 방법을 정리합니다.
 
+- [호환 경로 감사](./compatibility.md)
+  과거 entry point와 Excel wrapper의 사용 여부, 유지 근거, 제거 조건을 기록합니다.
+
 - [v2 변경 사항](./v2-changes.md)
   예전 `v2` 도입 배경과 이후 원본 경로에 반영된 주요 개선 이력을 기록합니다.
 
@@ -56,7 +60,7 @@
 - `src/mapping_service.py`
   facade이며 실제 schema/reference/option 로직은 `src/mapping_reference.py`, `src/mapping_schema.py`, `src/mapping_option.py` 로 분리되어 있습니다.
 - `src/wizard.py`
-  facade이며 실제 데이터 준비, lookup, payload, 실행 로직은 `src/wizard_data.py`, `src/wizard_user_lookup.py`, `src/wizard_tracker_lookup.py`, `src/wizard_payload.py`, `src/wizard_operations.py` 로 분리되어 있습니다.
+  facade이며 실제 데이터 준비, lookup, option 해석, create/update payload, payload cache, 실행 로직은 책임별 모듈로 분리되어 있습니다.
 - `src/models/`
 - `src/gui/`
   메인 진입점은 `src/gui/main_window.py`, `src/gui/pages.py`, `src/gui/services.py` 이고, 내부 책임은 page/window/service 하위 모듈로 분리되어 있습니다.
