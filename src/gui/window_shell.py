@@ -17,7 +17,6 @@ from .worker import BackgroundTask
 
 class WindowShellMixin:
     def _build_shell(self) -> None:
-        """`build_shell` 결과를 구성한다."""
         QWidget = self.qt["QWidget"]
         QVBoxLayout = self.qt["QVBoxLayout"]
         QHBoxLayout = self.qt["QHBoxLayout"]
@@ -126,7 +125,6 @@ class WindowShellMixin:
         self._update_busy_overlay_geometry()
 
     def _create_page_scroll_area(self, page):
-        """`create_page_scroll_area` 관련 처리를 수행한다."""
         QFrame = self.qt["QFrame"]
         QScrollArea = self.qt["QScrollArea"]
         Qt = self.qt["Qt"]
@@ -143,7 +141,6 @@ class WindowShellMixin:
         return scroll_area
 
     def _content_height_for_page(self, page) -> int:
-        """`content_height_for_page` 관련 처리를 수행한다."""
         if page is None:
             return self.height()
 
@@ -177,7 +174,6 @@ class WindowShellMixin:
         )
 
     def _window_height_cap(self) -> int:
-        """`window_height_cap` 관련 처리를 수행한다."""
         screen = self.screen()
         available_height = 1080
         if screen is not None:
@@ -185,7 +181,6 @@ class WindowShellMixin:
         return max(self.minimumHeight(), int(available_height * 0.88))
 
     def _fit_window_to_current_page(self, *, allow_grow: bool) -> None:
-        """`fit_window_to_current_page` 관련 처리를 수행한다."""
         page = self._current_page if hasattr(self, "_current_page") else None
         if page is None:
             return
@@ -204,7 +199,6 @@ class WindowShellMixin:
         self.updateGeometry()
 
     def _update_busy_overlay_geometry(self) -> None:
-        """`update_busy_overlay_geometry` 상태를 갱신한다."""
         if hasattr(self, "busy_overlay") and hasattr(self, "root_widget"):
             self.busy_overlay.setGeometry(self.root_widget.rect())
             self.busy_overlay.raise_()
@@ -268,19 +262,16 @@ class WindowShellMixin:
         QApplication.processEvents()
 
     def _run_with_busy(self, message: str, func, *args, **kwargs):
-        """`run_with_busy` 관련 처리를 수행한다."""
         QEventLoop = self.qt["QEventLoop"]
         loop = QEventLoop(self)
         task = BackgroundTask(func, *args, **kwargs)
         result_box: dict[str, object] = {}
 
         def _on_completed(result: object) -> None:
-            """`on_completed` 이벤트를 처리한다."""
             result_box["result"] = result
             loop.quit()
 
         def _on_failed(error: object) -> None:
-            """`on_failed` 이벤트를 처리한다."""
             result_box["error"] = error
             loop.quit()
 
@@ -307,7 +298,6 @@ class WindowShellMixin:
         return result_box.get("result")
 
     def _build_pages(self) -> None:
-        """`build_pages` 결과를 구성한다."""
         self.settings_page = create_settings_page(
             self.settings_store,
             self.session_state.settings,
@@ -440,7 +430,6 @@ class WindowShellMixin:
             self.statusBar().showMessage("GUI 스켈레톤이 준비되었습니다.")
 
     def _show_page(self, page) -> None:
-        """`show_page` 관련 처리를 수행한다."""
         self._current_page = page
         page_scroll_area = self.page_scroll_areas.get(page, page)
         self.stack.setCurrentWidget(page_scroll_area)
@@ -486,7 +475,6 @@ class WindowShellMixin:
                 self._show_error_dialog("작업 실패", str(exc))
 
         def _restart():
-            """`restart` 관련 처리를 수행한다."""
             try:
                 if restart_handler is not None:
                     restart_handler()
@@ -509,7 +497,6 @@ class WindowShellMixin:
 
     @staticmethod
     def _dialog_message_parts(message: str, fallback: str) -> tuple[str, str]:
-        """`dialog_message_parts` 관련 처리를 수행한다."""
         text = str(message or "").strip()
         if not text:
             return fallback, ""
@@ -528,7 +515,6 @@ class WindowShellMixin:
         return summary, text
 
     def _show_message_dialog(self, title: str, message: str, *, tone: str) -> None:
-        """`show_message_dialog` 관련 처리를 수행한다."""
         QDialog = self.qt["QDialog"]
         QFrame = self.qt["QFrame"]
         QHBoxLayout = self.qt["QHBoxLayout"]
@@ -612,9 +598,7 @@ class WindowShellMixin:
         dialog.exec()
 
     def _show_error_dialog(self, title: str, message: str) -> None:
-        """`show_error_dialog` 관련 처리를 수행한다."""
         self._show_message_dialog(title, message, tone="error")
 
     def _show_info_dialog(self, title: str, message: str) -> None:
-        """`show_info_dialog` 관련 처리를 수행한다."""
         self._show_message_dialog(title, message, tone="info")

@@ -147,7 +147,6 @@ class BatchValidationService:
 
     @staticmethod
     def _normalize_file_paths(file_state: dict[str, Any]) -> list[str]:
-        """`normalize_file_paths` 값을 정규화한다."""
         raw_paths = file_state.get("file_paths")
         normalized: list[str] = []
 
@@ -165,7 +164,6 @@ class BatchValidationService:
 
     @classmethod
     def _representative_file_path(cls, file_state: dict[str, Any]) -> str:
-        """`representative_file_path` 관련 처리를 수행한다."""
         file_paths = cls._normalize_file_paths(file_state)
         if not file_paths:
             return ""
@@ -184,7 +182,6 @@ class BatchValidationService:
         header_row: int,
         summary_column: str,
     ) -> PreviewData | None:
-        """`cached_preview_data` 관련 처리를 수행한다."""
         preview_data = file_state.get("preview_data")
         if not isinstance(preview_data, PreviewData):
             return None
@@ -224,12 +221,10 @@ class BatchValidationService:
         preview_data: PreviewData | None,
         file_path: str,
     ) -> pd.DataFrame | None:
-        """`cached_raw_df_for_file` 관련 처리를 수행한다."""
         return cls._preview_raw_df_map(preview_data).get(str(file_path).strip())
 
     @staticmethod
     def _visible_headers_from_raw_df(raw_df: pd.DataFrame) -> list[str]:
-        """`visible_headers_from_raw_df` 관련 처리를 수행한다."""
         return [
             str(column)
             for column in raw_df.columns
@@ -244,7 +239,6 @@ class BatchValidationService:
         header_row: int,
         summary_col: str,
     ) -> list[str]:
-        """`visible_headers_for_file` 관련 처리를 수행한다."""
         reader = self.reader_cls(
             header_row=header_row,
             summary_col=summary_col,
@@ -294,7 +288,6 @@ class BatchValidationService:
         list_cols: list[str],
         preview_data: PreviewData | None = None,
     ) -> int:
-        """`count_upload_rows_for_file` 건수를 계산한다."""
         cached_raw_df = self._cached_raw_df_for_file(preview_data, file_path)
         if cached_raw_df is not None:
             processor = HierarchyProcessor(
@@ -331,7 +324,6 @@ class BatchValidationService:
         *,
         list_cols: list[str],
     ) -> int:
-        """`count_batch_upload_rows` 건수를 계산한다."""
         total_rows = 0
         for file_path in mapping_context.file_paths:
             cached_raw_df = self._cached_raw_df_for_file(mapping_context.preview_data, file_path)
@@ -359,7 +351,6 @@ class BatchValidationService:
         return total_rows
 
     def _create_validation_wizard(self, mapping_context: MappingContext) -> CodebeamerUploadWizard:
-        """`create_validation_wizard` 관련 처리를 수행한다."""
         base_wizard = mapping_context.wizard
         reader = self.reader_cls(
             header_row=mapping_context.header_row,
@@ -397,7 +388,6 @@ class BatchValidationService:
         file_label: str,
         file_path: str,
     ) -> pd.DataFrame:
-        """`annotate_source_frame` 관련 처리를 수행한다."""
         if df is None or getattr(df, "empty", True):
             return pd.DataFrame()
 
@@ -430,7 +420,6 @@ class BatchValidationService:
         mapping_context: MappingContext,
         file_path: str,
     ) -> pd.DataFrame:
-        """`raw_df_for_file` 관련 처리를 수행한다."""
         cached_raw_df = self._cached_raw_df_for_file(mapping_context.preview_data, file_path)
         if cached_raw_df is not None:
             return cached_raw_df.copy()
@@ -452,7 +441,6 @@ class BatchValidationService:
         file_path: str,
         list_cols: list[str],
     ) -> pd.DataFrame:
-        """`upload_df_for_file` 관련 처리를 수행한다."""
         raw_df = self._raw_df_for_file(mapping_context, file_path)
         processor = HierarchyProcessor(
             header_row=mapping_context.header_row,
@@ -470,7 +458,6 @@ class BatchValidationService:
         *,
         file_upload_dfs: dict[str, pd.DataFrame],
     ) -> tuple[set[int], pd.DataFrame]:
-        """`build_batch_update_duplicate_issue_df` 결과를 구성한다."""
         issue_columns = [
             "severity",
             "category",
@@ -560,7 +547,6 @@ class BatchValidationService:
         *,
         payload_df: pd.DataFrame,
     ) -> pd.DataFrame:
-        """`build_upsert_root_item_issue_df` 결과를 구성한다."""
         del mapping_context, payload_df
         return pd.DataFrame(columns=[
             "severity",

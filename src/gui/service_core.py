@@ -49,7 +49,6 @@ class PreviewData:
 
 
 def gui_display_text(value: Any) -> str:
-    """`gui_display_text` 관련 처리를 수행한다."""
     if value is None:
         return ""
     if isinstance(value, float) and pd.isna(value):
@@ -71,7 +70,6 @@ DEFAULT_OFFLINE_TRACKER_NAME = "Offline Tracker"
 
 
 def _normalize_offline_id(value: Any, default_value: int) -> int:
-    """`normalize_offline_id` 값을 정규화한다."""
     try:
         normalized = int(value)
     except Exception:
@@ -80,7 +78,6 @@ def _normalize_offline_id(value: Any, default_value: int) -> int:
 
 
 def _load_json_snapshot(path_value: Any, *, label: str) -> Any:
-    """`load_json_snapshot` 관련 처리를 수행한다."""
     path_text = str(path_value or "").strip()
     if not path_text:
         raise ValueError(f"{label} 경로가 비어 있습니다.")
@@ -122,7 +119,6 @@ class OfflineGuiClient:
 
     @classmethod
     def from_settings(cls, settings) -> "OfflineGuiClient":
-        """`from_settings` 관련 처리를 수행한다."""
         schema_path = str(getattr(settings, "offline_schema_path", "") or "").strip()
         schema = _load_json_snapshot(schema_path, label="테스트 schema")
         tracker_configuration = None
@@ -170,12 +166,10 @@ class OfflineGuiClient:
         return self.tracker_configuration
 
     def create_item(self, tracker_id: int, payload: dict[str, Any], parent_item_id: int | None = None) -> dict[str, Any]:
-        """`create_item` 화면을 구성한다."""
         del tracker_id, payload, parent_item_id
         raise RuntimeError("테스트 모드에서는 실제 업로드를 실행할 수 없습니다. Dry Run만 사용해야 합니다.")
 
     def update_item(self, item_id: int, payload: dict[str, Any]) -> dict[str, Any]:
-        """`update_item` 상태를 갱신한다."""
         del item_id, payload
         raise RuntimeError("테스트 모드에서는 업데이트를 실행할 수 없습니다. Dry Run만 사용해야 합니다.")
 
@@ -202,13 +196,11 @@ class OfflineGuiClient:
         )
 
     def search_tracker_items_by_name(self, *, tracker_id: int, name: str, **kwargs):
-        """`search_tracker_items_by_name` 관련 처리를 수행한다."""
         del tracker_id, name, kwargs
         raise RuntimeError("offline snapshot does not provide tracker item lookup")
 
 
 def _build_gui_client(settings, client_factory, logger=None):
-    """`build_gui_client` 결과를 구성한다."""
     if bool(getattr(settings, "offline_mode", False)):
         return OfflineGuiClient.from_settings(settings)
     return client_factory(
@@ -230,12 +222,10 @@ class GuiCodebeamerService:
         self.logger = logger
 
     def _build_client(self, settings):
-        """`build_client` 결과를 구성한다."""
         return _build_gui_client(settings, self.client_factory, self.logger)
 
     @staticmethod
     def _normalize_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """`normalize_items` 값을 정규화한다."""
         normalized: list[dict[str, Any]] = []
         for item in items:
             if not isinstance(item, dict):
@@ -247,7 +237,6 @@ class GuiCodebeamerService:
         return normalized
 
     def test_connection_and_load_projects(self, settings) -> list[dict[str, Any]]:
-        """`test_connection_and_load_projects` 관련 처리를 수행한다."""
         projects = self._build_client(settings).get_projects()
         return self._normalize_items(projects)
 
@@ -267,7 +256,6 @@ class GuiExcelService:
 
     @staticmethod
     def _normalize_headers(values: list[Any]) -> list[str]:
-        """`normalize_headers` 값을 정규화한다."""
         headers: list[str] = []
         for index, value in enumerate(values):
             if value is None:
@@ -278,7 +266,6 @@ class GuiExcelService:
 
     @staticmethod
     def _suggest_summary(headers: list[str]) -> str:
-        """`suggest_summary` 관련 처리를 수행한다."""
         for header in headers:
             if header.lower() == "summary":
                 return header

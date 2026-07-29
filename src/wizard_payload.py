@@ -338,7 +338,6 @@ class WizardPayloadMixin:
 
     @staticmethod
     def _normalize_root_item_name(root_item_name: str | None) -> str | None:
-        """`normalize_root_item_name` 값을 정규화한다."""
         if root_item_name is None:
             return None
         normalized = str(root_item_name).strip()
@@ -370,7 +369,6 @@ class WizardPayloadMixin:
 
     @staticmethod
     def _unresolved_parent_error(parent_row_id: Any, *, root_item_name: str | None = None) -> str:
-        """`unresolved_parent_error` 관련 처리를 수행한다."""
         if parent_row_id is None or pd.isna(parent_row_id):
             if root_item_name:
                 return f"Top-level parent {root_item_name!r} is unavailable."
@@ -382,7 +380,6 @@ class WizardPayloadMixin:
         cls,
         top_level_parent_specs: list[dict[str, Any]] | None,
     ) -> tuple[list[dict[str, Any]], dict[int, str]]:
-        """`normalize_top_level_parent_specs` 값을 정규화한다."""
         normalized_specs: list[dict[str, Any]] = []
         parent_name_by_row_id: dict[int, str] = {}
         for raw_spec in top_level_parent_specs or []:

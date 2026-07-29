@@ -37,7 +37,6 @@ def create_settings_page(
     on_settings_changed,
     on_theme_changed=None,
 ):
-    """`create_settings_page` 화면을 구성한다."""
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -229,7 +228,6 @@ def create_settings_page(
     layout.addStretch(1)
 
     def _update_next_button_state() -> None:
-        """`update_next_button_state` 상태를 갱신한다."""
         blocks_offline_mode = gui_upload_mode_supports_update(upload_mode_combo.currentData())
         if mode_toggle.isChecked():
             next_button.setEnabled(
@@ -324,7 +322,6 @@ def create_settings_page(
         _sync_offline_mode_state()
 
     def _select_theme(theme_name: str) -> None:
-        """`select_theme` 관련 처리를 수행한다."""
         normalized_theme = normalize_gui_theme_name(theme_name)
         index = theme_combo.findData(normalized_theme)
         if index < 0:
@@ -332,7 +329,6 @@ def create_settings_page(
         theme_combo.setCurrentIndex(index)
 
     def _select_upload_mode(upload_mode: str) -> None:
-        """`select_upload_mode` 관련 처리를 수행한다."""
         normalized_mode = normalize_gui_upload_mode(upload_mode)
         index = upload_mode_combo.findData(normalized_mode)
         if index < 0:
@@ -357,14 +353,12 @@ def create_settings_page(
             target_widget.setText(str(selected))
 
     def _load():
-        """`load` 관련 처리를 수행한다."""
         loaded = settings_store.load()
         _apply_settings(loaded)
         on_settings_changed(loaded)
         _set_status("설정을 불러왔습니다.")
 
     def _save():
-        """`save` 관련 처리를 수행한다."""
         current = _collect_settings()
         page._current_settings = current
         settings_store.save(current)
@@ -438,7 +432,6 @@ def create_project_selection_page(
     on_project_selected,
     on_error=None,
 ):
-    """`create_project_selection_page` 화면을 구성한다."""
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -494,7 +487,6 @@ def create_project_selection_page(
     layout.addStretch(1)
 
     def _update_next_button_state() -> None:
-        """`update_next_button_state` 상태를 갱신한다."""
         next_button.setEnabled(bool(page.selected_project_id and page.selected_tracker_id))
 
     def _clear_combo_items() -> None:
@@ -523,7 +515,6 @@ def create_project_selection_page(
         combo.blockSignals(False)
 
     def _current_settings():
-        """`current_settings` 관련 처리를 수행한다."""
         settings = on_settings_changed(None)
         return settings
 
@@ -580,7 +571,6 @@ def create_project_selection_page(
         _refresh_projects()
 
     def _handle_project_changed(index: int) -> None:
-        """`handle_project_changed` 관련 처리를 수행한다."""
         project_id = project_combo.itemData(index)
         if project_id in (None, ""):
             tracker_combo.clear()
@@ -615,7 +605,6 @@ def create_project_selection_page(
             status_label.setText(f"프로젝트 {project_combo.currentText()}의 트래커를 불러왔습니다.")
 
     def _handle_tracker_changed(index: int) -> None:
-        """`handle_tracker_changed` 관련 처리를 수행한다."""
         tracker_id = tracker_combo.itemData(index)
         if tracker_id not in (None, ""):
             page.selected_tracker_id = str(tracker_id)
@@ -641,7 +630,6 @@ def create_project_selection_page(
     tracker_combo.currentIndexChanged.connect(_handle_tracker_changed)
 
     def _load_selection(project_id: str, tracker_id: str) -> None:
-        """`load_selection` 관련 처리를 수행한다."""
         page.selected_project_id = str(project_id or "")
         page.selected_tracker_id = str(tracker_id or "")
         if page.selected_project_id.isdigit() and project_combo.count() > 0:
@@ -655,7 +643,6 @@ def create_project_selection_page(
         _update_next_button_state()
 
     def _get_selection() -> dict[str, str]:
-        """`get_selection` 관련 처리를 수행한다."""
         return {
             "project_id": str(page.selected_project_id or ""),
             "tracker_id": str(page.selected_tracker_id or ""),
@@ -666,6 +653,5 @@ def create_project_selection_page(
     page.on_page_shown = lambda: _sync_from_settings(auto_load=True)
     _sync_from_settings(auto_load=False)
     return page
-
 
 

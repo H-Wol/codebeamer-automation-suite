@@ -14,7 +14,6 @@ from .upload_context import ValidationContext
 
 
 def _require_qt():
-    """`require_qt` 관련 처리를 수행한다."""
     try:
         from PySide6.QtCore import QEventLoop
         from PySide6.QtCore import QSize
@@ -94,7 +93,6 @@ class UploadProgressState:
 
 
 def _format_duration_text(seconds: float | None) -> str:
-    """`format_duration_text` 표시 문자열을 만든다."""
     if seconds is None:
         return "-"
     if seconds < 1:
@@ -107,7 +105,6 @@ def _format_duration_text(seconds: float | None) -> str:
 
 
 def _format_clock_text(timestamp: float | None = None) -> str:
-    """`format_clock_text` 표시 문자열을 만든다."""
     if timestamp is None:
         timestamp = time.time()
     return datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
@@ -118,7 +115,6 @@ def _estimate_upload_remaining_seconds(
     completed_count: int,
     total_count: int,
 ) -> float | None:
-    """`estimate_upload_remaining_seconds` 관련 처리를 수행한다."""
     if elapsed_seconds is None or elapsed_seconds < 0:
         return None
 
@@ -135,7 +131,6 @@ def _estimate_upload_remaining_seconds(
 
 
 def _format_upload_progress_text(completed_count: int, total_count: int) -> str:
-    """`format_upload_progress_text` 표시 문자열을 만든다."""
     normalized_total = max(int(total_count), 0)
     normalized_completed = max(int(completed_count), 0)
     if normalized_total <= 0:
@@ -153,7 +148,6 @@ def _format_upload_eta_text(
     completed_count: int,
     total_count: int,
 ) -> str:
-    """`format_upload_eta_text` 표시 문자열을 만든다."""
     remaining_seconds = _estimate_upload_remaining_seconds(
         elapsed_seconds,
         completed_count,
@@ -172,7 +166,6 @@ def _format_upload_eta_text(
 
 
 def _clamp_window_dimension(value: object, *, fallback: int, minimum: int) -> int:
-    """`clamp_window_dimension` 관련 처리를 수행한다."""
     try:
         normalized = int(value)
     except (TypeError, ValueError):
@@ -181,7 +174,6 @@ def _clamp_window_dimension(value: object, *, fallback: int, minimum: int) -> in
 
 
 def _window_size_from_settings(settings: GuiSettings) -> tuple[int, int]:
-    """`window_size_from_settings` 관련 처리를 수행한다."""
     return (
         _clamp_window_dimension(
             getattr(settings, "window_width", 1160),
@@ -197,7 +189,6 @@ def _window_size_from_settings(settings: GuiSettings) -> tuple[int, int]:
 
 
 def _merge_window_preferences(current_settings: GuiSettings, incoming_settings: GuiSettings) -> GuiSettings:
-    """`merge_window_preferences` 관련 처리를 수행한다."""
     width, height = _window_size_from_settings(current_settings)
     return replace(
         incoming_settings,
@@ -214,7 +205,6 @@ def _merge_root_item_page_configs(
     structure_config: dict[str, object] | None = None,
     field_config: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    """`merge_root_item_page_configs` 관련 처리를 수행한다."""
     merged = dict(base_config or {})
     if structure_config:
         merged.update(dict(structure_config))

@@ -145,7 +145,6 @@ def _initialize_mapping_page(page, on_validate_requested, on_error=None):
         next_button.setEnabled(False)
 
     def _tracker_item_candidates(mapping: dict[str, str]) -> list[dict[str, object]]:
-        """`tracker_item_candidates` 관련 처리를 수행한다."""
         candidates: list[dict[str, object]] = []
         for df_column, schema_field in mapping.items():
             schema_row = page._schema_rows_by_name.get(schema_field, {})
@@ -166,7 +165,6 @@ def _initialize_mapping_page(page, on_validate_requested, on_error=None):
         return candidates
 
     def _tracker_item_query_strategy_options() -> list[tuple[str, str]]:
-        """`tracker_item_query_strategy_options` 관련 처리를 수행한다."""
         return [
             ("가장 비슷한 값", TrackerItemQueryMatchStrategy.BEST.value),
             ("첫 번째 결과", TrackerItemQueryMatchStrategy.FIRST.value),
@@ -186,7 +184,6 @@ def _initialize_mapping_page(page, on_validate_requested, on_error=None):
         )
 
     def _tracker_item_example_text(df_column: str, schema_field: str, mode: str, regex_pattern: str) -> str:
-        """`tracker_item_example_text` 관련 처리를 수행한다."""
         if mode != TrackerItemResolutionMode.REGEX.value:
             return "query 모드에서는 미사용"
         schema_row = page._schema_rows_by_name.get(schema_field, {})
@@ -213,7 +210,6 @@ def _initialize_mapping_page(page, on_validate_requested, on_error=None):
         )
 
     def _populate_tracker_item_table(mapping: dict[str, str], tracker_item_settings: dict[str, dict[str, object]]) -> None:
-        """`populate_tracker_item_table` 관련 처리를 수행한다."""
         page._tracker_item_settings = {
             str(schema_field): dict(setting)
             for schema_field, setting in (tracker_item_settings or {}).items()
@@ -307,7 +303,6 @@ def _initialize_mapping_page(page, on_validate_requested, on_error=None):
             tracker_item_help_label.setText("현재 매핑에는 별도 Tracker Item 처리 설정이 필요한 필드가 없습니다.")
 
     def _configure_default_value_widget(combo, candidate, selected_default: str) -> None:
-        """`configure_default_value_widget` 관련 처리를 수행한다."""
         combo.blockSignals(True)
         combo.clear()
         combo.setEditable(False)
@@ -328,7 +323,6 @@ def _initialize_mapping_page(page, on_validate_requested, on_error=None):
         combo.blockSignals(False)
 
     def _bind_default_value_commit(combo) -> None:
-        """`bind_default_value_commit` 관련 처리를 수행한다."""
         line_edit = combo.lineEdit()
         if line_edit is None:
             return
@@ -348,7 +342,6 @@ def _initialize_mapping_page(page, on_validate_requested, on_error=None):
         )
 
     def _mapping_row_palette() -> dict[str, object]:
-        """`mapping_row_palette` 관련 처리를 수행한다."""
         palette = table.palette()
         base_color = palette.base().color()
         alternate_color = palette.alternateBase().color()
@@ -360,7 +353,6 @@ def _initialize_mapping_page(page, on_validate_requested, on_error=None):
         }
 
     def _mapping_row_active(row_index: int) -> bool:
-        """`mapping_row_active` 관련 처리를 수행한다."""
         create_widget = table.cellWidget(row_index, 0)
         update_widget = table.cellWidget(row_index, 1)
         combo = table.cellWidget(row_index, 3)
@@ -408,7 +400,6 @@ def _initialize_mapping_page(page, on_validate_requested, on_error=None):
         _mark_dirty()
 
     def _normalize_default_value_scope(raw_scope: dict[str, object] | None, *, upload_mode: str) -> dict[str, bool]:
-        """`normalize_default_value_scope` 값을 정규화한다."""
         return normalize_all_or_none_operation_scope(raw_scope, upload_mode=upload_mode)
 
     def _sync_mapping_scope_checkboxes(create_widget, update_widget, *, upload_mode: str) -> None:
@@ -489,7 +480,6 @@ def _initialize_mapping_page(page, on_validate_requested, on_error=None):
             table.setItem(row_index, 6, QTableWidgetItem("yes" if schema_row.get("is_supported", True) else "no"))
 
             def _on_combo_changed(_text, row=row_index):
-                """`on_combo_changed` 이벤트를 처리한다."""
                 selected_name = table.cellWidget(row, 3).currentText().strip()
                 schema = page._schema_rows_by_name.get(selected_name, {})
                 table.setItem(row, 4, QTableWidgetItem(str(schema.get("field_type") or "")))
@@ -649,7 +639,6 @@ def _initialize_mapping_page(page, on_validate_requested, on_error=None):
         return settings
 
     def _validate() -> None:
-        """`validate` 관련 처리를 수행한다."""
         mapping = get_selected_mapping()
         if not mapping:
             status_label.setText("최소 1개 이상의 컬럼을 매핑해야 합니다.")

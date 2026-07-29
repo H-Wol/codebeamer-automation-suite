@@ -57,7 +57,6 @@ ACTIVITY_TABLE_MIN_HEIGHT = 160
 
 
 def _is_hidden_user_table_column(column_name: object) -> bool:
-    """`is_hidden_user_table_column` 관련 처리를 수행한다."""
     text = str(column_name or "").strip()
     if not text:
         return False
@@ -71,12 +70,10 @@ def _is_hidden_user_table_column(column_name: object) -> bool:
 
 
 def _settings_mode_toggle_text(is_offline: bool) -> str:
-    """`settings_mode_toggle_text` 관련 처리를 수행한다."""
     return "테스트"
 
 
 def _settings_upload_mode_choices() -> list[tuple[str, str]]:
-    """`settings_upload_mode_choices` 관련 처리를 수행한다."""
     return [
         (GUI_UPLOAD_MODE_CREATE, "신규 생성"),
         (GUI_UPLOAD_MODE_UPDATE, "기존 수정"),
@@ -85,26 +82,22 @@ def _settings_upload_mode_choices() -> list[tuple[str, str]]:
 
 
 def _settings_mode_description(is_offline: bool) -> str:
-    """`settings_mode_description` 관련 처리를 수행한다."""
     if bool(is_offline):
         return "테스트 모드에서는 저장된 schema/config snapshot으로만 검증합니다."
     return "기본 모드에서는 Codebeamer 서버 연결과 로그인 정보를 사용합니다."
 
 
 def _project_selection_status_text(is_offline: bool) -> str:
-    """`project_selection_status_text` 관련 처리를 수행한다."""
     if bool(is_offline):
         return "테스트 모드에서는 schema snapshot 기준 가상 프로젝트/트래커를 자동으로 불러옵니다."
     return "프로젝트 불러오기를 실행하면 프로젝트 목록을 조회합니다."
 
 
 def _project_selection_refresh_button_text(is_offline: bool) -> str:
-    """`project_selection_refresh_button_text` 관련 처리를 수행한다."""
     return "스냅샷 불러오기" if bool(is_offline) else "프로젝트 불러오기"
 
 
 def _project_selection_source_signature(settings: Any) -> tuple[str, str, str, str, str]:
-    """`project_selection_source_signature` 관련 처리를 수행한다."""
     return (
         "offline" if bool(getattr(settings, "offline_mode", False)) else "online",
         str(getattr(settings, "offline_schema_path", "") or "").strip(),
@@ -115,7 +108,6 @@ def _project_selection_source_signature(settings: Any) -> tuple[str, str, str, s
 
 
 def _tracker_item_sample_values(upload_preview_df: Any, column_name: str, limit: int = 3) -> list[Any]:
-    """`tracker_item_sample_values` 관련 처리를 수행한다."""
     if upload_preview_df is None or not hasattr(upload_preview_df, "columns"):
         return []
     normalized_column = str(column_name).strip()
@@ -148,7 +140,6 @@ def _tracker_item_sample_values(upload_preview_df: Any, column_name: str, limit:
 
 
 def _format_tracker_item_example_value(raw_value: Any) -> str:
-    """`format_tracker_item_example_value` 표시 문자열을 만든다."""
     if isinstance(raw_value, list):
         parts = [str(item).strip() for item in raw_value if item is not None and str(item).strip()]
         if not parts:
@@ -159,7 +150,6 @@ def _format_tracker_item_example_value(raw_value: Any) -> str:
 
 
 def _format_tracker_item_example_resolution(resolved_value: Any) -> str:
-    """`format_tracker_item_example_resolution` 표시 문자열을 만든다."""
     if isinstance(resolved_value, list):
         ids = [str(item.get("id")) for item in resolved_value if isinstance(item, dict) and item.get("id") is not None]
         return ", ".join(ids) if ids else "(해석 실패)"
@@ -169,7 +159,6 @@ def _format_tracker_item_example_resolution(resolved_value: Any) -> str:
 
 
 def _normalize_tracker_item_regex_preview_error(exc: Exception) -> str:
-    """`normalize_tracker_item_regex_preview_error` 값을 정규화한다."""
     message = str(exc).strip()
     lowered = message.lower()
     if "regex pattern is empty" in lowered:
@@ -189,7 +178,6 @@ def _build_tracker_item_regex_preview_text(
     pattern: str,
     multiple_values: bool,
 ) -> str:
-    """`build_tracker_item_regex_preview_text` 결과를 구성한다."""
     regex_pattern = str(pattern or "").strip()
     if not regex_pattern:
         return "정규식 없음"
@@ -212,7 +200,6 @@ def _build_tracker_item_regex_preview_text(
     return " | ".join(examples)
 
 def _require_qt():
-    """`require_qt` 관련 처리를 수행한다."""
     try:
         from PySide6.QtCore import Qt
         from PySide6.QtGui import QColor
@@ -268,7 +255,6 @@ def _require_qt():
 
 
 def _configure_table_columns(table, minimum_widths: list[int]) -> None:
-    """`configure_table_columns` 관련 처리를 수행한다."""
     qt = _require_qt()
     QHeaderView = qt["QHeaderView"]
     header = table.horizontalHeader()
@@ -287,7 +273,6 @@ def _configure_table_columns(table, minimum_widths: list[int]) -> None:
 
 
 def _configure_page_layout(layout, *, top_align: bool = False) -> None:
-    """`configure_page_layout` 관련 처리를 수행한다."""
     qt = _require_qt()
     Qt = qt["Qt"]
     layout.setContentsMargins(PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN)
@@ -297,7 +282,6 @@ def _configure_page_layout(layout, *, top_align: bool = False) -> None:
 
 
 def _configure_card_layout(layout) -> None:
-    """`configure_card_layout` 관련 처리를 수행한다."""
     layout.setContentsMargins(
         CARD_HORIZONTAL_MARGIN,
         CARD_VERTICAL_MARGIN,
@@ -308,13 +292,11 @@ def _configure_card_layout(layout) -> None:
 
 
 def _configure_inline_layout(layout, *, spacing: int = SECTION_SPACING) -> None:
-    """`configure_inline_layout` 관련 처리를 수행한다."""
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(spacing)
 
 
 def _configure_form_layout(form) -> None:
-    """`configure_form_layout` 관련 처리를 수행한다."""
     qt = _require_qt()
     Qt = qt["Qt"]
     QFormLayout = qt["QFormLayout"]
@@ -331,7 +313,6 @@ def _configure_form_layout(form) -> None:
 
 
 def _configure_form_field(widget, *, minimum_width: int = DEFAULT_FORM_FIELD_MIN_WIDTH) -> None:
-    """`configure_form_field` 관련 처리를 수행한다."""
     qt = _require_qt()
     QSizePolicy = qt["QSizePolicy"]
     widget.setMinimumWidth(minimum_width)
@@ -342,7 +323,6 @@ def _configure_form_field(widget, *, minimum_width: int = DEFAULT_FORM_FIELD_MIN
 
 
 def _configure_constrained_panel(widget, *, max_width: int = FORM_PANEL_MAX_WIDTH) -> None:
-    """`configure_constrained_panel` 관련 처리를 수행한다."""
     qt = _require_qt()
     QSizePolicy = qt["QSizePolicy"]
     widget.setMaximumWidth(16777215)
@@ -353,7 +333,6 @@ def _configure_constrained_panel(widget, *, max_width: int = FORM_PANEL_MAX_WIDT
 
 
 def _configure_data_table(widget, *, minimum_height: int) -> None:
-    """`configure_data_table` 관련 처리를 수행한다."""
     qt = _require_qt()
     QSizePolicy = qt["QSizePolicy"]
     widget.setMinimumHeight(minimum_height)

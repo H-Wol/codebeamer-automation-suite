@@ -15,7 +15,6 @@ from .window_support import _merge_window_preferences
 
 class WindowWorkflowMixin:
     def _on_settings_changed(self, settings: GuiSettings | None) -> GuiSettings:
-        """`on_settings_changed` 이벤트를 처리한다."""
         if settings is None:
             return self.session_state.settings
         normalized_theme = self._apply_theme(settings.theme_name)
@@ -27,12 +26,10 @@ class WindowWorkflowMixin:
         return self.session_state.settings
 
     def _on_file_state_changed(self, file_state: dict[str, object]) -> None:
-        """`on_file_state_changed` 이벤트를 처리한다."""
         self.session_state.file_state = file_state
         self.statusBar().showMessage("파일 선택 상태를 갱신했습니다.")
 
     def _test_connection(self, settings: GuiSettings) -> list[dict[str, object]]:
-        """`test_connection` 관련 처리를 수행한다."""
         busy_message = (
             "테스트 프로젝트 목록을 불러오는 중입니다."
             if bool(getattr(settings, "offline_mode", False))
@@ -53,7 +50,6 @@ class WindowWorkflowMixin:
         return projects
 
     def _load_trackers(self, settings: GuiSettings, project_id: int) -> list[dict[str, object]]:
-        """`load_trackers` 관련 처리를 수행한다."""
         trackers = self._run_with_busy(
             "트래커 목록을 불러오는 중입니다.",
             self.codebeamer_service.load_trackers,
@@ -74,7 +70,6 @@ class WindowWorkflowMixin:
         header_row: int,
         summary_column: str,
     ):
-        """`load_file_preview` 관련 처리를 수행한다."""
         preview = self._run_with_busy(
             "Excel 시트와 미리보기를 불러오는 중입니다.",
             self.excel_service.load_preview,
@@ -88,7 +83,6 @@ class WindowWorkflowMixin:
         return preview
 
     def _current_settings_snapshot(self) -> GuiSettings:
-        """`current_settings_snapshot` 관련 처리를 수행한다."""
         settings = replace(self.session_state.settings)
         get_settings = getattr(self.settings_page, "get_settings", None)
         if callable(get_settings):
@@ -111,7 +105,6 @@ class WindowWorkflowMixin:
         return settings
 
     def _current_file_state_snapshot(self) -> dict[str, object]:
-        """`current_file_state_snapshot` 관련 처리를 수행한다."""
         current_state = dict(self.session_state.file_state or {})
         get_state = getattr(self.file_page, "get_state", None)
         if callable(get_state):
@@ -260,7 +253,6 @@ class WindowWorkflowMixin:
         self.statusBar().showMessage(message)
 
     def _save_workflow_preset(self) -> None:
-        """`save_workflow_preset` 관련 처리를 수행한다."""
         try:
             preset = self._collect_workflow_preset()
             self.settings_store.save_workflow_preset(preset)
@@ -274,7 +266,6 @@ class WindowWorkflowMixin:
         self._show_info_dialog("전체 설정 저장", "전체 설정을 저장했습니다.")
 
     def _load_workflow_preset(self) -> None:
-        """`load_workflow_preset` 관련 처리를 수행한다."""
         try:
             preset = self.settings_store.load_workflow_preset()
             if preset is None:
@@ -291,7 +282,6 @@ class WindowWorkflowMixin:
         )
 
     def _show_mapping_page(self) -> None:
-        """`show_mapping_page` 관련 처리를 수행한다."""
         self._show_page(self.mapping_page)
 
     def _preview_root_item_config(self, root_item_config: dict[str, object]):
@@ -304,11 +294,9 @@ class WindowWorkflowMixin:
         )
 
     def _enter_validation_page(self) -> None:
-        """`enter_validation_page` 관련 처리를 수행한다."""
         self._show_page(self.validation_page)
 
     def _enter_upload_page(self) -> None:
-        """`enter_upload_page` 관련 처리를 수행한다."""
         self.upload_page.reset(0)
         if self.session_state.settings.offline_mode:
             self.upload_page.dry_run_checkbox.setChecked(True)
@@ -323,20 +311,17 @@ class WindowWorkflowMixin:
         self._show_page(self.upload_page)
 
     def _enter_result_page(self) -> None:
-        """`enter_result_page` 관련 처리를 수행한다."""
         if self.session_state.upload_result is not None:
             self.result_page.set_results(self.session_state.upload_result)
         self._show_page(self.result_page)
 
     def _restart_upload_flow(self) -> None:
-        """`restart_upload_flow` 관련 처리를 수행한다."""
         self.session_state.validation_context = None
         self.session_state.upload_result = None
         self.upload_progress = UploadProgressState()
         self._show_page(self.project_page)
 
     def _on_prepare_root_item_context(self) -> None:
-        """`on_prepare_root_item_context` 이벤트를 처리한다."""
         settings = self.session_state.settings
         if not settings.default_project_id or not settings.default_tracker_id:
             raise ValueError("프로젝트와 트래커를 먼저 선택해야 합니다.")
@@ -390,7 +375,6 @@ class WindowWorkflowMixin:
         self._show_page(self.root_item_structure_page)
 
     def _on_confirm_root_item_structure_config(self) -> None:
-        """`on_confirm_root_item_structure_config` 이벤트를 처리한다."""
         if self.session_state.mapping_context is None:
             raise ValueError("매핑 컨텍스트가 준비되지 않았습니다.")
         root_item_config = _merge_root_item_page_configs(
@@ -415,7 +399,6 @@ class WindowWorkflowMixin:
         self._show_page(self.root_item_field_page)
 
     def _on_confirm_root_item_field_config(self) -> None:
-        """`on_confirm_root_item_field_config` 이벤트를 처리한다."""
         if self.session_state.mapping_context is None:
             raise ValueError("매핑 컨텍스트가 준비되지 않았습니다.")
         self.session_state.mapping_context.root_item_config = self.root_item_field_page.get_config()

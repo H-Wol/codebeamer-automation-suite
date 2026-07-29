@@ -69,7 +69,6 @@ class BatchUploadService:
 
     @staticmethod
     def _tracker_item_query_mapping(mapping_context: MappingContext) -> dict[str, str]:
-        """`tracker_item_query_mapping` 관련 처리를 수행한다."""
         query_mapping: dict[str, str] = {}
         for df_column, schema_field in mapping_context.selected_mapping.items():
             scope = dict((mapping_context.selected_mapping_modes or {}).get(str(df_column).strip()) or {})
@@ -89,7 +88,6 @@ class BatchUploadService:
         settings,
         mapping_context: MappingContext,
     ) -> None:
-        """`prime_tracker_item_lookup_cache_for_batch` 관련 처리를 수행한다."""
         query_mapping = self._tracker_item_query_mapping(mapping_context)
         if not query_mapping:
             return
@@ -140,7 +138,6 @@ class BatchUploadService:
 
     @staticmethod
     def _batch_output_dir(output_dir: str, file_path: str, index: int) -> str:
-        """`batch_output_dir` 관련 처리를 수행한다."""
         safe_name = Path(file_path).stem.strip() or f"file_{index:03d}"
         return str(Path(output_dir) / f"{index:03d}_{safe_name}")
 
@@ -149,7 +146,6 @@ class BatchUploadService:
         wizard: CodebeamerUploadWizard,
         root_item_specs: list[RootItemUploadSpec] | None = None,
     ) -> int:
-        """`ready_upload_count` 관련 처리를 수행한다."""
         insert_count, update_count = BatchUploadService._phase_ready_counts(
             wizard,
             root_item_specs=root_item_specs,
@@ -161,7 +157,6 @@ class BatchUploadService:
         wizard: CodebeamerUploadWizard,
         root_item_specs: list[RootItemUploadSpec] | None = None,
     ) -> tuple[int, int]:
-        """`phase_ready_counts` 관련 처리를 수행한다."""
         payload_df = wizard.state.payload_df if wizard.state.payload_df is not None else wizard.build_payloads()
         if payload_df is None or payload_df.empty:
             return (0, 0)
@@ -198,7 +193,6 @@ class BatchUploadService:
         file_label: str,
         file_path: str,
     ) -> pd.DataFrame:
-        """`annotate_batch_result_frame` 관련 처리를 수행한다."""
         return BatchValidationService._annotate_source_frame(
             df,
             file_label=file_label,
@@ -215,7 +209,6 @@ class BatchUploadService:
         header_row: int,
         summary_col: str,
     ) -> CodebeamerUploadWizard:
-        """`prepare_wizard_for_file` 관련 처리를 수행한다."""
         wizard = self.create_wizard(settings)
         wizard.select_project(int(settings.default_project_id))
         wizard.select_tracker(int(settings.default_tracker_id))
@@ -286,7 +279,6 @@ class BatchUploadService:
         cancel_requested=None,
         pause_requested=None,
     ) -> dict[str, Any]:
-        """`run_batch_upload` 관련 처리를 수행한다."""
         file_paths = mapping_context.file_paths or self._normalize_file_paths(file_state)
         if not file_paths:
             raise ValueError("업로드할 Excel 파일이 없습니다.")
@@ -317,7 +309,6 @@ class BatchUploadService:
         }
 
         def _emit(event: dict[str, Any]) -> None:
-            """`emit` 관련 처리를 수행한다."""
             if event_callback is not None:
                 event_callback(event)
 
@@ -402,7 +393,6 @@ class BatchUploadService:
             })
 
             def _forward_event(event: dict[str, Any]) -> None:
-                """`forward_event` 관련 처리를 수행한다."""
                 forwarded = dict(event)
                 forwarded["source_file"] = job.file_label
                 forwarded["source_file_path"] = job.file_path

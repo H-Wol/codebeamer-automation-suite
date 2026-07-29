@@ -82,7 +82,6 @@ class RootItemService:
 
     @staticmethod
     def _root_regex_target_options() -> list[tuple[str, str]]:
-        """`root_regex_target_options` 관련 처리를 수행한다."""
         return [
             (ROOT_REGEX_TARGET_FILE_STEM, "파일명(확장자 제외)"),
             (ROOT_REGEX_TARGET_FILE_NAME, "전체 파일명"),
@@ -90,7 +89,6 @@ class RootItemService:
 
     @staticmethod
     def _normalize_root_mode(value: Any) -> str:
-        """`normalize_root_mode` 값을 정규화한다."""
         normalized = str(value or ROOT_ITEM_MODE_FILE).strip()
         if normalized in {ROOT_ITEM_MODE_FILE, ROOT_ITEM_MODE_GROUP_BY_COLUMN}:
             return normalized
@@ -98,7 +96,6 @@ class RootItemService:
 
     @staticmethod
     def _root_group_column_options(mapping_context: MappingContext) -> list[str]:
-        """`root_group_column_options` 관련 처리를 수행한다."""
         return [
             str(column).strip()
             for column in mapping_context.upload_columns
@@ -107,7 +104,6 @@ class RootItemService:
 
     @classmethod
     def _root_group_source_label(cls, group_by_column: str) -> str:
-        """`root_group_source_label` 관련 처리를 수행한다."""
         normalized = str(group_by_column or "").strip()
         if not normalized:
             return cls._root_source_label(ROOT_SOURCE_GROUP_VALUE)
@@ -115,7 +111,6 @@ class RootItemService:
 
     @staticmethod
     def _root_source_label(source_key: str) -> str:
-        """`root_source_label` 관련 처리를 수행한다."""
         if source_key == ROOT_SOURCE_FILE_STEM:
             return "파일명(확장자 제외)"
         if source_key == ROOT_SOURCE_FILE_NAME:
@@ -130,7 +125,6 @@ class RootItemService:
 
     @classmethod
     def _root_parse_target_text(cls, file_path: str, regex_target: str) -> str:
-        """`root_parse_target_text` 관련 처리를 수행한다."""
         if regex_target == ROOT_REGEX_TARGET_FILE_NAME:
             return Path(file_path).name
         return Path(file_path).stem
@@ -140,7 +134,6 @@ class RootItemService:
         mapping_context: MappingContext,
         file_path: str,
     ) -> pd.DataFrame:
-        """`root_upload_df_for_file` 관련 처리를 수행한다."""
         representative = str(mapping_context.representative_file_path or "").strip()
         if (
             representative
@@ -176,7 +169,6 @@ class RootItemService:
         *,
         allowed_row_ids: set[int] | None = None,
     ) -> pd.DataFrame:
-        """`top_level_upload_df` 관련 처리를 수행한다."""
         if upload_df is None or upload_df.empty:
             return pd.DataFrame()
 
@@ -198,7 +190,6 @@ class RootItemService:
         regex_target: str,
         allowed_row_ids: set[int] | None = None,
     ) -> tuple[list[dict[str, Any]], list[str], str | None]:
-        """`build_root_source_rows` 결과를 구성한다."""
         file_sources, matched, regex_error = self._root_sources_for_file(
             file_path,
             regex_pattern=regex_pattern,
@@ -264,7 +255,6 @@ class RootItemService:
         mode: str,
         value: str,
     ) -> dict[str, Any]:
-        """`root_assignment` 관련 처리를 수행한다."""
         normalized_mode = str(mode or ROOT_ASSIGNMENT_MODE_FILE_SOURCE).strip()
         if normalized_mode not in {
             ROOT_ASSIGNMENT_MODE_FILE_SOURCE,
@@ -282,7 +272,6 @@ class RootItemService:
         cls,
         field_assignments: dict[str, dict[str, Any]],
     ) -> dict[str, str]:
-        """`root_file_source_assignments` 관련 처리를 수행한다."""
         field_sources: dict[str, str] = {}
         for schema_field, assignment in field_assignments.items():
             if not isinstance(assignment, dict):
@@ -298,7 +287,6 @@ class RootItemService:
 
     @staticmethod
     def _name_schema_field(schema_df: pd.DataFrame) -> str | None:
-        """`name_schema_field` 관련 처리를 수행한다."""
         if schema_df is None or schema_df.empty:
             return None
         matched = schema_df[schema_df["tracker_item_field"].astype(str) == "name"]
@@ -335,7 +323,6 @@ class RootItemService:
         *,
         default_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """`normalize_root_item_config` 값을 정규화한다."""
         config = dict(default_config or {})
         if root_item_config:
             config.update(root_item_config)
@@ -427,7 +414,6 @@ class RootItemService:
         }
 
     def _root_field_candidates(self, schema_df: pd.DataFrame) -> list[RootFieldCandidate]:
-        """`root_field_candidates` 관련 처리를 수행한다."""
         option_maps = self.mapper.build_option_maps_from_schema(schema_df)
         candidates: list[RootFieldCandidate] = []
 
@@ -500,7 +486,6 @@ class RootItemService:
 
     @staticmethod
     def _compiled_root_regex(regex_pattern: str) -> tuple[re.Pattern[str] | None, str | None]:
-        """`compiled_root_regex` 관련 처리를 수행한다."""
         pattern = str(regex_pattern or "").strip()
         if not pattern:
             return None, None
@@ -511,7 +496,6 @@ class RootItemService:
 
     @classmethod
     def _root_regex_group_keys(cls, compiled_pattern: re.Pattern[str] | None) -> list[str]:
-        """`root_regex_group_keys` 관련 처리를 수행한다."""
         if compiled_pattern is None:
             return []
         if compiled_pattern.groupindex:
@@ -526,7 +510,6 @@ class RootItemService:
         regex_pattern: str,
         regex_target: str,
     ) -> tuple[dict[str, str], bool, str | None]:
-        """`root_sources_for_file` 관련 처리를 수행한다."""
         sources = {
             ROOT_SOURCE_FILE_NAME: Path(file_path).name,
             ROOT_SOURCE_FILE_STEM: Path(file_path).stem,
@@ -559,7 +542,6 @@ class RootItemService:
         mapping_context: MappingContext,
         root_item_config: dict[str, Any] | None = None,
     ) -> RootItemPreviewContext:
-        """`build_root_item_preview_context` 결과를 구성한다."""
         default_config = self._default_root_item_config(mapping_context.schema_df)
         normalized = self._normalize_root_item_config(
             mapping_context.schema_df,
@@ -768,7 +750,6 @@ class RootItemService:
 
     @staticmethod
     def _root_assignment_target_kind(preview_context: RootItemPreviewContext) -> str:
-        """`root_assignment_target_kind` 관련 처리를 수행한다."""
         return "group_root" if bool(preview_context.group_enabled and preview_context.group_by_column) else "file_root"
 
     @classmethod
@@ -779,7 +760,6 @@ class RootItemService:
         *,
         name_schema_field: str | None = None,
     ) -> dict[str, Any]:
-        """`root_field_values_for_source_row` 관련 처리를 수행한다."""
         row_kind = str(source_row.get("kind") or "")
         sources = dict(source_row.get("sources") or {})
         root_field_values: dict[str, Any] = {}
@@ -819,7 +799,6 @@ class RootItemService:
         wizard: CodebeamerUploadWizard,
         file_path: str,
     ) -> list[RootItemUploadSpec]:
-        """`build_root_item_payload_specs` 결과를 구성한다."""
         preview_context = self.build_root_item_preview_context(mapping_context, mapping_context.root_item_config)
         if not bool(preview_context.enabled) and not bool(preview_context.group_enabled):
             return []
@@ -896,7 +875,6 @@ class RootItemService:
         mapping_context: MappingContext,
         file_path: str,
     ) -> tuple[str | None, dict[str, Any]]:
-        """`build_root_item_payload_spec` 결과를 구성한다."""
         preview_context = self.build_root_item_preview_context(mapping_context, mapping_context.root_item_config)
         if not bool(preview_context.enabled) and not bool(preview_context.group_enabled):
             return None, {}
@@ -935,4 +913,3 @@ class RootItemService:
         if name_schema_field and str(root_field_values.get(name_schema_field) or "").strip():
             root_item_name = str(root_field_values[name_schema_field]).strip()
         return root_item_name, root_field_values
-

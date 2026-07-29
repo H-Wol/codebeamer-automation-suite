@@ -135,11 +135,9 @@ def _initialize_file_selection_page(
     page._preview_data = None
 
     def _update_next_button_state() -> None:
-        """`update_next_button_state` 상태를 갱신한다."""
         next_button.setEnabled(bool(page._selected_file_paths) and page._preview_ready)
 
     def _selected_preview_file_path() -> str:
-        """`selected_preview_file_path` 관련 처리를 수행한다."""
         preview_path = str(preview_file.currentData() or "").strip()
         if preview_path:
             return preview_path
@@ -148,7 +146,6 @@ def _initialize_file_selection_page(
         return ""
 
     def _update_file_display() -> None:
-        """`update_file_display` 상태를 갱신한다."""
         selected_count = len(page._selected_file_paths)
         if selected_count <= 0:
             file_path.setText("")
@@ -318,7 +315,6 @@ def _initialize_file_selection_page(
     _update_file_display()
 
     def _load_state(state: dict[str, object]) -> None:
-        """`load_state` 관련 처리를 수행한다."""
         loaded_state = dict(state or {})
         loaded_file_paths = [
             str(path).strip()
@@ -544,7 +540,6 @@ def _initialize_root_item_page(
             field_label.setText("상단 데이터 필드 매핑")
 
     def _current_field_assignments() -> dict[str, dict[str, object]]:
-        """`current_field_assignments` 관련 처리를 수행한다."""
         field_assignments: dict[str, dict[str, object]] = {}
         for row_index in range(field_table.rowCount()):
             enabled_widget = field_table.cellWidget(row_index, 0)
@@ -566,7 +561,6 @@ def _initialize_root_item_page(
         return field_assignments
 
     def _legacy_field_sources(field_assignments: dict[str, dict[str, object]]) -> dict[str, str]:
-        """`legacy_field_sources` 관련 처리를 수행한다."""
         field_sources: dict[str, str] = {}
         for schema_field, assignment in field_assignments.items():
             if not bool(assignment.get("enabled")):
@@ -600,7 +594,6 @@ def _initialize_root_item_page(
         }
 
     def _column_label(column_name: str, source_options) -> str:
-        """`column_label` 관련 처리를 수행한다."""
         if column_name == "file_name":
             return "파일"
         if column_name == "parse_target":
@@ -611,7 +604,6 @@ def _initialize_root_item_page(
         return source_lookup.get(column_name, column_name)
 
     def _mode_options(candidate) -> list[tuple[str, str]]:
-        """`mode_options` 관련 처리를 수행한다."""
         options: list[tuple[str, str]] = []
         if bool(candidate.allows_file_source):
             options.append(("소스 값", ROOT_ASSIGNMENT_MODE_FILE_SOURCE))
@@ -623,7 +615,6 @@ def _initialize_root_item_page(
         return options
 
     def _populate_value_combo(value_combo, candidate, preview_context, mode_key: str, selected_value: str) -> None:
-        """`populate_value_combo` 관련 처리를 수행한다."""
         value_combo.blockSignals(True)
         value_combo.clear()
         value_combo.setEditable(False)
@@ -651,7 +642,6 @@ def _initialize_root_item_page(
         value_combo.blockSignals(False)
 
     def _bind_editable_combo_commit(combo, callback) -> None:
-        """`bind_editable_combo_commit` 관련 처리를 수행한다."""
         line_edit = combo.lineEdit()
         if line_edit is None:
             return
@@ -785,7 +775,6 @@ def _initialize_root_item_page(
             )
 
             def _on_enabled_toggled(_checked, *, checkbox=enabled_widget, mode_widget=mode_combo, value_widget=value_combo, row_candidate=candidate):
-                """`on_enabled_toggled` 이벤트를 처리한다."""
                 _sync_row_enabled_state(
                     checkbox,
                     mode_widget,
@@ -795,7 +784,6 @@ def _initialize_root_item_page(
                 _refresh_preview()
 
             def _on_mode_changed(_index, *, mode_widget=mode_combo, value_widget=value_combo, row_candidate=candidate):
-                """`on_mode_changed` 이벤트를 처리한다."""
                 _populate_value_combo(
                     value_widget,
                     row_candidate,
@@ -807,7 +795,6 @@ def _initialize_root_item_page(
                 _refresh_preview()
 
             def _on_value_changed(_text, *, value_widget=value_combo):
-                """`on_value_changed` 이벤트를 처리한다."""
                 if bool(value_widget.isEditable()):
                     return
                 _refresh_preview()
@@ -867,7 +854,6 @@ def create_root_item_page(on_preview_requested, *, page_mode: str = "structure")
 
 
 def create_placeholder_page(title_text: str, description: str):
-    """`create_placeholder_page` 화면을 구성한다."""
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -897,4 +883,3 @@ def create_placeholder_page(title_text: str, description: str):
     previous_button.clicked.connect(lambda: page.request_previous())
     next_button.clicked.connect(lambda: page.request_next())
     return page
-

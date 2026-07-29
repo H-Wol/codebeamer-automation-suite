@@ -128,7 +128,6 @@ class GuiUploadPipelineService:
         )
 
     def create_wizard(self, settings) -> CodebeamerUploadWizard:
-        """`create_wizard` 화면을 구성한다."""
         client = _build_gui_client(settings, self.client_factory, self.logger)
         reader = self.reader_cls(
             header_row=settings.excel_header_row,
@@ -152,7 +151,6 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _is_gui_excluded_schema_field(row: pd.Series | dict[str, Any]) -> bool:
-        """`is_gui_excluded_schema_field` 관련 처리를 수행한다."""
         field_name = str((row.get("field_name") if isinstance(row, dict) else row.get("field_name")) or "").strip().lower()
         tracker_item_field = str(
             (row.get("tracker_item_field") if isinstance(row, dict) else row.get("tracker_item_field")) or ""
@@ -161,7 +159,6 @@ class GuiUploadPipelineService:
 
     @staticmethod
     def _gui_upload_columns(upload_df: pd.DataFrame) -> list[str]:
-        """`gui_upload_columns` 관련 처리를 수행한다."""
         columns: list[str] = []
         for column in upload_df.columns:
             if column in GUI_EXCLUDED_MAPPING_COLUMNS:
@@ -179,7 +176,6 @@ class GuiUploadPipelineService:
         self,
         schema_df: pd.DataFrame,
     ) -> list[DefaultValueCandidate]:
-        """`build_default_value_candidates` 결과를 구성한다."""
         if schema_df.empty:
             return []
 
@@ -450,7 +446,6 @@ class GuiUploadPipelineService:
         )
 
     def prepare_mapping_context(self, settings, file_state: dict[str, Any]) -> MappingContext:
-        """`prepare_mapping_context` 관련 처리를 수행한다."""
         file_paths = self._normalize_file_paths(file_state)
         representative_file_path = self._representative_file_path(file_state)
         if not file_paths or not representative_file_path:

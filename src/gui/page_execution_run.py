@@ -32,7 +32,6 @@ from .services import gui_display_text
 
 
 def create_validation_page():
-    """`create_validation_page` 화면을 구성한다."""
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -356,7 +355,6 @@ def _initialize_upload_page(
         page.activity_table.scrollToBottom()
 
     def reset(total_count: int) -> None:
-        """`reset` 관련 처리를 수행한다."""
         page.progress_bar.setMaximum(max(total_count, 1))
         page.progress_bar.setValue(0)
         page.progress_bar.setFormat("0 / 0 (0.0%)" if total_count <= 0 else f"0 / {total_count} (0.0%)")
@@ -422,7 +420,6 @@ def create_upload_page(
 
 
 def create_result_page():
-    """`create_result_page` 화면을 구성한다."""
     qt = _require_qt()
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -508,4 +505,3 @@ def create_result_page():
     restart_button.clicked.connect(lambda: page.request_restart())
     page.set_results = set_results
     return page
-

@@ -183,7 +183,6 @@ class WizardUpdatePayloadService:
         }
 
         def _has_new_ancestor(row_id: int) -> bool:
-            """`has_new_ancestor` 관련 처리를 수행한다."""
             current_parent_id = parent_by_row_id.get(int(row_id))
             while current_parent_id is not None:
                 parent_index = row_index_by_row_id.get(int(current_parent_id))
