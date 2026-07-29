@@ -70,50 +70,6 @@ class MainWindow:
                 self._upload_batch_started_at: float | None = None
                 self._build_shell()
                 self._build_pages()
-                self._attach_navigation(
-                    self.settings_page,
-                    next_handler=lambda: self._show_page(self.project_page),
-                )
-                self._attach_navigation(
-                    self.project_page,
-                    previous_handler=lambda: self._show_page(self.settings_page),
-                    next_handler=lambda: self._show_page(self.file_page),
-                )
-                self._attach_navigation(
-                    self.file_page,
-                    previous_handler=lambda: self._show_page(self.project_page),
-                    next_handler=self._on_prepare_root_item_context,
-                )
-                self._attach_navigation(
-                    self.root_item_structure_page,
-                    previous_handler=lambda: self._show_page(self.file_page),
-                    next_handler=self._on_confirm_root_item_structure_config,
-                )
-                self._attach_navigation(
-                    self.root_item_field_page,
-                    previous_handler=lambda: self._show_page(self.root_item_structure_page),
-                    next_handler=self._on_confirm_root_item_field_config,
-                )
-                self._attach_navigation(
-                    self.mapping_page,
-                    previous_handler=lambda: self._show_page(self.root_item_field_page),
-                    next_handler=self._enter_validation_page,
-                )
-                self._attach_navigation(
-                    self.validation_page,
-                    previous_handler=self._show_mapping_page,
-                    next_handler=self._enter_upload_page,
-                )
-                self._attach_navigation(
-                    self.upload_page,
-                    previous_handler=lambda: self._show_page(self.validation_page),
-                    next_handler=self._enter_result_page,
-                )
-                self._attach_navigation(
-                    self.result_page,
-                    previous_handler=lambda: self._show_page(self.upload_page),
-                    restart_handler=self._restart_upload_flow,
-                )
 
                 self.setWindowTitle("Codebeamer Upload Studio")
                 self.resize(*_window_size_from_settings(initial_settings))

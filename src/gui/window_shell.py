@@ -15,6 +15,13 @@ class WindowShellMixin:
         QFrame = self.qt["QFrame"]
         QPushButton = self.qt["QPushButton"]
 
+        self.page_scroll_areas = {}
+        self.page_meta = {}
+        self._current_page = None
+        self._initial_window_state_applied = False
+        self._last_normal_window_width = self.minimumWidth()
+        self._last_normal_window_height = self.minimumHeight()
+
         root = QWidget()
         root.setObjectName("app_root")
         self.root_widget = root
