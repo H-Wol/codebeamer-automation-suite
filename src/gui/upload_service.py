@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from dataclasses import field
 from pathlib import Path
 import re
 import time
@@ -17,7 +15,6 @@ from src.models import MappingStatus
 from src.models import OptionCheckStatus
 from src.models import OptionMapKind
 from src.models import PayloadStatus
-from src.models import TrackerItemQueryMatchStrategy
 from src.models import TrackerItemResolutionMode
 from src.upload_pipeline import load_tracker_schema_df
 from src.upload_pipeline import prepare_upload_dataframe
@@ -42,6 +39,16 @@ from .service_core import GuiExcelService
 from .service_core import PreviewData
 from .service_core import _build_gui_client
 from .service_core import gui_display_text
+from .tracker_config import TrackerConfigurationService
+from .upload_context import BatchUploadJob
+from .upload_context import DefaultValueCandidate
+from .upload_context import MappingContext
+from .upload_context import RootFieldCandidate
+from .upload_context import RootItemPreviewContext
+from .upload_context import RootItemUploadSpec
+from .upload_context import RootSourceOption
+from .upload_context import TrackerItemFieldCandidate
+from .upload_context import ValidationContext
 GUI_EXCLUDED_MAPPING_COLUMNS = {
     "id",
     "parent",
@@ -75,128 +82,6 @@ ROOT_ASSIGNMENT_MODE_FIXED_VALUE = "fixed_value"
 GUI_VALUE_KIND_STATIC_OPTIONS = "static_options"
 GUI_VALUE_KIND_BOOL = "bool"
 GUI_VALUE_KIND_SCALAR = "scalar"
-TRACKER_ITEM_QUERY_STATUS_SUPPORTED = "supported"
-TRACKER_ITEM_QUERY_STATUS_UNSUPPORTED = "unsupported"
-TRACKER_ITEM_QUERY_STATUS_UNAVAILABLE = "unavailable"
-
-
-@dataclass
-class DefaultValueCandidate:
-    schema_field: str
-    field_type: str
-    value_kind: str
-    options: list[str]
-    mandatory: bool
-    allows_custom_value: bool
-
-
-@dataclass
-class TrackerItemFieldCandidate:
-    df_column: str
-    schema_field: str
-    field_type: str
-    source_tracker_ids: list[int]
-    supports_query: bool
-    query_status: str
-
-
-@dataclass
-class MappingContext:
-    wizard: CodebeamerUploadWizard
-    upload_mode: str
-    schema_df: pd.DataFrame
-    upload_columns: list[str]
-    selected_mapping: dict[str, str]
-    selected_mapping_modes: dict[str, dict[str, bool]]
-    default_value_candidates: list[DefaultValueCandidate]
-    selected_default_values: dict[str, str]
-    selected_default_value_modes: dict[str, dict[str, bool]]
-    selected_tracker_item_settings: dict[str, dict[str, Any]]
-    tracker_item_field_candidates: list[TrackerItemFieldCandidate]
-    tracker_item_lookup_cache: dict[tuple[str, str], tuple[Any, str | None, str | None]]
-    list_cols: list[str]
-    file_paths: list[str]
-    representative_file_path: str
-    sheet_name: str
-    header_row: int
-    summary_column: str
-    preview_data: PreviewData | None
-    root_item_config: dict[str, Any]
-    existing_item_cache: dict[int, dict[str, Any]]
-    batch_duplicate_update_item_ids: set[int]
-
-
-@dataclass
-class ValidationContext:
-    comparison_df: pd.DataFrame
-    option_check_df: pd.DataFrame
-    converted_upload_df: pd.DataFrame
-    issue_df: pd.DataFrame
-    has_blocking_issues: bool
-    summary_stats: dict[str, int]
-
-
-@dataclass
-class BatchUploadJob:
-    file_path: str
-    file_label: str
-    root_item_specs: list["RootItemUploadSpec"]
-    ready_count: int
-    insert_ready_count: int
-    update_ready_count: int
-    output_dir: str
-    wizard: CodebeamerUploadWizard
-
-
-@dataclass
-class RootItemUploadSpec:
-    key: str
-    name: str
-    field_values: dict[str, Any]
-    row_ids: list[int]
-    parent_key: str | None = None
-    kind: str = "group_root"
-
-
-@dataclass
-class RootFieldCandidate:
-    schema_field: str
-    field_type: str
-    mandatory: bool
-    supported: bool
-    fixed_value_kind: str
-    fixed_options: list[str]
-    allows_file_source: bool
-    allows_fixed_value: bool
-    allows_custom_value: bool
-
-
-@dataclass
-class RootSourceOption:
-    key: str
-    label: str
-
-
-@dataclass
-class RootItemPreviewContext:
-    enabled: bool
-    group_enabled: bool
-    root_mode: str
-    group_by_column: str
-    group_column_options: list[str]
-    regex_pattern: str
-    regex_target: str
-    field_assignments: dict[str, dict[str, Any]]
-    field_sources: dict[str, str]
-    field_candidates: list[RootFieldCandidate]
-    source_options: list[RootSourceOption]
-    preview_columns: list[str]
-    preview_rows: list[dict[str, str]]
-    regex_error: str | None
-    status_message: str
-    has_blocking_issues: bool
-
-
 class GuiUploadPipelineService:
     """GUI 단계가 재사용할 업로드 파이프라인 래퍼다."""
 
@@ -214,6 +99,7 @@ class GuiUploadPipelineService:
         self.client_factory = client_factory
         self.reader_cls = reader_cls
         self.excel_service = excel_service or GuiExcelService(logger=logger, reader_cls=reader_cls)
+        self.tracker_configuration = TrackerConfigurationService()
 
     @classmethod
     def _normalize_mapping_modes(
@@ -387,300 +273,26 @@ class GuiUploadPipelineService:
             ))
         return candidates
 
-    @staticmethod
-    def _normalize_lookup_text(value: Any) -> str:
-        """`normalize_lookup_text` 값을 정규화한다."""
-        text = str(value or "").strip()
-        return "" if text.lower() == "nan" else text
-
-    @staticmethod
-    def _normalize_configuration_reference_id(value: Any) -> int | None:
-        """`normalize_configuration_reference_id` 값을 정규화한다."""
-        if value is None or value == "":
-            return None
-        try:
-            return int(value)
-        except Exception:
-            return None
-
-    @classmethod
-    def _extract_configuration_field_records(cls, payload: Any) -> list[dict[str, Any]]:
-        """`extract_configuration_field_records` 관련 처리를 수행한다."""
-        records: list[dict[str, Any]] = []
-        seen_nodes: set[int] = set()
-
-        def _looks_like_field_record(node: Any) -> bool:
-            """`looks_like_field_record` 관련 처리를 수행한다."""
-            if not isinstance(node, dict):
-                return False
-            if "referenceId" in node:
-                return True
-            if not any(
-                key in node
-                for key in (
-                    "choiceOptionSetting",
-                    "choiceConfigOptionsSetting",
-                    "choiceConfigOptionsSetApi",
-                    "referenceFilters",
-                )
-            ):
-                return False
-            return any(key in node for key in ("label", "name", "title"))
-
-        def _append_record(node: dict[str, Any]) -> None:
-            """`append_record` 관련 처리를 수행한다."""
-            node_id = id(node)
-            if node_id in seen_nodes:
-                return
-            seen_nodes.add(node_id)
-            records.append(node)
-
-        def _walk(node: Any) -> None:
-            """`walk` 관련 처리를 수행한다."""
-            if isinstance(node, list):
-                for item in node:
-                    _walk(item)
-                return
-            if not isinstance(node, dict):
-                return
-
-            if _looks_like_field_record(node):
-                _append_record(node)
-
-            for value in node.values():
-                _walk(value)
-
-        if isinstance(payload, dict):
-            fields_container = payload.get("fields")
-            if isinstance(fields_container, list):
-                _walk(fields_container)
-                if records:
-                    return records
-            elif isinstance(fields_container, dict) and isinstance(fields_container.get("value"), list):
-                _walk(fields_container["value"])
-                if records:
-                    return records
-
-        _walk(payload)
-        return records
-
-    @staticmethod
-    def _tracker_item_query_support_from_config(field_config: dict[str, Any]) -> tuple[list[int], str]:
-        """`tracker_item_query_support_from_config` 관련 처리를 수행한다."""
-        if not isinstance(field_config, dict):
-            return [], TRACKER_ITEM_QUERY_STATUS_UNAVAILABLE
-
-        source_configs: list[dict[str, Any]] = []
-        if isinstance(field_config.get("choiceOptionSetting"), dict):
-            source_configs.append(field_config["choiceOptionSetting"])
-        if isinstance(field_config.get("choiceConfigOptionsSetting"), dict):
-            source_configs.append(field_config["choiceConfigOptionsSetting"])
-        if isinstance(field_config.get("choiceConfigOptionsSetApi"), dict):
-            source_configs.append(field_config["choiceConfigOptionsSetApi"])
-        source_configs.append(field_config)
-
-        tracker_ids: list[int] = []
-        seen_ids: set[int] = set()
-        saw_reference_filters = False
-        for source in source_configs:
-            filters = source.get("referenceFilters")
-            if not isinstance(filters, list):
-                continue
-            saw_reference_filters = True
-            if not filters:
-                return [], TRACKER_ITEM_QUERY_STATUS_UNSUPPORTED
-            for filter_entry in filters:
-                if not isinstance(filter_entry, dict):
-                    return [], TRACKER_ITEM_QUERY_STATUS_UNSUPPORTED
-                if str(filter_entry.get("domainType") or "").strip().upper() != "TRACKER":
-                    return [], TRACKER_ITEM_QUERY_STATUS_UNSUPPORTED
-                domain_id = filter_entry.get("domainId")
-                if domain_id is None:
-                    return [], TRACKER_ITEM_QUERY_STATUS_UNSUPPORTED
-                try:
-                    normalized_id = int(domain_id)
-                except Exception:
-                    return [], TRACKER_ITEM_QUERY_STATUS_UNSUPPORTED
-                if normalized_id in seen_ids:
-                    continue
-                seen_ids.add(normalized_id)
-                tracker_ids.append(normalized_id)
-        if not saw_reference_filters:
-            return [], TRACKER_ITEM_QUERY_STATUS_UNAVAILABLE
-        if tracker_ids:
-            return tracker_ids, TRACKER_ITEM_QUERY_STATUS_SUPPORTED
-        return [], TRACKER_ITEM_QUERY_STATUS_UNSUPPORTED
-
-    @classmethod
     def _enrich_schema_df_with_tracker_configuration(
-        cls,
+        self,
         schema_df: pd.DataFrame,
         tracker_configuration: Any,
     ) -> pd.DataFrame:
-        """`enrich_schema_df_with_tracker_configuration` 관련 처리를 수행한다."""
-        if schema_df is None or schema_df.empty:
-            return schema_df
+        """TRACKER configuration 정보를 schema field에 연결한다."""
+        return self.tracker_configuration.enrich_schema(schema_df, tracker_configuration)
 
-        config_fields = cls._extract_configuration_field_records(tracker_configuration)
-        if not config_fields:
-            work = schema_df.copy()
-            work["tracker_item_source_tracker_ids"] = [[] for _ in range(len(work.index))]
-            work["tracker_item_query_status"] = [TRACKER_ITEM_QUERY_STATUS_UNAVAILABLE for _ in range(len(work.index))]
-            return work
-
-        def _normalized_candidates(payload: dict[str, Any]) -> set[str]:
-            """`normalized_candidates` 관련 처리를 수행한다."""
-            values = {
-                cls._normalize_lookup_text(payload.get("label")).casefold(),
-                cls._normalize_lookup_text(payload.get("name")).casefold(),
-                cls._normalize_lookup_text(payload.get("title")).casefold(),
-            }
-            return {value for value in values if value}
-
-        config_by_name: dict[str, dict[str, Any]] = {}
-        config_by_reference_id: dict[int, dict[str, Any]] = {}
-        for field_config in config_fields:
-            reference_id = cls._normalize_configuration_reference_id(field_config.get("referenceId"))
-            if reference_id is not None:
-                config_by_reference_id.setdefault(reference_id, field_config)
-            for candidate in _normalized_candidates(field_config):
-                config_by_name.setdefault(candidate, field_config)
-
-        work = schema_df.copy()
-        source_tracker_ids_column: list[list[int]] = []
-        query_status_column: list[str] = []
-
-        for _, row in work.iterrows():
-            row_field_id = cls._normalize_configuration_reference_id(row.get("field_id"))
-            matched_config = (
-                config_by_reference_id.get(row_field_id)
-                if row_field_id is not None
-                else None
-            )
-
-            normalized_names = {
-                cls._normalize_lookup_text(row.get("field_name")).casefold(),
-                cls._normalize_lookup_text(row.get("field_label")).casefold(),
-            }
-            normalized_names.discard("")
-            if matched_config is None:
-                for candidate in normalized_names:
-                    matched_config = config_by_name.get(candidate)
-                    if matched_config is not None:
-                        break
-            tracker_ids, query_status = cls._tracker_item_query_support_from_config(matched_config or {})
-            source_tracker_ids_column.append(tracker_ids)
-            query_status_column.append(query_status)
-
-        work["tracker_item_source_tracker_ids"] = source_tracker_ids_column
-        work["tracker_item_query_status"] = query_status_column
-        return work
-
-    @classmethod
-    def _build_tracker_item_field_candidates(
-        cls,
-        schema_df: pd.DataFrame,
-        selected_mapping: dict[str, str],
-    ) -> list[TrackerItemFieldCandidate]:
-        """`build_tracker_item_field_candidates` 결과를 구성한다."""
-        candidates: list[TrackerItemFieldCandidate] = []
-        if schema_df is None or schema_df.empty:
-            return candidates
-
-        schema_rows_by_name = {
-            str(row.get("field_name") or "").strip(): row
-            for _, row in schema_df.iterrows()
-            if str(row.get("field_name") or "").strip()
-        }
-        for df_column, schema_field in selected_mapping.items():
-            schema_row = schema_rows_by_name.get(str(schema_field).strip())
-            if schema_row is None:
-                continue
-            if str(schema_row.get("field_type") or "").strip() != "TrackerItemChoiceField":
-                continue
-            source_tracker_ids = [
-                int(item)
-                for item in (schema_row.get("tracker_item_source_tracker_ids") or [])
-                if str(item).strip()
-            ]
-            candidates.append(TrackerItemFieldCandidate(
-                df_column=str(df_column).strip(),
-                schema_field=str(schema_field).strip(),
-                field_type=str(schema_row.get("field_type") or ""),
-                source_tracker_ids=source_tracker_ids,
-                supports_query=bool(source_tracker_ids),
-                query_status=str(schema_row.get("tracker_item_query_status") or TRACKER_ITEM_QUERY_STATUS_UNAVAILABLE),
-            ))
-        return candidates
-
-    @classmethod
-    def _default_tracker_item_settings(
-        cls,
-        tracker_item_candidates: list[TrackerItemFieldCandidate],
-    ) -> dict[str, dict[str, Any]]:
-        """`default_tracker_item_settings` 기본값을 계산한다."""
-        settings: dict[str, dict[str, Any]] = {}
-        for candidate in tracker_item_candidates:
-            settings[candidate.schema_field] = {
-                "mode": (
-                    TrackerItemResolutionMode.QUERY.value
-                    if candidate.supports_query
-                    else TrackerItemResolutionMode.REGEX.value
-                ),
-                "query_match_strategy": TrackerItemQueryMatchStrategy.BEST.value,
-                "regex_pattern": DEFAULT_TRACKER_ITEM_ID_REGEX,
-                "source_tracker_ids": list(candidate.source_tracker_ids),
-            }
-        return settings
-
-    @classmethod
     def _normalize_tracker_item_settings(
-        cls,
+        self,
         schema_df: pd.DataFrame,
         selected_mapping: dict[str, str],
         tracker_item_settings: dict[str, dict[str, Any]] | None,
     ) -> tuple[list[TrackerItemFieldCandidate], dict[str, dict[str, Any]]]:
-        """`normalize_tracker_item_settings` 값을 정규화한다."""
-        candidates = cls._build_tracker_item_field_candidates(schema_df, selected_mapping)
-        default_settings = cls._default_tracker_item_settings(candidates)
-        normalized_settings = dict(default_settings)
-
-        for candidate in candidates:
-            raw_setting = (tracker_item_settings or {}).get(candidate.schema_field)
-            if not isinstance(raw_setting, dict):
-                continue
-            raw_mode = str(raw_setting.get("mode") or normalized_settings[candidate.schema_field]["mode"]).strip()
-            if raw_mode not in {
-                TrackerItemResolutionMode.REGEX.value,
-                TrackerItemResolutionMode.QUERY.value,
-            }:
-                raw_mode = normalized_settings[candidate.schema_field]["mode"]
-            raw_query_match_strategy = str(
-                raw_setting.get("query_match_strategy")
-                or normalized_settings[candidate.schema_field]["query_match_strategy"]
-            ).strip()
-            if raw_query_match_strategy not in {
-                TrackerItemQueryMatchStrategy.FIRST.value,
-                TrackerItemQueryMatchStrategy.LAST.value,
-                TrackerItemQueryMatchStrategy.BEST.value,
-                TrackerItemQueryMatchStrategy.ERROR.value,
-            }:
-                raw_query_match_strategy = normalized_settings[candidate.schema_field]["query_match_strategy"]
-            normalized_settings[candidate.schema_field] = {
-                "mode": (
-                    raw_mode
-                    if raw_mode != TrackerItemResolutionMode.QUERY.value or candidate.supports_query
-                    else TrackerItemResolutionMode.REGEX.value
-                ),
-                "query_match_strategy": raw_query_match_strategy,
-                "regex_pattern": str(
-                    raw_setting.get("regex_pattern")
-                    or normalized_settings[candidate.schema_field]["regex_pattern"]
-                ).strip() or DEFAULT_TRACKER_ITEM_ID_REGEX,
-                "source_tracker_ids": list(candidate.source_tracker_ids),
-            }
-
-        return candidates, normalized_settings
+        """필드별 tracker item lookup 설정을 configuration 계약에 맞춰 정규화한다."""
+        return self.tracker_configuration.normalize_settings(
+            schema_df,
+            selected_mapping,
+            tracker_item_settings,
+        )
 
     @staticmethod
     def _root_regex_target_options() -> list[tuple[str, str]]:

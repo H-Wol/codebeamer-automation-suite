@@ -174,6 +174,8 @@
 - 페이지 공통/설정/실행 분리: `src/gui/page_common.py`, `src/gui/page_setup.py`, `src/gui/page_execution.py`
 - 메인 윈도우 셸/워크플로/업로드 분리: `src/gui/window_support.py`, `src/gui/window_shell.py`, `src/gui/window_workflow.py`, `src/gui/window_upload.py`
 - GUI 서비스 분리: `src/gui/service_core.py`, `src/gui/upload_service.py`
+- 업로드 context 모델: `src/gui/upload_context.py`
+- TRACKER configuration 해석: `src/gui/tracker_config.py`
 
 ### API 접근
 

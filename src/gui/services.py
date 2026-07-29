@@ -12,9 +12,9 @@ from .upload_service import ROOT_ITEM_MODE_FILE
 from .upload_service import ROOT_ITEM_MODE_GROUP_BY_COLUMN
 from .upload_service import ROOT_SOURCE_GROUP_VALUE
 from .upload_service import GuiUploadPipelineService
-from .upload_service import MappingContext
-from .upload_service import RootItemPreviewContext
-from .upload_service import ValidationContext
+from .upload_context import MappingContext
+from .upload_context import RootItemPreviewContext
+from .upload_context import ValidationContext
 
 __all__ = [
     "DEFAULT_TRACKER_ITEM_ID_REGEX",
