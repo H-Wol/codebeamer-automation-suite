@@ -28,6 +28,30 @@ class GuiStylesTest(unittest.TestCase):
 
         self.assertEqual(invalid_stylesheet, default_stylesheet)
 
+    def test_build_gui_stylesheet_includes_table_readability_rules(self) -> None:
+        stylesheet = build_gui_stylesheet("kefico")
+
+        self.assertIn("QTableWidget::item", stylesheet)
+        self.assertIn("QTableWidget:disabled", stylesheet)
+        self.assertIn("QHeaderView::section:vertical", stylesheet)
+        self.assertIn("QTableCornerButton::section", stylesheet)
+        self.assertIn("color: #13263A;", stylesheet)
+
+    def test_build_gui_stylesheet_includes_visible_checkbox_states(self) -> None:
+        stylesheet = build_gui_stylesheet("kefico")
+
+        self.assertIn("QCheckBox::indicator {", stylesheet)
+        self.assertIn("QCheckBox::indicator:checked {", stylesheet)
+        self.assertIn("QCheckBox::indicator:checked:disabled {", stylesheet)
+        self.assertIn("QTableWidget QCheckBox", stylesheet)
+        self.assertIn("checkmark.svg", stylesheet)
+
+    def test_build_gui_stylesheet_uses_igloo_checkbox_colors(self) -> None:
+        stylesheet = build_gui_stylesheet("igloo")
+
+        self.assertIn("border-color: #0B6E70;", stylesheet)
+        self.assertIn("background-color: #0B6E70;", stylesheet)
+
 
 if __name__ == "__main__":
     unittest.main()
