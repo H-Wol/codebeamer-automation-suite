@@ -11,11 +11,12 @@
 5. [CLI 사용 가이드](./cli-guide.md)
 6. [필드 지원 추가 가이드](./field-support-guide.md)
 7. [GUI 사용 가이드](./gui-plan.md)
-8. [트러블슈팅](./troubleshooting.md)
-9. [호환 경로 감사](./compatibility.md)
-10. [샘플 데이터 및 자격증명 감사](./security-audit.md)
-11. [GUI 리팩토링 진행 및 검증 기록](./refactoring-progress.md)
-12. [v2 변경 사항](./v2-changes.md)
+8. [트래커 작업공간 GUI 기획 및 스토리보드](./tracker-workspace-gui-storyboard.md)
+9. [트러블슈팅](./troubleshooting.md)
+10. [호환 경로 감사](./compatibility.md)
+11. [샘플 데이터 및 자격증명 감사](./security-audit.md)
+12. [GUI 리팩토링 진행 및 검증 기록](./refactoring-progress.md)
+13. [v2 변경 사항](./v2-changes.md)
 
 ## 문서별 역할
 
@@ -39,6 +40,9 @@
 
 - [GUI 사용 가이드](./gui-plan.md)
   사용자용 GUI 의 실제 단계별 사용 흐름, 테스트 모드, 다중 파일 업로드, 상단 데이터 설정, 현재 구현 범위를 정리합니다.
+
+- [트래커 작업공간 GUI 기획 및 스토리보드](./tracker-workspace-gui-storyboard.md)
+  조회 중심 작업공간으로 GUI를 확장하기 위한 정보 구조, 화면 흐름, 단계별 구현 범위와 브랜치 전략을 정리합니다. 문서의 새 기능은 아직 구현되지 않았습니다.
 
 - [트러블슈팅](./troubleshooting.md)
   자주 발생하는 에러와 대응 방법을 정리합니다.
