@@ -11,7 +11,9 @@ from src.gui.settings_store import GuiSettings
 from src.gui.tracker_item_create_dialog import TrackerItemCreateRequest
 from src.gui.tracker_item_editor import TrackerItemEditorService
 from src.gui.tracker_item_editor import TrackerItemFieldChange
+from src.gui.tracker_query_models import TrackerItemSummary
 from src.gui.tracker_query_service import TrackerQueryService
+from src.gui.tracker_workspace import CHILDREN_LOADED_ROLE
 from src.gui.tracker_workspace import ITEM_SUMMARY_ROLE
 from src.gui.tracker_workspace import TrackerWorkspacePage
 
@@ -218,6 +220,20 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.assertIn("Offline Requirements", self.page.search_scope_label.text())
         self.assertTrue(self.page.search_button.isEnabled())
         self.assertFalse(self.page.create_item_button.isEnabled())
+
+    def test_unknown_child_metadata_keeps_tree_item_expandable(self) -> None:
+        unknown = TrackerItemSummary.from_raw({"id": 1, "name": "Unknown"})
+        known_empty = TrackerItemSummary.from_raw(
+            {"id": 2, "name": "Empty", "hasChildren": False}
+        )
+
+        unknown_item = self.page._tree_item(unknown)
+        empty_item = self.page._tree_item(known_empty)
+
+        self.assertFalse(bool(unknown_item.data(0, CHILDREN_LOADED_ROLE)))
+        self.assertEqual(unknown_item.childCount(), 1)
+        self.assertTrue(bool(empty_item.data(0, CHILDREN_LOADED_ROLE)))
+        self.assertEqual(empty_item.childCount(), 0)
 
     def test_expanding_node_loads_direct_children_once_and_reuses_cache(self) -> None:
         self.page.activate()

@@ -970,8 +970,12 @@ class TrackerWorkspacePage(QWidget):
             ]
         )
         item.setData(0, ITEM_SUMMARY_ROLE, summary)
-        item.setData(0, CHILDREN_LOADED_ROLE, not summary.has_children)
-        if summary.has_children:
+        children_known = summary.child_count is not None or any(
+            key in summary.raw_reference for key in ("hasChildren", "leaf", "children")
+        )
+        children_may_exist = summary.has_children or not children_known
+        item.setData(0, CHILDREN_LOADED_ROLE, not children_may_exist)
+        if children_may_exist:
             item.addChild(self._placeholder_item("펼치면 직접 하위 아이템을 불러옵니다."))
         return item
 
