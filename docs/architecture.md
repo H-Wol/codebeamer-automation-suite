@@ -17,9 +17,9 @@
 
 ### 엔트리 포인트
 
-- `cli_main.py`: 현재 권장 인터랙티브 CLI
+- `gui_main.py`: 현재 기본 PySide6 GUI 엔트리 포인트
+- `cli_main.py`: 유지보수와 보조 실행용 인터랙티브 CLI
 - `main.py`: 과거 엔트리 포인트, 현재 비권장
-- `gui_main.py`: PySide6 기반 GUI 엔트리 포인트
 
 ### 입력 reader
 
@@ -160,6 +160,8 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 `src/gui/`
 
 주요 책임:
+- 최상위에서 `트래커 작업공간`, `배치 작업`, `실행 기록`, `설정` 전환
+- 기존 9단계 create/update/upsert 마법사를 `배치 작업` 안에 보존
 - 단계형 화면 전환과 상태 유지
 - 설정 저장 및 암호화된 비밀번호 저장
 - 전체 설정 preset 저장 및 재적용
@@ -174,6 +176,7 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 
 주요 모듈:
 - `src/gui/main_window.py`
+- `src/gui/batch_window.py`
 - `src/gui/pages.py`
 - `src/gui/services.py`
 - `src/gui/settings_store.py`
@@ -186,7 +189,8 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - 매핑 화면: `src/gui/page_execution_mapping.py`
 - 검증·업로드·결과 화면: `src/gui/page_execution_run.py`
 - 페이지 호환 façade: `src/gui/page_setup.py`, `src/gui/page_execution.py`
-- 메인 윈도우 셸/워크플로/업로드 분리: `src/gui/main_window.py`, `src/gui/window_support.py`, `src/gui/window_shell.py`, `src/gui/window_workflow.py`, `src/gui/window_upload.py`
+- 최상위 앱 셸과 route 전환: `src/gui/main_window.py`
+- 기존 배치 마법사 조합: `src/gui/batch_window.py`, `src/gui/window_support.py`, `src/gui/window_shell.py`, `src/gui/window_workflow.py`, `src/gui/window_upload.py`
 - GUI 서비스 분리: `src/gui/service_core.py`, `src/gui/upload_service.py`
 - 업로드 context 모델: `src/gui/upload_context.py`
 - TRACKER configuration 해석: `src/gui/tracker_config.py`
@@ -230,7 +234,10 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 
 ```mermaid
 flowchart TD
-    A["CLI 또는 GUI 시작"] --> B["온라인 모드 또는 테스트 모드 결정"]
+    A["CLI 또는 GUI 시작"] --> A1{"GUI 실행?"}
+    A1 -->|GUI| A2["앱 셸에서 배치 작업 선택"]
+    A1 -->|CLI| B["온라인 모드 또는 테스트 모드 결정"]
+    A2 --> B
     B --> C["프로젝트 / 트래커 선택"]
     C --> D["하나 이상의 Excel 파일 선택"]
     D --> E["대표 파일 시트 / 헤더 / summary 결정"]
@@ -274,7 +281,7 @@ flowchart TD
 ## End-to-End 흐름
 
 1. 사용자가 `cli_main.py` 또는 `gui_main.py`를 실행합니다.
-2. 엔트리 포인트가 settings, logger, client/service, mapper, wizard를 초기화합니다.
+2. GUI는 앱 셸을 열고 `배치 작업`에서 기존 마법사를 표시하며, CLI는 기존 대화형 흐름으로 바로 진입합니다. 선택된 경로가 settings, service, mapper, wizard를 초기화합니다.
 3. GUI라면 온라인 모드와 테스트 모드 중 하나를 고르고, 테스트 모드에서는 snapshot 기반 client를 사용합니다.
 4. 사용자가 project와 tracker를 선택합니다.
 5. tracker schema를 먼저 조회합니다.

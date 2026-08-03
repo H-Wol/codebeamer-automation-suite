@@ -14,7 +14,13 @@ from src.gui.main_window import _format_upload_progress_text
 from src.gui.main_window import _merge_root_item_page_configs
 from src.gui.main_window import _merge_window_preferences
 from src.gui.main_window import _window_size_from_settings
+from src.gui.main_window import APP_ROUTE_LABELS
 from src.gui.main_window import MainWindow
+from src.gui.main_window import ROUTE_ACTIVITY
+from src.gui.main_window import ROUTE_BATCH_UPLOAD
+from src.gui.main_window import ROUTE_SETTINGS
+from src.gui.main_window import ROUTE_TRACKER_WORKSPACE
+from src.gui.batch_window import BatchUploadWindow
 from src.gui.settings_store import GuiSettings
 from src.gui.settings_store import GuiSettingsStore
 from src.gui.window_support import GuiSessionState
@@ -150,10 +156,103 @@ class GuiMainWindowSmokeTest(unittest.TestCase):
             self._app.processEvents()
 
             self.assertIs(type(window), MainWindow)
-            self.assertIsInstance(window.session_state, GuiSessionState)
-            self.assertIsInstance(window.upload_progress, UploadProgressState)
+            self.assertEqual(window.windowTitle(), "Codebeamer Automation Suite")
             self.assertTrue(window.isVisible())
-            self.assertIs(window.stack.currentWidget(), window.page_scroll_areas[window.settings_page])
+            self.assertEqual(window.route_stack.count(), len(APP_ROUTE_LABELS))
+            self.assertGreaterEqual(window.application_header.height(), 56)
+            self.assertEqual(window.current_route, ROUTE_TRACKER_WORKSPACE)
+            self.assertIs(window.route_stack.currentWidget(), window.tracker_workspace_page)
+            self.assertTrue(window.nav_buttons[ROUTE_TRACKER_WORKSPACE].isChecked())
+
+            self.assertIsInstance(window.batch_window, BatchUploadWindow)
+            self.assertIsInstance(window.batch_window.session_state, GuiSessionState)
+            self.assertIsInstance(window.batch_window.upload_progress, UploadProgressState)
+            self.assertEqual(len(window.batch_window.page_meta), 9)
+            self.assertIs(
+                window.batch_window.stack.currentWidget(),
+                window.batch_window.page_scroll_areas[window.batch_window.settings_page],
+            )
+
+            window.nav_buttons[ROUTE_BATCH_UPLOAD].click()
+            self._app.processEvents()
+            self.assertEqual(window.current_route, ROUTE_BATCH_UPLOAD)
+            self.assertIs(window.route_stack.currentWidget(), window.batch_page)
+            self.assertTrue(window.nav_buttons[ROUTE_BATCH_UPLOAD].isChecked())
+            self.assertFalse(window.statusBar().isVisible())
+
+            window.close()
+            self._app.processEvents()
+
+    def test_main_window_exposes_all_planned_top_level_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            window = MainWindow(GuiSettingsStore(root_dir=Path(temp_dir)))
+
+            self.assertEqual(
+                [button.text() for button in window.nav_buttons.values()],
+                ["트래커 작업공간", "배치 작업", "실행 기록", "설정"],
+            )
+            self.assertEqual(
+                set(window.route_widgets),
+                {
+                    ROUTE_TRACKER_WORKSPACE,
+                    ROUTE_BATCH_UPLOAD,
+                    ROUTE_ACTIVITY,
+                    ROUTE_SETTINGS,
+                },
+            )
+
+            for route, page in window.route_widgets.items():
+                window.nav_buttons[route].click()
+                self._app.processEvents()
+                self.assertEqual(window.current_route, route)
+                self.assertIs(window.route_stack.currentWidget(), page)
+
+            window.close()
+            self._app.processEvents()
+
+    def test_settings_placeholder_can_open_existing_batch_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            window = MainWindow(GuiSettingsStore(root_dir=Path(temp_dir)))
+
+            window.nav_buttons[ROUTE_SETTINGS].click()
+            window._open_existing_batch_settings()
+            self._app.processEvents()
+
+            self.assertEqual(window.current_route, ROUTE_BATCH_UPLOAD)
+            self.assertIs(
+                window.batch_window.stack.currentWidget(),
+                window.batch_window.page_scroll_areas[window.batch_window.settings_page],
+            )
+
+            window.close()
+            self._app.processEvents()
+
+    def test_mode_badge_reflects_offline_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = GuiSettingsStore(root_dir=Path(temp_dir))
+            store.save(GuiSettings(offline_mode=True))
+
+            window = MainWindow(store)
+
+            self.assertEqual(window.mode_badge.text(), "테스트 모드")
+            self.assertEqual(window.mode_badge.property("mode"), "test")
+
+            window.close()
+            self._app.processEvents()
+
+    def test_batch_upload_window_still_runs_as_a_standalone_wizard(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            window = BatchUploadWindow(GuiSettingsStore(root_dir=Path(temp_dir)))
+            window.show()
+            self._app.processEvents()
+
+            self.assertTrue(window.isVisible())
+            self.assertIsInstance(window.session_state, GuiSessionState)
+            self.assertEqual(len(window.page_meta), 9)
+            self.assertIs(
+                window.stack.currentWidget(),
+                window.page_scroll_areas[window.settings_page],
+            )
 
             window.close()
             self._app.processEvents()

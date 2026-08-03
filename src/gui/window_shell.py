@@ -181,6 +181,8 @@ class WindowShellMixin:
         return max(self.minimumHeight(), int(available_height * 0.88))
 
     def _fit_window_to_current_page(self, *, allow_grow: bool) -> None:
+        if bool(getattr(self, "_embedded", False)):
+            return
         page = self._current_page if hasattr(self, "_current_page") else None
         if page is None:
             return
@@ -206,7 +208,11 @@ class WindowShellMixin:
     def resizeEvent(self, event) -> None:
         """Qt 리사이즈 이벤트를 처리한다."""
         super().resizeEvent(event)
-        if not self.isFullScreen() and not self.isMaximized():
+        if (
+            not bool(getattr(self, "_embedded", False))
+            and not self.isFullScreen()
+            and not self.isMaximized()
+        ):
             self._last_normal_window_width = max(int(self.width()), self.minimumWidth())
             self._last_normal_window_height = max(int(self.height()), self.minimumHeight())
         self._update_busy_overlay_geometry()
@@ -214,6 +220,8 @@ class WindowShellMixin:
     def showEvent(self, event) -> None:
         """Qt 표시 이벤트를 처리한다."""
         super().showEvent(event)
+        if bool(getattr(self, "_embedded", False)):
+            return
         if self._initial_window_state_applied:
             return
         self._initial_window_state_applied = True
@@ -224,7 +232,8 @@ class WindowShellMixin:
 
     def closeEvent(self, event) -> None:
         """Qt 종료 이벤트를 처리한다."""
-        self._persist_window_preferences()
+        if bool(getattr(self, "_persist_window_preferences_on_close", True)):
+            self._persist_window_preferences()
         super().closeEvent(event)
 
     def _persist_window_preferences(self) -> None:

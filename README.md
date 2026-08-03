@@ -2,7 +2,7 @@
 
 Excel 기반 계층형 데이터를 Codebeamer Tracker Item으로 변환하고 업로드하는 자동화 도구입니다.
 
-현재 기본 실행 경로는 `cli_main.py`이며, GUI 엔트리 포인트는 `gui_main.py` 입니다.
+현재 기본 실행 경로는 `gui_main.py`이며, `cli_main.py`는 유지보수와 보조 실행에 사용합니다.
 예전 `v2` 경로의 개선 사항은 원본 모듈에 반영되어 있고, GUI도 같은 업로드 파이프라인을 재사용합니다.
 
 ## 현재 지원하는 핵심 기능
@@ -20,7 +20,8 @@ Excel 기반 계층형 데이터를 Codebeamer Tracker Item으로 변환하고 �
 - row별 payload cache 생성과 preview/upload 재사용
 - parent-first 순서 보장 업로드
 - 실행 결과와 중간 산출물 저장
-- PySide6 기반 단계형 GUI
+- `트래커 작업공간`, `배치 작업`, `실행 기록`, `설정`을 전환하는 PySide6 앱 셸
+- `배치 작업` 안에서 기존 9단계 create/update/upsert 마법사 보존
 - GUI 설정 저장 및 암호화된 비밀번호 저장
 - GUI 전체 설정 저장/불러오기와 테마 선택
 - GUI 테스트 모드용 offline schema/config snapshot 로딩
@@ -37,13 +38,13 @@ Excel 기반 계층형 데이터를 Codebeamer Tracker Item으로 변환하고 �
 ## 권장 실행 명령
 
 ```bash
-py -3 cli_main.py
+py -3 gui_main.py
 ```
 
-GUI 실행:
+CLI 보조 실행:
 
 ```bash
-py -3 gui_main.py
+py -3 cli_main.py
 ```
 
 ## GUI 오프라인 예시 데이터
@@ -60,7 +61,8 @@ GUI `테스트 모드`를 바로 눌러볼 수 있는 샘플 세트는 `data/gui
 
 ## GUI 구현 현황
 
-현재 GUI는 아래 단계를 실제 업로드 흐름으로 연결합니다.
+GUI를 실행하면 최상위 앱 셸이 열리고 `트래커 작업공간`, `배치 작업`, `실행 기록`, `설정`을 전환할 수 있습니다.
+현재 실제 업로드 흐름은 `배치 작업` 안에서 아래 9단계 마법사로 이어집니다.
 
 - 설정 화면
   - Base URL, 계정, 비밀번호 암호화 저장
@@ -101,6 +103,8 @@ GUI `테스트 모드`를 바로 눌러볼 수 있는 샘플 세트는 `data/gui
 
 ## 최근 GUI 보완 사항
 
+- 최상위 앱 셸을 추가하고 기존 9단계 마법사를 `배치 작업` 컨테이너에 그대로 보존했습니다.
+- `트래커 작업공간`, `실행 기록`, 전용 `설정`은 단계별 구현 범위를 과장하지 않도록 현재 상태를 안내하는 화면으로 시작합니다.
 - 연결 테스트, 프로젝트/트래커 조회, Excel 미리보기, 매핑 준비, 검증은 `BackgroundTask` 기반으로 실행하고 작업 중 로딩 오버레이와 대기 커서를 표시합니다.
 - 설정, 프로젝트, 파일, 검증 단계는 필수 입력이나 선행 작업이 완료되기 전까지 `다음` 버튼을 비활성화합니다.
 - 파일 단계는 값이 바뀔 때마다 Excel 을 다시 열지 않고, 사용자가 `데이터 불러오기`를 눌렀을 때만 미리보기를 갱신합니다.
@@ -112,7 +116,8 @@ GUI `테스트 모드`를 바로 눌러볼 수 있는 샘플 세트는 `data/gui
 
 ## 프로젝트 구조
 
-- `cli_main.py`: 현재 권장 대화형 CLI
+- `gui_main.py`: 현재 기본 GUI 실행 경로
+- `cli_main.py`: 유지보수와 보조 실행용 대화형 CLI
 - `main.py`: 과거 엔트리 포인트, 현재 비권장
 - `src/codebeamer_client.py`: Codebeamer REST API 클라이언트
 - `src/excel_reader.py`: Excel 파일을 raw DataFrame으로 읽는 입력 계층
@@ -125,8 +130,8 @@ GUI `테스트 모드`를 바로 눌러볼 수 있는 샘플 세트는 `data/gui
 - `src/wizard.py`: 업로드 오케스트레이션 façade
   내부 구현은 데이터, lookup, option 해석, create/update payload, payload cache, 실행 서비스로 분리
 - `src/models/`: reference, field value, tracker item, user info, wizard state 모델
-- `src/gui/`: PySide6 기반 단계형 GUI, 서비스 계층, upload worker
-  내부 구현은 `pages.py`/`main_window.py`/`services.py` façade 아래에 `page_*`, `window_*`, `service_*` 모듈로 분리
+- `src/gui/`: PySide6 기반 앱 셸, 단계형 배치 GUI, 서비스 계층, upload worker
+  `main_window.py`는 최상위 작업 영역을 전환하고 `batch_window.py`는 기존 9단계 마법사를 보존하며, 세부 구현은 `page_*`, `window_*`, `service_*` 모듈로 분리
 - `data/gui-offline-sample/`: GUI 테스트 모드용 snapshot, 다중 Excel 샘플, 사용 안내
 - `docs/`: 사용 가이드와 아키텍처 문서
 

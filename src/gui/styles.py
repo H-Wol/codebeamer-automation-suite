@@ -22,6 +22,103 @@ QWidget#app_root {
     background: #F4F7FB;
 }
 
+QWidget#application_shell_root {
+    background: #F4F7FB;
+}
+
+QFrame#application_header,
+QFrame#application_navigation,
+QFrame#application_content {
+    background: #FFFFFF;
+    border: 1px solid #D8E1EA;
+    border-radius: 10px;
+}
+
+QLabel#application_title {
+    color: #0E4A84;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+QLabel#application_subtitle,
+QLabel#application_route_description {
+    color: #5B6B7F;
+    font-size: 11px;
+}
+
+QLabel#application_mode_badge,
+QLabel#application_phase_badge {
+    color: #0E4A84;
+    background: #EAF4FB;
+    border: 1px solid #CBE4F3;
+    border-radius: 10px;
+    padding: 4px 9px;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+QLabel#application_mode_badge[mode="test"] {
+    color: #8A4B08;
+    background: #FFF3DC;
+    border: 1px solid #F1D49A;
+}
+
+QLabel#application_mode_badge[mode="unconfigured"] {
+    color: #6B7B8D;
+    background: #EEF3F8;
+    border: 1px solid #D8E1EA;
+}
+
+QLabel#application_navigation_title {
+    color: #6B7B8D;
+    padding: 2px 8px 6px 8px;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+QPushButton#application_nav_button {
+    min-height: 36px;
+    padding: 0 12px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #425466;
+    text-align: left;
+}
+
+QPushButton#application_nav_button:hover {
+    background: #F4F8FC;
+    border: 1px solid #E2EAF2;
+}
+
+QPushButton#application_nav_button:checked {
+    color: #0E4A84;
+    background: #DCEFFD;
+    border: 1px solid #B6DAEE;
+}
+
+QWidget#application_route_page,
+QWidget#batch_route_page {
+    background: transparent;
+}
+
+QLabel#application_route_title {
+    color: #13263A;
+    font-size: 20px;
+    font-weight: 700;
+}
+
+QFrame#application_placeholder_card {
+    background: #F8FBFD;
+    border: 1px solid #D8E1EA;
+    border-radius: 10px;
+}
+
+QLabel#application_placeholder_title {
+    color: #13263A;
+    font-size: 13px;
+    font-weight: 700;
+}
+
 QWidget#header_card, QWidget#page_card {
     background: #FFFFFF;
     border: 1px solid #D8E1EA;
@@ -454,6 +551,66 @@ QMainWindow {
 
 QWidget#app_root {
     background: #F2FBFC;
+}
+
+QWidget#application_shell_root {
+    background: #F2FBFC;
+}
+
+QFrame#application_header,
+QFrame#application_navigation,
+QFrame#application_content {
+    border: 1px solid #D3E7E9;
+}
+
+QLabel#application_title,
+QLabel#application_mode_badge,
+QLabel#application_phase_badge {
+    color: #0B6E70;
+}
+
+QLabel#application_subtitle,
+QLabel#application_route_description,
+QLabel#application_navigation_title {
+    color: #60797E;
+}
+
+QLabel#application_mode_badge,
+QLabel#application_phase_badge {
+    background: #E5F7F6;
+    border: 1px solid #BFE6E2;
+}
+
+QLabel#application_mode_badge[mode="test"] {
+    color: #8A4B08;
+    background: #FFF3DC;
+    border: 1px solid #F1D49A;
+}
+
+QLabel#application_mode_badge[mode="unconfigured"] {
+    color: #6C8489;
+    background: #EEF7F8;
+    border: 1px solid #D3E7E9;
+}
+
+QPushButton#application_nav_button {
+    color: #486368;
+}
+
+QPushButton#application_nav_button:hover {
+    background: #F1FAFB;
+    border: 1px solid #D3E7E9;
+}
+
+QPushButton#application_nav_button:checked {
+    color: #0B6E70;
+    background: #D9F0EF;
+    border: 1px solid #AEDFD9;
+}
+
+QFrame#application_placeholder_card {
+    background: #F7FCFC;
+    border: 1px solid #D3E7E9;
 }
 
 QWidget#header_card, QWidget#page_card {

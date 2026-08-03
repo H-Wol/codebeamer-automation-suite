@@ -38,7 +38,7 @@
   새로운 schema field type 또는 reference field를 지원할 때 수정해야 하는 코드 경로와 구현 순서를 설명합니다.
 
 - [GUI 사용 가이드](./gui-plan.md)
-  사용자용 GUI 의 실제 단계별 사용 흐름, 테스트 모드, 다중 파일 업로드, 상단 데이터 설정, 현재 구현 범위를 정리합니다.
+  최상위 앱 셸, 배치 작업의 실제 단계별 사용 흐름, 테스트 모드, 다중 파일 업로드, 상단 데이터 설정, 현재 구현 범위를 정리합니다.
 
 - [트러블슈팅](./troubleshooting.md)
   자주 발생하는 에러와 대응 방법을 정리합니다.
@@ -64,11 +64,17 @@
 
 ## 현재 기준 권장 코드 경로
 
+- `gui_main.py`
+- `src/gui/main_window.py`
+  최상위 앱 셸과 작업 영역 전환을 담당합니다.
+- `src/gui/batch_window.py`
+  기존 9단계 create/update/upsert 마법사를 보존합니다.
 - `cli_main.py`
+  유지보수와 보조 실행 경로입니다.
 - `src/mapping_service.py`
   facade이며 실제 schema/reference/option 로직은 `src/mapping_reference.py`, `src/mapping_schema.py`, `src/mapping_option.py` 로 분리되어 있습니다.
 - `src/wizard.py`
   facade이며 실제 데이터 준비, lookup, option 해석, create/update payload, payload cache, 실행 로직은 책임별 모듈로 분리되어 있습니다.
 - `src/models/`
 - `src/gui/`
-  메인 진입점은 `src/gui/main_window.py`, `src/gui/pages.py`, `src/gui/services.py` 이고, 내부 책임은 page/window/service 하위 모듈로 분리되어 있습니다.
+  화면과 서비스의 내부 책임은 page/window/service 하위 모듈로 분리되어 있습니다.

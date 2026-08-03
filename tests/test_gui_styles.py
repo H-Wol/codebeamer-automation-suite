@@ -21,12 +21,15 @@ class GuiStylesTest(unittest.TestCase):
         self.assertIn("#16B3AC", stylesheet)
         self.assertIn("QPushButton#primary_button", stylesheet)
         self.assertIn("QPushButton#mode_toggle", stylesheet)
+        self.assertIn("QPushButton#application_nav_button:checked", stylesheet)
+        self.assertIn("QFrame#application_placeholder_card", stylesheet)
 
     def test_build_gui_stylesheet_defaults_to_kefico_when_theme_is_invalid(self) -> None:
         default_stylesheet = build_gui_stylesheet(DEFAULT_GUI_THEME)
         invalid_stylesheet = build_gui_stylesheet("nope")
 
         self.assertEqual(invalid_stylesheet, default_stylesheet)
+        self.assertIn("QWidget#application_shell_root", default_stylesheet)
 
 
 if __name__ == "__main__":
