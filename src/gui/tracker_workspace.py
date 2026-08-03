@@ -30,11 +30,14 @@ except ImportError as exc:  # pragma: no cover - GUI dependency guard
 
 from .settings_store import GuiSettings
 from .tracker_item_editor import EditableTrackerField
+from .tracker_item_editor import EditableTrackerSchema
 from .tracker_item_editor import TrackerItemEditorService
 from .tracker_item_editor import TrackerItemFieldChange
 from .tracker_item_editor import TrackerItemWriteError
 from .tracker_item_editor_panel import ConfirmItemDeleteDialog
 from .tracker_item_editor_panel import TrackerItemEditorPanel
+from .tracker_item_create_dialog import TrackerItemCreateDialog
+from .tracker_item_create_dialog import TrackerItemCreateRequest
 from .tracker_query_models import PageResult
 from .tracker_query_models import ProjectSummary
 from .tracker_query_models import TrackerItemContext
@@ -71,6 +74,11 @@ class TrackerWorkspacePage(QWidget):
         editor_service: TrackerItemEditorService | None = None,
         open_settings: Callable[[], None] | None = None,
         delete_confirmer: Callable[[TrackerItemDetail], bool] | None = None,
+        create_request_provider: Callable[
+            [EditableTrackerSchema, TrackerSummary, TrackerItemDetail | None],
+            TrackerItemCreateRequest | None,
+        ]
+        | None = None,
         task_factory=BackgroundTask,
         synchronous: bool = False,
         parent=None,
@@ -84,6 +92,7 @@ class TrackerWorkspacePage(QWidget):
         )
         self.open_settings = open_settings
         self.delete_confirmer = delete_confirmer
+        self.create_request_provider = create_request_provider
         self.task_factory = task_factory
         self.synchronous = bool(synchronous)
 
@@ -103,6 +112,7 @@ class TrackerWorkspacePage(QWidget):
         self._selected_item_id: int | None = None
         self._current_detail: TrackerItemDetail | None = None
         self._pre_editor_splitter_sizes: list[int] | None = None
+        self._create_busy = False
 
         self._build_ui()
         self._reset_workspace("프로젝트와 트래커를 불러오면 조회를 시작할 수 있습니다.")
@@ -171,6 +181,14 @@ class TrackerWorkspacePage(QWidget):
         self.tracker_combo.setMinimumContentsLength(18)
         self.tracker_combo.activated.connect(self._on_tracker_activated)
         context_layout.addWidget(self.tracker_combo, 1)
+
+        self.create_item_button = QPushButton("새 아이템", context_card)
+        self.create_item_button.setObjectName("primary_button")
+        self.create_item_button.setToolTip(
+            "현재 트래커에 최상위 또는 선택 아이템의 하위 항목을 만듭니다."
+        )
+        self.create_item_button.clicked.connect(self._create_item)
+        context_layout.addWidget(self.create_item_button)
 
         self.refresh_context_button = QPushButton("새로고침", context_card)
         self.refresh_context_button.clicked.connect(lambda: self.activate(force=True))
@@ -524,6 +542,7 @@ class TrackerWorkspacePage(QWidget):
         self.search_next_button.setEnabled(False)
 
     def _set_available(self, available: bool) -> None:
+        settings = self.settings_provider()
         self.direct_id_input.setEnabled(available)
         self.direct_open_button.setEnabled(available)
         self.refresh_context_button.setEnabled(available)
@@ -534,6 +553,12 @@ class TrackerWorkspacePage(QWidget):
         self.search_status_input.setEnabled(available and self._current_tracker is not None)
         self.search_assignee_input.setEnabled(available and self._current_tracker is not None)
         self.search_button.setEnabled(available and self._current_tracker is not None)
+        self.create_item_button.setEnabled(
+            available
+            and self._current_tracker is not None
+            and not bool(settings.offline_mode)
+            and not self._create_busy
+        )
 
     def _set_workspace_status(self, message: str, *, tone: str = "info") -> None:
         self.workspace_status_label.setText(str(message or ""))
@@ -997,6 +1022,226 @@ class TrackerWorkspacePage(QWidget):
     def _reload_current_detail(self) -> None:
         if self._selected_item_id is not None:
             self._load_detail(self._selected_item_id)
+
+    def _create_item(self) -> None:
+        tracker = self._current_tracker
+        if tracker is None:
+            self._set_workspace_status("생성할 트래커를 먼저 선택하세요.", tone="warning")
+            return
+        settings = self.settings_provider()
+        if bool(settings.offline_mode):
+            self._set_workspace_status(
+                "테스트 모드에서는 새 아이템을 생성할 수 없습니다.",
+                tone="warning",
+            )
+            return
+
+        tracker_id = tracker.tracker_id
+        selected_detail = (
+            self._current_detail
+            if self._current_detail is not None
+            and self._current_detail.summary.tracker_id == tracker_id
+            else None
+        )
+        self._create_busy = True
+        self._set_available(True)
+        self._set_workspace_status(
+            f"'{tracker.name}' 트래커의 생성 필드를 확인하는 중입니다.",
+            tone="loading",
+        )
+
+        def schema_loaded(schema: EditableTrackerSchema) -> None:
+            current_tracker = self._current_tracker
+            if current_tracker is None or current_tracker.tracker_id != tracker_id:
+                self._finish_create_busy()
+                return
+            try:
+                request = (
+                    self.create_request_provider(schema, current_tracker, selected_detail)
+                    if self.create_request_provider is not None
+                    else TrackerItemCreateDialog.request(
+                        schema,
+                        tracker_name=current_tracker.name,
+                        selected_detail=selected_detail,
+                        parent=self,
+                    )
+                )
+            except Exception as exc:
+                self._finish_create_busy()
+                self._show_error(exc, prefix="생성 입력 준비 실패")
+                return
+            if request is None:
+                self._finish_create_busy()
+                self._set_workspace_status("새 아이템 생성을 취소했습니다.")
+                return
+            parent_detail = (
+                selected_detail
+                if selected_detail is not None
+                and request.parent_item_id == selected_detail.item_id
+                else None
+            )
+            self._set_workspace_status(
+                f"'{current_tracker.name}' 트래커에 새 아이템을 생성하는 중입니다.",
+                tone="loading",
+            )
+
+            def created(detail: TrackerItemDetail) -> None:
+                self._finish_create_busy()
+                self._show_created_item(
+                    detail,
+                    parent_item_id=request.parent_item_id,
+                    parent_detail=parent_detail,
+                )
+
+            def create_failed(exc: Exception) -> None:
+                self._finish_create_busy()
+                prefix = (
+                    "생성 결과 확인 필요"
+                    if isinstance(exc, TrackerItemWriteError)
+                    and exc.operation in {
+                        "create_item_response",
+                        "load_created_detail",
+                    }
+                    else "아이템 생성 실패"
+                )
+                self._show_error(exc, prefix=prefix)
+
+            self._submit(
+                "item_create",
+                lambda: self.editor_service.create_item(
+                    settings,
+                    tracker_id=tracker_id,
+                    schema=schema,
+                    changes=request.changes,
+                    parent_item_id=request.parent_item_id,
+                ),
+                created,
+                create_failed,
+            )
+
+        def schema_failed(exc: Exception) -> None:
+            self._finish_create_busy()
+            self._show_error(exc, prefix="생성 schema 조회 실패")
+
+        self._submit(
+            "create_schema",
+            lambda: self.editor_service.load_create_schema(settings, tracker_id),
+            schema_loaded,
+            schema_failed,
+        )
+
+    def _finish_create_busy(self) -> None:
+        self._create_busy = False
+        available, _ = self._settings_available(self.settings_provider())
+        self._set_available(available)
+
+    def _find_tree_item(self, item_id: int) -> QTreeWidgetItem | None:
+        def find_from(item: QTreeWidgetItem) -> QTreeWidgetItem | None:
+            summary = item.data(0, ITEM_SUMMARY_ROLE)
+            if isinstance(summary, TrackerItemSummary) and summary.item_id == int(item_id):
+                return item
+            for child_index in range(item.childCount()):
+                found = find_from(item.child(child_index))
+                if found is not None:
+                    return found
+            return None
+
+        for top_index in range(self.item_tree.topLevelItemCount()):
+            found = find_from(self.item_tree.topLevelItem(top_index))
+            if found is not None:
+                return found
+        return None
+
+    def _show_created_item(
+        self,
+        detail: TrackerItemDetail,
+        *,
+        parent_item_id: int | None,
+        parent_detail: TrackerItemDetail | None,
+    ) -> None:
+        tracker_id = detail.summary.tracker_id
+        if tracker_id is not None:
+            self._invalidate_tracker_cache(tracker_id)
+
+        self.item_tree.blockSignals(True)
+        try:
+            created_item = self._tree_item(detail.summary)
+            if parent_item_id is None:
+                self.item_tree.insertTopLevelItem(0, created_item)
+            else:
+                parent_item = self._find_tree_item(parent_item_id)
+                if parent_item is None:
+                    parent_summary = (
+                        parent_detail.summary
+                        if parent_detail is not None
+                        else TrackerItemSummary(
+                            item_id=int(parent_item_id),
+                            name=(
+                                detail.parent.name
+                                if detail.parent is not None
+                                else str(parent_item_id)
+                            ),
+                            tracker_id=detail.summary.tracker_id,
+                            tracker_name=detail.summary.tracker_name,
+                            project_id=detail.summary.project_id,
+                            project_name=detail.summary.project_name,
+                            has_children=True,
+                        )
+                    )
+                    parent_item = self._tree_item(
+                        replace(parent_summary, has_children=True)
+                    )
+                    parent_item.takeChildren()
+                    parent_item.setData(0, CHILDREN_LOADED_ROLE, False)
+                    self.item_tree.clear()
+                    self.item_tree.addTopLevelItem(parent_item)
+                parent_summary = parent_item.data(0, ITEM_SUMMARY_ROLE)
+                if isinstance(parent_summary, TrackerItemSummary):
+                    current_count = parent_summary.child_count or 0
+                    parent_item.setData(
+                        0,
+                        ITEM_SUMMARY_ROLE,
+                        replace(
+                            parent_summary,
+                            has_children=True,
+                            child_count=max(current_count + 1, 1),
+                        ),
+                    )
+                placeholder_index = next(
+                    (
+                        index
+                        for index in range(parent_item.childCount())
+                        if bool(parent_item.child(index).data(0, PLACEHOLDER_ROLE))
+                    ),
+                    -1,
+                )
+                if placeholder_index >= 0:
+                    parent_item.insertChild(placeholder_index, created_item)
+                else:
+                    parent_item.addChild(created_item)
+                parent_item.setExpanded(True)
+            self.item_tree.clearSelection()
+            self.item_tree.setCurrentItem(created_item)
+            created_item.setSelected(True)
+            self.item_tree.scrollToItem(created_item)
+        finally:
+            self.item_tree.blockSignals(False)
+
+        self.browser_tabs.setCurrentIndex(0)
+        self.detail_tabs.setCurrentIndex(0)
+        self._selected_item_id = detail.item_id
+        self._render_detail(detail)
+        position_text = (
+            "최상위"
+            if parent_item_id is None
+            else f"#{parent_item_id}의 하위"
+        )
+        self.tree_status_label.setText(
+            f"새 아이템 #{detail.item_id} · {position_text} · 전체 목록은 다시 불러오기로 갱신"
+        )
+        self._set_workspace_status(
+            f"#{detail.item_id} '{detail.summary.name}' 아이템을 생성했습니다."
+        )
 
     def _run_search(self, *, page: int = 1, reuse: bool = False) -> None:
         tracker = self._current_tracker

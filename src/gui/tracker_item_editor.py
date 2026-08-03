@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from enum import Enum
 import re
 from typing import Any
@@ -278,14 +279,12 @@ def _editor_kind(
     return FieldEditorKind.UNSUPPORTED, "현재 편집기가 이 필드 형식을 지원하지 않습니다."
 
 
-def build_editable_tracker_schema(
+def _build_tracker_schema(
     schema: dict[str, Any],
-    detail: TrackerItemDetail,
+    *,
+    tracker_id: int,
+    detail: TrackerItemDetail | None,
 ) -> EditableTrackerSchema:
-    tracker_id = detail.summary.tracker_id
-    if tracker_id is None:
-        raise ValueError("아이템의 소속 트래커 ID를 확인할 수 없습니다.")
-
     normalized_fields: list[EditableTrackerField] = []
     status_field: EditableTrackerField | None = None
     for raw_field in _schema_field_payloads(schema):
@@ -335,6 +334,7 @@ def build_editable_tracker_schema(
             "createdBy",
             "modifiedAt",
             "modifiedBy",
+            "parent",
             "children",
             "comments",
         }:
@@ -353,11 +353,15 @@ def build_editable_tracker_schema(
             mandatory=bool(raw_field.get("mandatory", False)),
             editor_kind=editor_kind,
             options=options,
-            current_value=_field_current_value(
-                detail,
-                field_id=field_id,
-                name=name,
-                tracker_item_field=tracker_item_field,
+            current_value=(
+                None
+                if detail is None
+                else _field_current_value(
+                    detail,
+                    field_id=field_id,
+                    name=name,
+                    tracker_item_field=tracker_item_field,
+                )
             ),
             unsupported_reason=unsupported_reason,
             raw_schema=deepcopy(raw_field),
@@ -372,6 +376,45 @@ def build_editable_tracker_schema(
         tracker_id=int(tracker_id),
         fields=tuple(normalized_fields),
         status_field=status_field,
+    )
+
+
+def build_editable_tracker_schema(
+    schema: dict[str, Any],
+    detail: TrackerItemDetail,
+) -> EditableTrackerSchema:
+    tracker_id = detail.summary.tracker_id
+    if tracker_id is None:
+        raise ValueError("아이템의 소속 트래커 ID를 확인할 수 없습니다.")
+    return _build_tracker_schema(
+        schema,
+        tracker_id=int(tracker_id),
+        detail=detail,
+    )
+
+
+def build_create_tracker_schema(
+    schema: dict[str, Any],
+    tracker_id: int,
+) -> EditableTrackerSchema:
+    normalized_tracker_id = _optional_int(tracker_id)
+    if normalized_tracker_id is None or normalized_tracker_id <= 0:
+        raise ValueError("생성 대상 트래커 ID가 올바르지 않습니다.")
+    normalized_schema = _build_tracker_schema(
+        schema,
+        tracker_id=normalized_tracker_id,
+        detail=None,
+    )
+    fields = tuple(
+        replace(field_value, mandatory=True)
+        if field_value.tracker_item_field == "name" and not field_value.mandatory
+        else field_value
+        for field_value in normalized_schema.fields
+    )
+    return EditableTrackerSchema(
+        tracker_id=normalized_schema.tracker_id,
+        fields=fields,
+        status_field=normalized_schema.status_field,
     )
 
 
@@ -501,8 +544,109 @@ def build_field_value(change: TrackerItemFieldChange) -> dict[str, Any]:
     return payload
 
 
+def _builtin_create_value(
+    field_value: EditableTrackerField,
+    field_payload: dict[str, Any],
+) -> Any:
+    if field_value.editor_kind in {
+        FieldEditorKind.TEXT,
+        FieldEditorKind.MULTILINE_TEXT,
+        FieldEditorKind.BOOLEAN,
+        FieldEditorKind.INTEGER,
+        FieldEditorKind.DECIMAL,
+        FieldEditorKind.DATE,
+        FieldEditorKind.DATETIME,
+    }:
+        return deepcopy(field_payload.get("value"))
+    if field_value.editor_kind in {
+        FieldEditorKind.CHOICE,
+        FieldEditorKind.REFERENCE,
+    }:
+        references = deepcopy(field_payload.get("values") or [])
+        if field_value.multiple_values:
+            return references
+        return references[0] if references else None
+    raise ValueError(f"'{field_value.label}'은(는) 생성 payload로 변환할 수 없습니다.")
+
+
+def _is_create_status_field(field_value: EditableTrackerField) -> bool:
+    return field_value.is_status or field_value.tracker_item_field == "status"
+
+
+def build_create_item_payload(
+    schema: EditableTrackerSchema,
+    changes: Iterable[TrackerItemFieldChange],
+) -> dict[str, Any]:
+    """명시적으로 포함한 필드를 신규 item payload로 변환한다."""
+    normalized_changes = tuple(changes)
+    schema_fields = {field_value.field_id: field_value for field_value in schema.fields}
+    field_ids = [change.field.field_id for change in normalized_changes]
+    if len(field_ids) != len(set(field_ids)):
+        raise ValueError("같은 필드가 생성 입력에 중복되어 있습니다.")
+
+    unknown_ids = [field_id for field_id in field_ids if field_id not in schema_fields]
+    if unknown_ids:
+        raise ValueError("현재 트래커 schema에 없는 필드가 생성 입력에 포함되었습니다.")
+
+    selected_by_id = {change.field.field_id: change.value for change in normalized_changes}
+    required_fields = tuple(
+        field_value
+        for field_value in schema.fields
+        if field_value.mandatory and not _is_create_status_field(field_value)
+    )
+    unsupported_required = [
+        field_value.label for field_value in required_fields if not field_value.editable
+    ]
+    if unsupported_required:
+        raise ValueError(
+            "필수 필드의 입력 형식을 지원하지 않습니다: "
+            + ", ".join(unsupported_required)
+        )
+    missing_required = [
+        field_value.label
+        for field_value in required_fields
+        if field_value.field_id not in selected_by_id
+    ]
+    if missing_required:
+        raise ValueError("필수 필드를 입력하세요: " + ", ".join(missing_required))
+
+    payload: dict[str, Any] = {}
+    custom_fields: list[dict[str, Any]] = []
+    builtin_targets: set[str] = set()
+    for change in normalized_changes:
+        canonical_field = schema_fields[change.field.field_id]
+        if _is_create_status_field(canonical_field):
+            raise ValueError("상태는 생성 후 별도의 상태 전환으로 변경해야 합니다.")
+        if not canonical_field.editable:
+            raise ValueError(
+                canonical_field.unsupported_reason
+                or f"'{canonical_field.label}' 필드는 생성에 사용할 수 없습니다."
+            )
+        canonical_change = TrackerItemFieldChange(canonical_field, change.value)
+        field_payload = build_field_value(canonical_change)
+        tracker_item_field = str(canonical_field.tracker_item_field or "").strip()
+        if tracker_item_field:
+            if tracker_item_field in builtin_targets:
+                raise ValueError(
+                    f"'{canonical_field.label}'의 생성 대상 필드가 중복되었습니다."
+                )
+            builtin_targets.add(tracker_item_field)
+            payload[tracker_item_field] = _builtin_create_value(
+                canonical_field,
+                field_payload,
+            )
+        else:
+            custom_fields.append(field_payload)
+
+    if _is_empty(payload.get("name")):
+        raise ValueError("'Summary' 필수값을 입력하세요.")
+    if custom_fields:
+        payload["customFields"] = custom_fields
+    return payload
+
+
 _WRITE_MESSAGES = {
-    TrackerItemWriteErrorKind.WRITE_DISABLED: "테스트 모드에서는 아이템을 수정하거나 삭제할 수 없습니다.",
+    TrackerItemWriteErrorKind.WRITE_DISABLED: "테스트 모드에서는 아이템을 생성·수정·삭제할 수 없습니다.",
     TrackerItemWriteErrorKind.CONFLICT: "다른 사용자가 이 아이템을 변경했습니다. 최신 상세를 다시 불러오세요.",
     TrackerItemWriteErrorKind.INVALID_VALUE: "변경값을 적용할 수 없습니다. 필드 값과 필수 조건을 확인하세요.",
     TrackerItemWriteErrorKind.UNAUTHORIZED: "Codebeamer 인증에 실패했습니다. 활성 연결 정보를 확인하세요.",
@@ -545,7 +689,7 @@ def classify_tracker_item_write_error(
 
 
 class TrackerItemEditorService:
-    """Schema 기반 부분 필드 수정, 상태 전환과 삭제를 안전하게 실행한다."""
+    """Schema 기반 단건 생성, 부분 수정, 상태 전환과 삭제를 실행한다."""
 
     def __init__(
         self,
@@ -615,6 +759,95 @@ class TrackerItemEditorService:
             "load_editor_schema",
             lambda: build_editable_tracker_schema(schema, detail),
         )
+
+    def load_create_schema(
+        self,
+        settings,
+        tracker_id: int,
+    ) -> EditableTrackerSchema:
+        schema = self.query_service.load_tracker_schema(settings, int(tracker_id))
+        return self._run(
+            "load_create_schema",
+            lambda: build_create_tracker_schema(schema, int(tracker_id)),
+        )
+
+    def create_item(
+        self,
+        settings,
+        *,
+        tracker_id: int,
+        schema: EditableTrackerSchema,
+        changes: Iterable[TrackerItemFieldChange],
+        parent_item_id: int | None = None,
+    ) -> TrackerItemDetail:
+        self._ensure_write_enabled(settings)
+        normalized_tracker_id = _optional_int(tracker_id)
+        if normalized_tracker_id is None or normalized_tracker_id <= 0:
+            raise TrackerItemWriteError(
+                TrackerItemWriteErrorKind.INVALID_VALUE,
+                "생성 대상 트래커 ID가 올바르지 않습니다.",
+                operation="create_item",
+            )
+        if schema.tracker_id != normalized_tracker_id:
+            raise TrackerItemWriteError(
+                TrackerItemWriteErrorKind.INVALID_VALUE,
+                "불러온 schema와 생성 대상 트래커가 일치하지 않습니다.",
+                operation="create_item",
+            )
+        try:
+            payload = build_create_item_payload(schema, changes)
+        except (TypeError, ValueError) as exc:
+            raise TrackerItemWriteError(
+                TrackerItemWriteErrorKind.INVALID_VALUE,
+                str(exc) or _WRITE_MESSAGES[TrackerItemWriteErrorKind.INVALID_VALUE],
+                operation="build_create_payload",
+            ) from exc
+
+        normalized_parent_id = _optional_int(parent_item_id)
+        if parent_item_id is not None and (
+            normalized_parent_id is None or normalized_parent_id <= 0
+        ):
+            raise TrackerItemWriteError(
+                TrackerItemWriteErrorKind.INVALID_VALUE,
+                "상위 아이템 ID가 올바르지 않습니다.",
+                operation="verify_create_parent",
+            )
+        if normalized_parent_id is not None:
+            parent_detail = self._run(
+                "verify_create_parent",
+                lambda: self.query_service.load_detail(settings, normalized_parent_id),
+            )
+            if parent_detail.summary.tracker_id != normalized_tracker_id:
+                raise TrackerItemWriteError(
+                    TrackerItemWriteErrorKind.INVALID_VALUE,
+                    "선택한 상위 아이템은 현재 트래커에 속하지 않습니다.",
+                    operation="verify_create_parent",
+                )
+
+        client = self._run("build_write_client", lambda: self._client(settings))
+        response = self._run(
+            "create_item",
+            lambda: client.create_item(
+                normalized_tracker_id,
+                payload,
+                parent_item_id=normalized_parent_id,
+            ),
+        )
+        item_id = _optional_int(response.get("id") if isinstance(response, dict) else None)
+        if item_id is None or item_id <= 0:
+            raise TrackerItemWriteError(
+                TrackerItemWriteErrorKind.UNKNOWN,
+                "서버가 생성된 아이템 ID를 반환하지 않았습니다. 중복 생성을 피하려면 트래커에서 결과를 확인하세요.",
+                operation="create_item_response",
+            )
+        try:
+            return self.query_service.load_detail(settings, item_id)
+        except Exception as exc:
+            raise TrackerItemWriteError(
+                TrackerItemWriteErrorKind.UNKNOWN,
+                f"아이템 #{item_id} 생성은 완료됐지만 상세를 다시 불러오지 못했습니다. ID 바로 열기로 확인하세요.",
+                operation="load_created_detail",
+            ) from exc
 
     def update_fields(
         self,
@@ -718,6 +951,8 @@ __all__ = [
     "TrackerItemFieldChange",
     "TrackerItemWriteError",
     "TrackerItemWriteErrorKind",
+    "build_create_item_payload",
+    "build_create_tracker_schema",
     "build_editable_tracker_schema",
     "build_field_value",
     "classify_tracker_item_write_error",

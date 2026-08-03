@@ -34,6 +34,136 @@ from .tracker_item_editor import TrackerItemFieldChange
 from .tracker_query_models import TrackerItemDetail
 
 
+_FIELD_CURRENT_VALUE = object()
+
+
+def tracker_field_boolean_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().casefold() in {"true", "1", "yes", "예"}
+
+
+def tracker_field_reference_ids(value: Any) -> tuple[int, ...]:
+    values = value if isinstance(value, (list, tuple)) else (value,)
+    normalized: list[int] = []
+    for raw_value in values:
+        if isinstance(raw_value, dict):
+            raw_value = raw_value.get("id")
+        try:
+            item_id = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if item_id not in normalized:
+            normalized.append(item_id)
+    return tuple(normalized)
+
+
+def tracker_field_single_reference_id(value: Any) -> int | None:
+    values = tracker_field_reference_ids(value)
+    return values[0] if values else None
+
+
+def create_tracker_field_input_widget(
+    field_value: EditableTrackerField,
+    parent: QWidget,
+    *,
+    initial_value: Any = _FIELD_CURRENT_VALUE,
+) -> QWidget | None:
+    """수정·생성 화면이 공유하는 schema 유형별 입력 widget을 만든다."""
+    kind = field_value.editor_kind
+    current = (
+        field_value.current_value
+        if initial_value is _FIELD_CURRENT_VALUE
+        else initial_value
+    )
+    if not field_value.editable:
+        return None
+    if kind == FieldEditorKind.MULTILINE_TEXT:
+        widget = QPlainTextEdit(parent)
+        widget.setPlainText(str(current or ""))
+        return widget
+    if kind in {
+        FieldEditorKind.TEXT,
+        FieldEditorKind.INTEGER,
+        FieldEditorKind.DECIMAL,
+        FieldEditorKind.DATE,
+        FieldEditorKind.DATETIME,
+    }:
+        widget = QLineEdit(parent)
+        widget.setText("" if current is None else str(current))
+        if kind == FieldEditorKind.INTEGER:
+            widget.setValidator(QIntValidator(widget))
+        elif kind == FieldEditorKind.DECIMAL:
+            widget.setValidator(QDoubleValidator(widget))
+        elif kind == FieldEditorKind.DATE:
+            widget.setPlaceholderText("YYYY-MM-DD")
+        elif kind == FieldEditorKind.DATETIME:
+            widget.setPlaceholderText("YYYY-MM-DDThh:mm:ss")
+        return widget
+    if kind == FieldEditorKind.BOOLEAN:
+        widget = QComboBox(parent)
+        widget.addItem("예", True)
+        widget.addItem("아니요", False)
+        widget.setCurrentIndex(0 if tracker_field_boolean_value(current) else 1)
+        return widget
+    if kind == FieldEditorKind.CHOICE:
+        current_ids = set(tracker_field_reference_ids(current))
+        if field_value.multiple_values:
+            widget = QListWidget(parent)
+            for option in field_value.options:
+                item = QListWidgetItem(option.name)
+                item.setData(Qt.ItemDataRole.UserRole, option.option_id)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(
+                    Qt.CheckState.Checked
+                    if option.option_id in current_ids
+                    else Qt.CheckState.Unchecked
+                )
+                widget.addItem(item)
+            return widget
+        widget = QComboBox(parent)
+        widget.addItem("(값 비우기)", None)
+        for option in field_value.options:
+            widget.addItem(option.name, option.option_id)
+        current_id = next(iter(current_ids), None)
+        index = widget.findData(current_id)
+        widget.setCurrentIndex(index if index >= 0 else 0)
+        return widget
+    if kind == FieldEditorKind.REFERENCE:
+        current_ids = tracker_field_reference_ids(current)
+        input_text = "\n".join(str(value) for value in current_ids)
+        if field_value.multiple_values:
+            widget = QPlainTextEdit(parent)
+            widget.setPlaceholderText("한 줄에 참조 ID 하나")
+            widget.setPlainText(input_text)
+            return widget
+        widget = QLineEdit(parent)
+        widget.setPlaceholderText("참조 ID")
+        widget.setText(input_text)
+        widget.setValidator(QIntValidator(1, 2_147_483_647, widget))
+        return widget
+    return None
+
+
+def tracker_field_input_value(
+    field_value: EditableTrackerField,
+    widget: QWidget,
+) -> Any:
+    if isinstance(widget, QPlainTextEdit):
+        return widget.toPlainText()
+    if isinstance(widget, QLineEdit):
+        return widget.text()
+    if isinstance(widget, QComboBox):
+        return widget.currentData()
+    if isinstance(widget, QListWidget):
+        return tuple(
+            widget.item(index).data(Qt.ItemDataRole.UserRole)
+            for index in range(widget.count())
+            if widget.item(index).checkState() == Qt.CheckState.Checked
+        )
+    raise TypeError(f"지원하지 않는 편집 widget입니다: {field_value.label}")
+
+
 @dataclass
 class _EditorRow:
     row: int
@@ -273,102 +403,19 @@ class TrackerItemEditorPanel(QWidget):
         self.field_table.blockSignals(False)
 
     def _create_editor_widget(self, field_value: EditableTrackerField) -> QWidget | None:
-        kind = field_value.editor_kind
-        current = field_value.current_value
-        if not field_value.editable:
-            return None
-        if kind == FieldEditorKind.MULTILINE_TEXT:
-            widget = QPlainTextEdit(self.field_table)
-            widget.setPlainText(str(current or ""))
-            return widget
-        if kind in {
-            FieldEditorKind.TEXT,
-            FieldEditorKind.INTEGER,
-            FieldEditorKind.DECIMAL,
-            FieldEditorKind.DATE,
-            FieldEditorKind.DATETIME,
-        }:
-            widget = QLineEdit(self.field_table)
-            widget.setText("" if current is None else str(current))
-            if kind == FieldEditorKind.INTEGER:
-                widget.setValidator(QIntValidator(widget))
-            elif kind == FieldEditorKind.DECIMAL:
-                widget.setValidator(QDoubleValidator(widget))
-            elif kind == FieldEditorKind.DATE:
-                widget.setPlaceholderText("YYYY-MM-DD")
-            elif kind == FieldEditorKind.DATETIME:
-                widget.setPlaceholderText("YYYY-MM-DDThh:mm:ss")
-            return widget
-        if kind == FieldEditorKind.BOOLEAN:
-            widget = QComboBox(self.field_table)
-            widget.addItem("예", True)
-            widget.addItem("아니요", False)
-            current_bool = self._boolean_value(current)
-            widget.setCurrentIndex(0 if current_bool else 1)
-            return widget
-        if kind == FieldEditorKind.CHOICE:
-            current_ids = set(self._reference_ids(current))
-            if field_value.multiple_values:
-                widget = QListWidget(self.field_table)
-                for option in field_value.options:
-                    item = QListWidgetItem(option.name)
-                    item.setData(Qt.ItemDataRole.UserRole, option.option_id)
-                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                    item.setCheckState(
-                        Qt.CheckState.Checked
-                        if option.option_id in current_ids
-                        else Qt.CheckState.Unchecked
-                    )
-                    widget.addItem(item)
-                return widget
-            widget = QComboBox(self.field_table)
-            widget.addItem("(값 비우기)", None)
-            for option in field_value.options:
-                widget.addItem(option.name, option.option_id)
-            current_id = next(iter(current_ids), None)
-            index = widget.findData(current_id)
-            widget.setCurrentIndex(index if index >= 0 else 0)
-            return widget
-        if kind == FieldEditorKind.REFERENCE:
-            current_ids = self._reference_ids(current)
-            text = "\n".join(str(value) for value in current_ids)
-            if field_value.multiple_values:
-                widget = QPlainTextEdit(self.field_table)
-                widget.setPlaceholderText("한 줄에 참조 ID 하나")
-                widget.setPlainText(text)
-                return widget
-            widget = QLineEdit(self.field_table)
-            widget.setPlaceholderText("참조 ID")
-            widget.setText(text)
-            widget.setValidator(QIntValidator(1, 2_147_483_647, widget))
-            return widget
-        return None
+        return create_tracker_field_input_widget(field_value, self.field_table)
 
     @staticmethod
     def _boolean_value(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        return str(value or "").strip().casefold() in {"true", "1", "yes", "예"}
+        return tracker_field_boolean_value(value)
 
     @staticmethod
     def _reference_ids(value: Any) -> tuple[int, ...]:
-        values = value if isinstance(value, (list, tuple)) else (value,)
-        normalized: list[int] = []
-        for raw_value in values:
-            if isinstance(raw_value, dict):
-                raw_value = raw_value.get("id")
-            try:
-                item_id = int(raw_value)
-            except (TypeError, ValueError):
-                continue
-            if item_id not in normalized:
-                normalized.append(item_id)
-        return tuple(normalized)
+        return tracker_field_reference_ids(value)
 
     @classmethod
     def _single_reference_id(cls, value: Any) -> int | None:
-        values = cls._reference_ids(value)
-        return values[0] if values else None
+        return tracker_field_single_reference_id(value)
 
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
         if item.column() != 0:
@@ -402,19 +449,7 @@ class TrackerItemEditorPanel(QWidget):
 
     @staticmethod
     def _widget_value(field_value: EditableTrackerField, widget: QWidget) -> Any:
-        if isinstance(widget, QPlainTextEdit):
-            return widget.toPlainText()
-        if isinstance(widget, QLineEdit):
-            return widget.text()
-        if isinstance(widget, QComboBox):
-            return widget.currentData()
-        if isinstance(widget, QListWidget):
-            return tuple(
-                widget.item(index).data(Qt.ItemDataRole.UserRole)
-                for index in range(widget.count())
-                if widget.item(index).checkState() == Qt.CheckState.Checked
-            )
-        raise TypeError(f"지원하지 않는 편집 widget입니다: {field_value.label}")
+        return tracker_field_input_value(field_value, widget)
 
     def reset_values(self) -> None:
         if self.detail is None or self.schema is None:
@@ -551,4 +586,6 @@ class ConfirmItemDeleteDialog(QDialog):
 __all__ = [
     "ConfirmItemDeleteDialog",
     "TrackerItemEditorPanel",
+    "create_tracker_field_input_widget",
+    "tracker_field_input_value",
 ]

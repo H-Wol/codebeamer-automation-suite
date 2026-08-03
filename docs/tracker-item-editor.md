@@ -1,15 +1,17 @@
-# 트래커 아이템 수정·상태 전환·삭제
+# 트래커 아이템 단건 생성·수정·상태 전환·삭제
 
 ## 목적
 
-`TrackerWorkspacePage`의 `수정` 탭은 선택한 아이템의 tracker schema를 기준으로 입력 UI를 만들고,
-체크한 필드만 부분 업데이트합니다. 상태 전환과 삭제는 일반 필드 저장과 분리합니다.
+`TrackerWorkspacePage`는 선택한 tracker schema를 기준으로 단건 생성 입력 UI를 만들고,
+`수정` 탭에서는 체크한 필드만 부분 업데이트합니다. 상태 전환과 삭제는 일반 필드 저장과 분리합니다.
 관계, 댓글, 첨부와 이력 편집은 아직 이 범위에 포함하지 않습니다.
 
 ## API 계약
 
 | 기능 | V3 endpoint | 구현 위치 |
 | --- | --- | --- |
+| 단건 생성 | `POST /v3/trackers/{trackerId}/items` | `TrackerItemEditorService.create_item()` |
+| 선택 아이템의 하위 생성 | 위 endpoint와 `parentItemId` query | `TrackerItemEditorService.create_item()` |
 | 선택 필드 수정 | `PUT /v3/items/{itemId}/fields` | `CodebeamerClient.update_item_fields()` |
 | 상태 전환 | `PUT /v3/items/{itemId}/fields`의 Status `ChoiceFieldValue` | `TrackerItemEditorService.transition_status()` |
 | 아이템 삭제 | `DELETE /v3/items/{itemId}` | `CodebeamerClient.delete_item()` |
@@ -19,9 +21,28 @@
 
 참고:
 
+- [PTC Creating a Tracker Item](https://support.ptc.com/help/codebeamer/r3.2/en/codebeamer/developers_guide/swagger/11375769.html)
 - [PTC Modifying Tracker Items](https://support.ptc.com/help/codebeamer/r3.0/en/codebeamer/developers_guide/swagger/dg_modifying_a_tracker_item.html)
 - [PTC Making a Tracker Item Status Transition](https://support.ptc.com/help/codebeamer/r2.2/en/codebeamer/developers_guide/dg_making_tracker_item_status_transition.html)
 - [PTC Deleting a Tracker Item](https://support.ptc.com/help/codebeamer/r2.2/en/codebeamer/developers_guide/dg_deleting_tracker_item.html)
+
+## 단건 생성 흐름
+
+1. 프로젝트와 트래커를 선택합니다.
+2. 컨텍스트 영역의 `새 아이템`을 누릅니다.
+3. 최상위 생성을 유지하거나, 현재 선택 아이템이 같은 tracker에 속하면 그 아이템의 하위 생성을 선택합니다.
+4. 필수 필드는 항상 포함된 상태로 입력하고, 선택 필드는 `포함`을 체크한 항목만 입력합니다.
+5. 생성 화면이 schema 기준으로 필수값, option, 단일·다중 참조 형식을 검증합니다.
+6. 서비스가 하위 생성의 상위 아이템이 현재 tracker에 속하는지 다시 확인한 뒤 생성 API를 호출합니다.
+7. 생성된 ID로 상세를 다시 조회하고, 새 노드를 계층 트리에 선택한 상태로 추가해 오른쪽 상세를 엽니다.
+
+생성 위치는 실수로 잘못된 계층에 넣는 일을 줄이기 위해 `최상위 아이템`을 기본값으로 사용합니다.
+Status는 생성 payload에 넣지 않고 서버 기본 상태로 생성합니다. 다른 상태가 필요하면 생성 후 `수정` 탭의
+별도 상태 전환을 사용합니다. 관계와 댓글 입력은 단건 생성 화면에 아직 포함하지 않습니다.
+
+schema가 필수로 지정한 필드 중 현재 UI가 지원하지 않는 유형이 있으면 생성 버튼을 비활성화합니다.
+서버 응답에 생성 ID가 없으면 중복 생성을 피하도록 tracker 확인을 안내합니다. 생성 ID는 받았지만 상세
+재조회만 실패한 경우에는 생성 완료 사실과 확인 가능한 ID를 함께 표시합니다.
 
 ## 편집 흐름
 
@@ -90,5 +111,6 @@
 - 선택 필드 저장
 - 상태 전환
 - 아이템 삭제
+- 새 아이템 생성
 
 이중 차단으로 UI 상태와 무관하게 offline snapshot이 실제 쓰기 경로로 사용되지 않도록 유지합니다.

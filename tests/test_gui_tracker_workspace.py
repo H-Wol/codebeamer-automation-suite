@@ -8,7 +8,9 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from src.gui.settings_store import GuiSettings
+from src.gui.tracker_item_create_dialog import TrackerItemCreateRequest
 from src.gui.tracker_item_editor import TrackerItemEditorService
+from src.gui.tracker_item_editor import TrackerItemFieldChange
 from src.gui.tracker_query_service import TrackerQueryService
 from src.gui.tracker_workspace import ITEM_SUMMARY_ROLE
 from src.gui.tracker_workspace import TrackerWorkspacePage
@@ -55,6 +57,7 @@ EDITOR_SCHEMA = {
 
 class EditableWorkspaceClient:
     item = {}
+    created_item = None
     calls: list[tuple] = []
     deleted = False
 
@@ -77,6 +80,7 @@ class EditableWorkspaceClient:
         }
         cls.calls = []
         cls.deleted = False
+        cls.created_item = None
 
     def get_projects(self):
         return [{"id": 10, "name": "Vehicle"}]
@@ -119,9 +123,43 @@ class EditableWorkspaceClient:
 
     def get_item(self, item_id: int):
         self.__class__.calls.append(("get", item_id))
+        if (
+            self.__class__.created_item is not None
+            and item_id == self.__class__.created_item["id"]
+        ):
+            return deepcopy(self.__class__.created_item)
         if self.__class__.deleted:
             raise KeyError(item_id)
         return deepcopy(self.__class__.item)
+
+    def create_item(
+        self,
+        tracker_id: int,
+        payload: dict,
+        parent_item_id: int | None = None,
+    ):
+        self.__class__.calls.append(
+            ("create", tracker_id, deepcopy(payload), parent_item_id)
+        )
+        created_item = {
+            "id": 1002,
+            "name": payload["name"],
+            "description": payload.get("description", ""),
+            "descriptionFormat": "PlainText",
+            "version": 1,
+            "tracker": {"id": tracker_id, "name": "Requirements"},
+            "status": {"id": 1, "name": "Open", "type": "ChoiceOptionReference"},
+            "assignedTo": [],
+            "children": [],
+            "customFields": deepcopy(payload.get("customFields", [])),
+        }
+        if parent_item_id is not None:
+            created_item["parent"] = {
+                "id": parent_item_id,
+                "name": self.__class__.item["name"],
+            }
+        self.__class__.created_item = created_item
+        return {"id": 1002}
 
     def update_item_fields(self, item_id: int, field_values: list[dict]):
         self.__class__.calls.append(("update", item_id, deepcopy(field_values)))
@@ -179,6 +217,7 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.assertEqual(self.page.item_tree.topLevelItem(0).text(0), "9001001")
         self.assertIn("Offline Requirements", self.page.search_scope_label.text())
         self.assertTrue(self.page.search_button.isEnabled())
+        self.assertFalse(self.page.create_item_button.isEnabled())
 
     def test_expanding_node_loads_direct_children_once_and_reuses_cache(self) -> None:
         self.page.activate()
@@ -391,6 +430,33 @@ class TrackerWorkspaceWriteIntegrationTest(unittest.TestCase):
         self.assertFalse(
             any(call[0] == "update" for call in EditableWorkspaceClient.calls)
         )
+
+    def test_single_create_adds_selected_child_and_opens_created_detail(self) -> None:
+        def create_request(schema, tracker, selected_detail):
+            self.assertEqual(tracker.tracker_id, 20)
+            self.assertEqual(selected_detail.item_id, 1001)
+            summary = next(field for field in schema.fields if field.name == "Summary")
+            return TrackerItemCreateRequest(
+                changes=(TrackerItemFieldChange(summary, "Created child"),),
+                parent_item_id=selected_detail.item_id,
+            )
+
+        self.page.create_request_provider = create_request
+        self.page.create_item_button.click()
+        self._app.processEvents()
+
+        create_call = next(
+            call for call in EditableWorkspaceClient.calls if call[0] == "create"
+        )
+        self.assertEqual(create_call[1], 20)
+        self.assertEqual(create_call[2], {"name": "Created child"})
+        self.assertEqual(create_call[3], 1001)
+        root = self.page.item_tree.topLevelItem(0)
+        self.assertEqual(root.childCount(), 1)
+        self.assertEqual(root.child(0).text(0), "1002")
+        self.assertEqual(self.page.detail_id_badge.text(), "#1002")
+        self.assertEqual(self.page.detail_title.text(), "Created child")
+        self.assertIn("생성했습니다", self.page.workspace_status_label.text())
 
 
 if __name__ == "__main__":

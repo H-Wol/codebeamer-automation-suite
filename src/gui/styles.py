@@ -232,7 +232,8 @@ QLabel#tracker_current_status {
     font-weight: 700;
 }
 
-QDialog#tracker_delete_dialog {
+QDialog#tracker_delete_dialog,
+QDialog#tracker_item_create_dialog {
     background: #F4F7FB;
 }
 
@@ -843,7 +844,8 @@ QLabel#tracker_current_status {
     border-color: #BFE6E2;
 }
 
-QDialog#tracker_delete_dialog {
+QDialog#tracker_delete_dialog,
+QDialog#tracker_item_create_dialog {
     background: #F2FBFC;
 }
 

@@ -12,7 +12,7 @@
 6. [필드 지원 추가 가이드](./field-support-guide.md)
 7. [GUI 사용 가이드](./gui-plan.md)
 8. [트래커 조회 서비스 계약](./tracker-query-service.md)
-9. [트래커 아이템 수정·상태 전환·삭제](./tracker-item-editor.md)
+9. [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)
 10. [트러블슈팅](./troubleshooting.md)
 11. [호환 경로 감사](./compatibility.md)
 12. [샘플 데이터 및 자격증명 감사](./security-audit.md)
@@ -43,8 +43,8 @@
   최상위 앱 셸, 배치 작업의 실제 단계별 사용 흐름, 테스트 모드, 다중 파일 업로드, 상단 데이터 설정, 현재 구현 범위를 정리합니다.
 - [트래커 조회 서비스 계약](./tracker-query-service.md)
   tracker 범위 검색, 계층·상세·ID 경로 모델, pagination 차이와 익명 조회 fixture 계약을 정리합니다.
-- [트래커 아이템 수정·상태 전환·삭제](./tracker-item-editor.md)
-  schema 기반 부분 수정, version 충돌 확인, 상태 전환과 삭제 안전장치를 정리합니다.
+- [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)
+  schema 기반 단건 생성과 부분 수정, version 충돌 확인, 상태 전환과 삭제 안전장치를 정리합니다.
 
 - [트러블슈팅](./troubleshooting.md)
   자주 발생하는 에러와 대응 방법을 정리합니다.
