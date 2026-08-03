@@ -5,7 +5,9 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QHeaderView
 
 from src.gui.tracker_query_models import TrackerFieldValue
 from src.gui.tracker_table_field_dialog import TrackerTableFieldDialog
@@ -78,14 +80,65 @@ class TrackerTableFieldDialogTest(unittest.TestCase):
         )
 
     def test_source_toggle_restores_raw_wiki_text(self) -> None:
+        resized_width = self.dialog.table.columnWidth(0) + 37
+        self.dialog.table.setColumnWidth(0, resized_width)
         self.dialog.source_toggle.setChecked(True)
         self._app.processEvents()
 
         self.assertIsNone(self.dialog.table.cellWidget(0, 0))
+        self.assertEqual(self.dialog.table.columnWidth(0), resized_width)
         self.assertEqual(
             self.dialog.table.item(0, 0).text(),
             "%%(color:red)__Run__%%",
         )
+
+    def test_columns_are_user_resizable_and_scrollbars_are_available(self) -> None:
+        header = self.dialog.table.horizontalHeader()
+
+        self.assertEqual(
+            header.sectionResizeMode(0),
+            QHeaderView.ResizeMode.Interactive,
+        )
+        self.assertEqual(
+            self.dialog.table.horizontalScrollBarPolicy(),
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded,
+        )
+        self.assertEqual(
+            self.dialog.table.verticalScrollBarPolicy(),
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded,
+        )
+
+    def test_many_rows_and_columns_enable_both_scroll_directions(self) -> None:
+        columns = [
+            {"id": 2000 + index, "name": f"Column {index}", "type": "TextField"}
+            for index in range(8)
+        ]
+        rows = [
+            [
+                {"fieldId": column["id"], "value": f"R{row_index} C{index}"}
+                for index, column in enumerate(columns)
+            ]
+            for row_index in range(60)
+        ]
+        field = TrackerFieldValue.from_raw(
+            {
+                "fieldId": 1999,
+                "name": "Large table",
+                "type": "TableFieldValue",
+                "columns": columns,
+                "values": rows,
+            }
+        )
+        dialog = TrackerTableFieldDialog(field)
+        dialog.show()
+        self._app.processEvents()
+
+        try:
+            self.assertGreater(dialog.table.horizontalScrollBar().maximum(), 0)
+            self.assertGreater(dialog.table.verticalScrollBar().maximum(), 0)
+        finally:
+            dialog.close()
+            self._app.processEvents()
 
 
 if __name__ == "__main__":

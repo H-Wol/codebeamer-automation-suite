@@ -23,6 +23,10 @@ from .wiki_renderer import codebeamer_wiki_to_html
 from .wiki_renderer import payload_uses_wiki
 
 
+_PREFERRED_COLUMN_WIDTH = 220
+_MAXIMUM_AUTOFIT_COLUMN_WIDTH = 480
+
+
 def is_table_field(field: TrackerFieldValue) -> bool:
     type_name = str(field.type_name or "").strip().casefold()
     raw_type = str(field.raw_value.get("type") or "").strip().casefold()
@@ -146,6 +150,13 @@ class TrackerTableFieldDialog(QDialog):
         title = QLabel(f"{field.name} · {table_field_summary(field)}", self)
         title.setObjectName("tracker_detail_section_title")
         header.addWidget(title, 1)
+        self.fit_columns_button = QPushButton("열 너비 맞춤", self)
+        self.fit_columns_button.setToolTip(
+            "내용에 맞게 열 너비를 다시 조정합니다. "
+            "열 머리글 경계를 드래그해 직접 조정할 수도 있습니다."
+        )
+        self.fit_columns_button.clicked.connect(self._fit_columns_to_contents)
+        header.addWidget(self.fit_columns_button)
         self.source_toggle = QPushButton("Wiki 원문", self)
         self.source_toggle.setObjectName("mode_toggle")
         self.source_toggle.setCheckable(True)
@@ -159,10 +170,19 @@ class TrackerTableFieldDialog(QDialog):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         self.table.setWordWrap(True)
-        self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
+        self.table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.table.setHorizontalScrollMode(
+            QAbstractItemView.ScrollMode.ScrollPerPixel
+        )
+        self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.table.verticalHeader().setVisible(False)
+        table_header = self.table.horizontalHeader()
+        table_header.setMinimumSectionSize(80)
+        table_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        table_header.setStretchLastSection(False)
         layout.addWidget(self.table, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=self)
@@ -172,6 +192,7 @@ class TrackerTableFieldDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self._populate(False)
+        self._fit_columns_to_contents()
 
     def _cell_for_column(
         self,
@@ -225,6 +246,29 @@ class TrackerTableFieldDialog(QDialog):
                     row_index,
                     max(self.table.rowHeight(row_index), 36),
                 )
+        self.table.resizeRowsToContents()
+
+    def _fit_columns_to_contents(self, _checked: bool = False) -> None:
+        column_count = self.table.columnCount()
+        if column_count <= 0:
+            return
+        self.table.resizeColumnsToContents()
+        available_width = max(0, self.width() - 64)
+        visible_column_count = min(column_count, 3)
+        preferred_width = max(
+            _PREFERRED_COLUMN_WIDTH,
+            available_width // visible_column_count,
+        )
+        preferred_width = min(_MAXIMUM_AUTOFIT_COLUMN_WIDTH, preferred_width)
+        for column_index in range(column_count):
+            content_width = self.table.columnWidth(column_index) + 16
+            self.table.setColumnWidth(
+                column_index,
+                min(
+                    _MAXIMUM_AUTOFIT_COLUMN_WIDTH,
+                    max(preferred_width, content_width),
+                ),
+            )
         self.table.resizeRowsToContents()
 
 
