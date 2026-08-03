@@ -196,6 +196,9 @@ def _merge_window_preferences(current_settings: GuiSettings, incoming_settings: 
         window_height=height,
         window_is_maximized=bool(getattr(current_settings, "window_is_maximized", False)),
         window_is_fullscreen=bool(getattr(current_settings, "window_is_fullscreen", False)),
+        navigation_collapsed=bool(
+            getattr(current_settings, "navigation_collapsed", False)
+        ),
     )
 
 

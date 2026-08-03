@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from src.upload_policy import UPLOAD_MODE_CREATE as GUI_UPLOAD_MODE_CREATE
 from src.upload_policy import UPLOAD_MODE_UPDATE as GUI_UPLOAD_MODE_UPDATE
@@ -22,8 +25,20 @@ from .styles import normalize_gui_theme_name
 
 APP_DIR_NAME = ".codebeamer-automation-suite"
 SETTINGS_FILE_NAME = "gui_settings.json"
+APP_SETTINGS_FILE_NAME = "gui_app_settings.json"
 KEY_FILE_NAME = "gui_settings.key"
 WORKFLOW_PRESET_FILE_NAME = "gui_workflow_preset.json"
+APP_SETTINGS_VERSION = 2
+
+CREDENTIAL_STORAGE_NONE = "none"
+CREDENTIAL_STORAGE_LOCAL = "local_encrypted"
+CREDENTIAL_STORAGE_OS = "os_credential"
+CREDENTIAL_STORAGE_CHOICES = {
+    CREDENTIAL_STORAGE_LOCAL,
+    CREDENTIAL_STORAGE_OS,
+    CREDENTIAL_STORAGE_NONE,
+}
+OS_CREDENTIAL_SERVICE_NAME = "codebeamer-automation-suite"
 
 
 @dataclass
@@ -34,6 +49,7 @@ class GuiSettings:
     window_height: int = 780
     window_is_maximized: bool = False
     window_is_fullscreen: bool = False
+    navigation_collapsed: bool = False
     base_url: str = ""
     username: str = ""
     password: str = ""
@@ -53,6 +69,49 @@ class GuiSettings:
 
 
 @dataclass
+class ConnectionProfile:
+    profile_id: str = field(default_factory=lambda: uuid4().hex)
+    name: str = "새 연결"
+    base_url: str = ""
+    username: str = ""
+    password: str = field(default="", repr=False)
+    credential_storage: str = CREDENTIAL_STORAGE_LOCAL
+    validated_signature: str = ""
+    validated_at: str = ""
+    credential_error: str = field(default="", repr=False, compare=False)
+
+
+@dataclass
+class AppSettings:
+    version: int = APP_SETTINGS_VERSION
+    active_profile_id: str = ""
+    profiles: list[ConnectionProfile] = field(default_factory=list)
+    theme_name: str = DEFAULT_GUI_THEME
+    window_width: int = 1160
+    window_height: int = 780
+    window_is_maximized: bool = False
+    window_is_fullscreen: bool = False
+    navigation_collapsed: bool = False
+    rate_limit_retry_delay_seconds: float = 1.0
+    rate_limit_max_retries: int = 5
+    output_dir: str = "output"
+    offline_mode: bool = False
+    offline_schema_path: str = ""
+    offline_tracker_configuration_path: str = ""
+    test_mode_validated_signature: str = ""
+    test_mode_validated_at: str = ""
+    default_project_id: str = ""
+    default_tracker_id: str = ""
+    migrated_from_legacy: bool = False
+
+    def active_profile(self) -> ConnectionProfile | None:
+        for profile in self.profiles:
+            if profile.profile_id == self.active_profile_id:
+                return profile
+        return None
+
+
+@dataclass
 class GuiWorkflowPreset:
     version: int = 1
     settings: GuiSettings = field(default_factory=GuiSettings)
@@ -65,29 +124,381 @@ class GuiWorkflowPreset:
     selected_tracker_item_settings: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
-class GuiSettingsStore:
-    """GUI 설정 파일과 암호화된 비밀번호를 저장/조회한다."""
+class KeyringCredentialStore:
+    """설치된 keyring backend를 통해 OS 자격증명 저장소를 사용한다."""
 
-    def __init__(self, root_dir: Path | None = None) -> None:
+    def __init__(self, service_name: str = OS_CREDENTIAL_SERVICE_NAME) -> None:
+        self.service_name = service_name
+        self._keyring = None
+        self._availability_error = ""
+        try:
+            import keyring
+
+            backend = keyring.get_keyring()
+            priority = float(getattr(backend, "priority", 0) or 0)
+            if priority <= 0:
+                self._availability_error = "사용 가능한 OS 자격증명 backend가 없습니다."
+            else:
+                self._keyring = keyring
+        except ModuleNotFoundError:
+            self._availability_error = (
+                "현재 실행 환경에서 OS 자격증명 저장소를 사용할 수 없습니다."
+            )
+        except Exception as exc:
+            self._availability_error = str(exc) or "OS 자격증명 저장소를 사용할 수 없습니다."
+
+    @property
+    def available(self) -> bool:
+        return self._keyring is not None
+
+    @property
+    def availability_error(self) -> str:
+        return self._availability_error
+
+    def get_password(self, profile_id: str) -> str | None:
+        if self._keyring is None:
+            raise RuntimeError(self._availability_error or "OS 자격증명 저장소를 사용할 수 없습니다.")
+        return self._keyring.get_password(self.service_name, profile_id)
+
+    def set_password(self, profile_id: str, password: str) -> None:
+        if self._keyring is None:
+            raise RuntimeError(self._availability_error or "OS 자격증명 저장소를 사용할 수 없습니다.")
+        self._keyring.set_password(self.service_name, profile_id, password)
+
+    def delete_password(self, profile_id: str) -> None:
+        if self._keyring is None:
+            raise RuntimeError(self._availability_error or "OS 자격증명 저장소를 사용할 수 없습니다.")
+        try:
+            self._keyring.delete_password(self.service_name, profile_id)
+        except Exception as exc:
+            if exc.__class__.__name__ != "PasswordDeleteError":
+                raise
+
+
+def _normalized_credential_storage(value: object) -> str:
+    normalized = str(value or "").strip()
+    return normalized if normalized in CREDENTIAL_STORAGE_CHOICES else CREDENTIAL_STORAGE_LOCAL
+
+
+def _file_validation_marker(path_text: str) -> dict[str, object]:
+    path = Path(str(path_text or "").strip()).expanduser()
+    marker: dict[str, object] = {"path": str(path)}
+    try:
+        stat = path.stat()
+    except OSError:
+        marker["missing"] = True
+    else:
+        marker["size"] = int(stat.st_size)
+        marker["mtime_ns"] = int(stat.st_mtime_ns)
+    return marker
+
+
+def profile_validation_signature(profile: ConnectionProfile) -> str:
+    payload = {
+        "profile_id": str(profile.profile_id),
+        "base_url": str(profile.base_url or "").strip().rstrip("/"),
+        "username": str(profile.username or "").strip(),
+        "password_digest": hashlib.sha256(str(profile.password or "").encode("utf-8")).hexdigest(),
+    }
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def test_mode_validation_signature(settings: AppSettings) -> str:
+    payload = {
+        "schema": _file_validation_marker(settings.offline_schema_path),
+        "tracker_configuration": _file_validation_marker(
+            settings.offline_tracker_configuration_path
+        ),
+    }
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def effective_gui_settings(
+    app_settings: AppSettings,
+    batch_settings: GuiSettings | None = None,
+) -> GuiSettings:
+    base = batch_settings or GuiSettings()
+    active_profile = app_settings.active_profile()
+    return GuiSettings(
+        **{
+            **asdict(base),
+            "theme_name": normalize_gui_theme_name(app_settings.theme_name),
+            "window_width": int(app_settings.window_width or 1160),
+            "window_height": int(app_settings.window_height or 780),
+            "window_is_maximized": bool(app_settings.window_is_maximized),
+            "window_is_fullscreen": bool(app_settings.window_is_fullscreen),
+            "navigation_collapsed": bool(app_settings.navigation_collapsed),
+            "base_url": "" if active_profile is None else str(active_profile.base_url or ""),
+            "username": "" if active_profile is None else str(active_profile.username or ""),
+            "password": "" if active_profile is None else str(active_profile.password or ""),
+            "save_password": bool(
+                active_profile is not None
+                and active_profile.credential_storage != CREDENTIAL_STORAGE_NONE
+            ),
+            "offline_mode": bool(app_settings.offline_mode),
+            "offline_schema_path": str(app_settings.offline_schema_path or ""),
+            "offline_tracker_configuration_path": str(
+                app_settings.offline_tracker_configuration_path or ""
+            ),
+            "default_project_id": str(app_settings.default_project_id or ""),
+            "default_tracker_id": str(app_settings.default_tracker_id or ""),
+            "rate_limit_retry_delay_seconds": float(
+                app_settings.rate_limit_retry_delay_seconds or 0
+            ),
+            "rate_limit_max_retries": int(app_settings.rate_limit_max_retries or 0),
+            "output_dir": str(app_settings.output_dir or "output"),
+        }
+    )
+
+
+class GuiSettingsStore:
+    """전역 앱 설정, legacy 설정과 배치 preset을 저장하고 변환한다."""
+
+    def __init__(self, root_dir: Path | None = None, credential_store=None) -> None:
         self.root_dir = root_dir or (Path.home() / APP_DIR_NAME)
         self.settings_path = self.root_dir / SETTINGS_FILE_NAME
+        self.app_settings_path = self.root_dir / APP_SETTINGS_FILE_NAME
         self.key_path = self.root_dir / KEY_FILE_NAME
         self.workflow_preset_path = self.root_dir / WORKFLOW_PRESET_FILE_NAME
+        self.credential_store = credential_store or KeyringCredentialStore()
+
+    @property
+    def os_credential_available(self) -> bool:
+        return bool(getattr(self.credential_store, "available", False))
+
+    @property
+    def os_credential_availability_error(self) -> str:
+        return str(getattr(self.credential_store, "availability_error", "") or "")
 
     def load(self) -> GuiSettings:
-        if not self.settings_path.exists():
-            return GuiSettings()
+        legacy_settings = self._load_legacy_settings()
+        if not self.app_settings_path.exists():
+            return legacy_settings
+        app_settings = self.load_app_settings()
+        effective = effective_gui_settings(app_settings, legacy_settings)
+        if app_settings.offline_mode:
+            if (
+                app_settings.test_mode_validated_signature
+                and app_settings.test_mode_validated_signature
+                == test_mode_validation_signature(app_settings)
+            ):
+                return effective
+            effective = replace(effective, offline_mode=False)
 
-        payload = json.loads(self.settings_path.read_text(encoding="utf-8"))
-        return self._settings_from_payload(payload)
+        profile = app_settings.active_profile()
+        if (
+            profile is not None
+            and not profile.credential_error
+            and profile.validated_signature
+            and profile.validated_signature == profile_validation_signature(profile)
+        ):
+            return effective
+        return replace(
+            effective,
+            base_url="",
+            username="",
+            password="",
+            save_password=False,
+        )
 
     def save(self, settings: GuiSettings) -> None:
+        """호환용 legacy 설정을 저장한다.
+
+        새 전역 설정 파일이 존재하면 자격증명은 중복 저장하지 않는다.
+        """
         self.root_dir.mkdir(parents=True, exist_ok=True)
-        payload = self._settings_payload(settings)
-        self.settings_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        value = settings
+        if self.app_settings_path.exists():
+            value = GuiSettings(**{**asdict(settings), "password": "", "save_password": False})
+        payload = self._settings_payload(value)
+        self._write_json_atomic(self.settings_path, payload)
+
+    def ensure_app_settings(self) -> AppSettings:
+        if self.app_settings_path.exists():
+            return self.load_app_settings()
+        migrated = self.migrate_legacy_settings()
+        self.save_app_settings(migrated)
+        return self.load_app_settings()
+
+    def migrate_legacy_settings(self) -> AppSettings:
+        legacy = self._load_legacy_settings()
+        legacy_preset = self.load_workflow_preset()
+        if legacy_preset is not None and int(legacy_preset.version or 1) < APP_SETTINGS_VERSION:
+            preset_settings = legacy_preset.settings
+            legacy = GuiSettings(
+                **{
+                    **asdict(preset_settings),
+                    "window_width": legacy.window_width,
+                    "window_height": legacy.window_height,
+                    "window_is_maximized": legacy.window_is_maximized,
+                    "window_is_fullscreen": legacy.window_is_fullscreen,
+                    "navigation_collapsed": legacy.navigation_collapsed,
+                }
+            )
+        has_legacy_file = self.settings_path.exists()
+        has_profile = bool(
+            str(legacy.base_url or "").strip()
+            or str(legacy.username or "").strip()
+            or str(legacy.password or "")
         )
+        profiles: list[ConnectionProfile] = []
+        active_profile_id = ""
+        if has_profile:
+            active_profile_id = "legacy-default"
+            profiles.append(
+                ConnectionProfile(
+                    profile_id=active_profile_id,
+                    name="기존 연결",
+                    base_url=str(legacy.base_url or ""),
+                    username=str(legacy.username or ""),
+                    password=str(legacy.password or ""),
+                    credential_storage=(
+                        CREDENTIAL_STORAGE_LOCAL
+                        if legacy.save_password
+                        else CREDENTIAL_STORAGE_NONE
+                    ),
+                )
+            )
+        return AppSettings(
+            active_profile_id=active_profile_id,
+            profiles=profiles,
+            theme_name=normalize_gui_theme_name(legacy.theme_name),
+            window_width=int(legacy.window_width or 1160),
+            window_height=int(legacy.window_height or 780),
+            window_is_maximized=bool(legacy.window_is_maximized),
+            window_is_fullscreen=bool(legacy.window_is_fullscreen),
+            navigation_collapsed=bool(legacy.navigation_collapsed),
+            rate_limit_retry_delay_seconds=float(legacy.rate_limit_retry_delay_seconds or 0),
+            rate_limit_max_retries=int(legacy.rate_limit_max_retries or 0),
+            output_dir=str(legacy.output_dir or "output"),
+            offline_mode=bool(legacy.offline_mode),
+            offline_schema_path=str(legacy.offline_schema_path or ""),
+            offline_tracker_configuration_path=str(
+                legacy.offline_tracker_configuration_path or ""
+            ),
+            default_project_id=str(legacy.default_project_id or ""),
+            default_tracker_id=str(legacy.default_tracker_id or ""),
+            migrated_from_legacy=has_legacy_file or self.workflow_preset_path.exists(),
+        )
+
+    def load_app_settings(self) -> AppSettings:
+        if not self.app_settings_path.exists():
+            return self.migrate_legacy_settings()
+        payload = json.loads(self.app_settings_path.read_text(encoding="utf-8"))
+        return self._app_settings_from_payload(payload)
+
+    def save_app_settings(self, settings: AppSettings) -> None:
+        normalized = self._normalize_app_settings(settings)
+        previous_bytes = (
+            self.app_settings_path.read_bytes() if self.app_settings_path.exists() else None
+        )
+        previous_raw = self._read_json_object(self.app_settings_path)
+        previous_os_ids = {
+            str(item.get("profile_id") or "")
+            for item in previous_raw.get("profiles", [])
+            if isinstance(item, dict)
+            and item.get("credential_storage") == CREDENTIAL_STORAGE_OS
+            and str(item.get("profile_id") or "")
+        }
+        target_os_profiles = {
+            profile.profile_id: profile
+            for profile in normalized.profiles
+            if profile.credential_storage == CREDENTIAL_STORAGE_OS
+        }
+        affected_os_ids = previous_os_ids | set(target_os_profiles)
+        previous_os_secrets: dict[str, str | None] = {}
+
+        if affected_os_ids and self.os_credential_available:
+            for profile_id in affected_os_ids:
+                previous_os_secrets[profile_id] = self.credential_store.get_password(profile_id)
+        elif target_os_profiles:
+            raise RuntimeError(
+                self.os_credential_availability_error
+                or "OS 자격증명 저장소를 사용할 수 없습니다."
+            )
+
+        try:
+            for profile_id, profile in target_os_profiles.items():
+                secret = str(profile.password or "")
+                if not secret:
+                    secret = str(previous_os_secrets.get(profile_id) or "")
+                if not secret:
+                    raise ValueError(f"'{profile.name}' 프로필의 비밀번호가 비어 있습니다.")
+                self.credential_store.set_password(profile_id, secret)
+                if self.credential_store.get_password(profile_id) != secret:
+                    raise RuntimeError(f"'{profile.name}' OS 자격증명 검증에 실패했습니다.")
+
+            payload = self._app_settings_payload(normalized, previous_raw)
+            self._write_json_atomic(self.app_settings_path, payload)
+
+            for profile_id in previous_os_ids - set(target_os_profiles):
+                self.credential_store.delete_password(profile_id)
+        except Exception:
+            if previous_bytes is None:
+                self.app_settings_path.unlink(missing_ok=True)
+            else:
+                self.root_dir.mkdir(parents=True, exist_ok=True)
+                self.app_settings_path.write_bytes(previous_bytes)
+            if self.os_credential_available:
+                for profile_id in affected_os_ids:
+                    old_secret = previous_os_secrets.get(profile_id)
+                    if old_secret is None:
+                        self.credential_store.delete_password(profile_id)
+                    else:
+                        self.credential_store.set_password(profile_id, old_secret)
+            raise
+
+    def save_window_preferences(self, settings: GuiSettings) -> None:
+        app_settings = self.ensure_app_settings()
+        app_settings.window_width = int(settings.window_width or 1160)
+        app_settings.window_height = int(settings.window_height or 780)
+        app_settings.window_is_maximized = bool(settings.window_is_maximized)
+        app_settings.window_is_fullscreen = bool(settings.window_is_fullscreen)
+        app_settings.navigation_collapsed = bool(settings.navigation_collapsed)
+        self.save_app_settings(app_settings)
+
+    def export_app_settings(self, path: Path, settings: AppSettings | None = None) -> None:
+        value = self._normalize_app_settings(settings or self.load_app_settings())
+        payload = {
+            "version": APP_SETTINGS_VERSION,
+            "active_profile_id": value.active_profile_id,
+            "profiles": [
+                {
+                    "profile_id": profile.profile_id,
+                    "name": profile.name,
+                    "base_url": profile.base_url,
+                    "username": profile.username,
+                    "credential_storage": CREDENTIAL_STORAGE_NONE,
+                }
+                for profile in value.profiles
+            ],
+            "theme_name": value.theme_name,
+            "navigation_collapsed": value.navigation_collapsed,
+            "rate_limit_retry_delay_seconds": value.rate_limit_retry_delay_seconds,
+            "rate_limit_max_retries": value.rate_limit_max_retries,
+            "output_dir": value.output_dir,
+            "offline_mode": value.offline_mode,
+            "offline_schema_path": value.offline_schema_path,
+            "offline_tracker_configuration_path": value.offline_tracker_configuration_path,
+            "default_project_id": value.default_project_id,
+            "default_tracker_id": value.default_tracker_id,
+        }
+        self._write_json_atomic(Path(path), payload)
+
+    def import_app_settings(self, path: Path) -> AppSettings:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        imported = self._app_settings_from_payload(payload, load_credentials=False)
+        for profile in imported.profiles:
+            profile.password = ""
+            profile.credential_storage = CREDENTIAL_STORAGE_NONE
+            profile.validated_signature = ""
+            profile.validated_at = ""
+            profile.credential_error = ""
+        imported.test_mode_validated_signature = ""
+        imported.test_mode_validated_at = ""
+        return imported
 
     def load_workflow_preset(self) -> GuiWorkflowPreset | None:
         if not self.workflow_preset_path.exists():
@@ -130,9 +541,20 @@ class GuiSettingsStore:
 
     def save_workflow_preset(self, preset: GuiWorkflowPreset) -> None:
         self.root_dir.mkdir(parents=True, exist_ok=True)
+        settings_payload = self._settings_payload(preset.settings)
+        if self.app_settings_path.exists():
+            settings_payload = {
+                "upload_mode": normalize_gui_upload_mode(preset.settings.upload_mode),
+                "excel_header_row": int(preset.settings.excel_header_row or 1),
+                "summary_column": str(preset.settings.summary_column or "Summary"),
+                "excel_sheet_name": str(preset.settings.excel_sheet_name or "0"),
+                "last_file_path": str(preset.settings.last_file_path or ""),
+                "password_encrypted": "",
+                "save_password": False,
+            }
         payload = {
-            "version": int(preset.version or 1),
-            "settings": self._settings_payload(preset.settings),
+            "version": APP_SETTINGS_VERSION if self.app_settings_path.exists() else int(preset.version or 1),
+            "settings": settings_payload,
             "file_options": self._dict_payload(preset.file_options),
             "root_item_config": self._dict_payload(preset.root_item_config),
             "selected_mapping": {
@@ -161,10 +583,7 @@ class GuiSettingsStore:
                 if str(key).strip() and isinstance(value, dict)
             },
         }
-        self.workflow_preset_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        self._write_json_atomic(self.workflow_preset_path, payload)
 
     @staticmethod
     def _dict_payload(value: Any) -> dict[str, Any]:
@@ -177,6 +596,12 @@ class GuiSettingsStore:
             "create": bool(payload.get("create", False)),
             "update": bool(payload.get("update", False)),
         }
+
+    def _load_legacy_settings(self) -> GuiSettings:
+        if not self.settings_path.exists():
+            return GuiSettings()
+        payload = json.loads(self.settings_path.read_text(encoding="utf-8"))
+        return self._settings_from_payload(payload)
 
     def _settings_payload(self, settings: GuiSettings) -> dict[str, Any]:
         payload = asdict(settings)
@@ -200,6 +625,210 @@ class GuiSettingsStore:
             password=password,
             **{key: value for key, value in payload.items() if key in GuiSettings.__dataclass_fields__},
         )
+
+    def _normalize_app_settings(self, settings: AppSettings) -> AppSettings:
+        profiles: list[ConnectionProfile] = []
+        seen_ids: set[str] = set()
+        for raw_profile in settings.profiles:
+            profile_id = str(raw_profile.profile_id or "").strip() or uuid4().hex
+            if profile_id in seen_ids:
+                profile_id = uuid4().hex
+            seen_ids.add(profile_id)
+            profiles.append(
+                ConnectionProfile(
+                    profile_id=profile_id,
+                    name=str(raw_profile.name or "").strip() or "이름 없는 연결",
+                    base_url=str(raw_profile.base_url or "").strip(),
+                    username=str(raw_profile.username or "").strip(),
+                    password=str(raw_profile.password or ""),
+                    credential_storage=_normalized_credential_storage(
+                        raw_profile.credential_storage
+                    ),
+                    validated_signature=str(raw_profile.validated_signature or ""),
+                    validated_at=str(raw_profile.validated_at or ""),
+                    credential_error=str(raw_profile.credential_error or ""),
+                )
+            )
+        active_profile_id = str(settings.active_profile_id or "")
+        if active_profile_id not in seen_ids:
+            active_profile_id = profiles[0].profile_id if profiles else ""
+        return AppSettings(
+            version=APP_SETTINGS_VERSION,
+            active_profile_id=active_profile_id,
+            profiles=profiles,
+            theme_name=normalize_gui_theme_name(settings.theme_name),
+            window_width=max(int(settings.window_width or 1160), 860),
+            window_height=max(int(settings.window_height or 780), 620),
+            window_is_maximized=bool(settings.window_is_maximized),
+            window_is_fullscreen=bool(settings.window_is_fullscreen),
+            navigation_collapsed=bool(settings.navigation_collapsed),
+            rate_limit_retry_delay_seconds=max(
+                float(settings.rate_limit_retry_delay_seconds or 0), 0.0
+            ),
+            rate_limit_max_retries=max(int(settings.rate_limit_max_retries or 0), 0),
+            output_dir=str(settings.output_dir or "").strip() or "output",
+            offline_mode=bool(settings.offline_mode),
+            offline_schema_path=str(settings.offline_schema_path or "").strip(),
+            offline_tracker_configuration_path=str(
+                settings.offline_tracker_configuration_path or ""
+            ).strip(),
+            test_mode_validated_signature=str(settings.test_mode_validated_signature or ""),
+            test_mode_validated_at=str(settings.test_mode_validated_at or ""),
+            default_project_id=str(settings.default_project_id or ""),
+            default_tracker_id=str(settings.default_tracker_id or ""),
+            migrated_from_legacy=bool(settings.migrated_from_legacy),
+        )
+
+    def _app_settings_payload(
+        self,
+        settings: AppSettings,
+        previous_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        previous_profiles = {
+            str(profile.get("profile_id") or ""): profile
+            for profile in previous_payload.get("profiles", [])
+            if isinstance(profile, dict) and str(profile.get("profile_id") or "")
+        }
+        profiles_payload: list[dict[str, Any]] = []
+        for profile in settings.profiles:
+            profile_payload: dict[str, Any] = {
+                "profile_id": profile.profile_id,
+                "name": profile.name,
+                "base_url": profile.base_url,
+                "username": profile.username,
+                "credential_storage": profile.credential_storage,
+                "validated_signature": profile.validated_signature,
+                "validated_at": profile.validated_at,
+            }
+            if profile.credential_storage == CREDENTIAL_STORAGE_LOCAL:
+                encrypted = ""
+                if profile.password:
+                    encrypted = self._encrypt_password(profile.password)
+                else:
+                    previous = previous_profiles.get(profile.profile_id, {})
+                    if previous.get("credential_storage") == CREDENTIAL_STORAGE_LOCAL:
+                        encrypted = str(previous.get("password_encrypted") or "")
+                profile_payload["password_encrypted"] = encrypted
+            profiles_payload.append(profile_payload)
+        return {
+            "version": APP_SETTINGS_VERSION,
+            "active_profile_id": settings.active_profile_id,
+            "profiles": profiles_payload,
+            "theme_name": settings.theme_name,
+            "window_width": settings.window_width,
+            "window_height": settings.window_height,
+            "window_is_maximized": settings.window_is_maximized,
+            "window_is_fullscreen": settings.window_is_fullscreen,
+            "navigation_collapsed": settings.navigation_collapsed,
+            "rate_limit_retry_delay_seconds": settings.rate_limit_retry_delay_seconds,
+            "rate_limit_max_retries": settings.rate_limit_max_retries,
+            "output_dir": settings.output_dir,
+            "offline_mode": settings.offline_mode,
+            "offline_schema_path": settings.offline_schema_path,
+            "offline_tracker_configuration_path": settings.offline_tracker_configuration_path,
+            "test_mode_validated_signature": settings.test_mode_validated_signature,
+            "test_mode_validated_at": settings.test_mode_validated_at,
+            "default_project_id": settings.default_project_id,
+            "default_tracker_id": settings.default_tracker_id,
+            "migrated_from_legacy": settings.migrated_from_legacy,
+        }
+
+    def _app_settings_from_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        load_credentials: bool = True,
+    ) -> AppSettings:
+        profiles: list[ConnectionProfile] = []
+        for raw_profile in payload.get("profiles", []):
+            if not isinstance(raw_profile, dict):
+                continue
+            storage = _normalized_credential_storage(
+                raw_profile.get("credential_storage")
+            )
+            password = ""
+            credential_error = ""
+            if load_credentials and storage == CREDENTIAL_STORAGE_LOCAL:
+                encrypted = str(raw_profile.get("password_encrypted") or "")
+                if encrypted:
+                    try:
+                        password = self._decrypt_password(encrypted)
+                    except Exception as exc:
+                        credential_error = str(exc) or "로컬 암호화 비밀번호를 복원하지 못했습니다."
+            elif load_credentials and storage == CREDENTIAL_STORAGE_OS:
+                if self.os_credential_available:
+                    try:
+                        password = str(
+                            self.credential_store.get_password(
+                                str(raw_profile.get("profile_id") or "")
+                            )
+                            or ""
+                        )
+                    except Exception as exc:
+                        credential_error = str(exc)
+                else:
+                    credential_error = (
+                        self.os_credential_availability_error
+                        or "OS 자격증명 저장소를 사용할 수 없습니다."
+                    )
+            profiles.append(
+                ConnectionProfile(
+                    profile_id=str(raw_profile.get("profile_id") or "") or uuid4().hex,
+                    name=str(raw_profile.get("name") or "이름 없는 연결"),
+                    base_url=str(raw_profile.get("base_url") or ""),
+                    username=str(raw_profile.get("username") or ""),
+                    password=password,
+                    credential_storage=storage,
+                    validated_signature=str(raw_profile.get("validated_signature") or ""),
+                    validated_at=str(raw_profile.get("validated_at") or ""),
+                    credential_error=credential_error,
+                )
+            )
+        settings = AppSettings(
+            version=int(payload.get("version") or APP_SETTINGS_VERSION),
+            active_profile_id=str(payload.get("active_profile_id") or ""),
+            profiles=profiles,
+            theme_name=normalize_gui_theme_name(payload.get("theme_name")),
+            window_width=int(payload.get("window_width") or 1160),
+            window_height=int(payload.get("window_height") or 780),
+            window_is_maximized=bool(payload.get("window_is_maximized", False)),
+            window_is_fullscreen=bool(payload.get("window_is_fullscreen", False)),
+            navigation_collapsed=bool(payload.get("navigation_collapsed", False)),
+            rate_limit_retry_delay_seconds=float(
+                payload.get("rate_limit_retry_delay_seconds") or 0
+            ),
+            rate_limit_max_retries=int(payload.get("rate_limit_max_retries") or 0),
+            output_dir=str(payload.get("output_dir") or "output"),
+            offline_mode=bool(payload.get("offline_mode", False)),
+            offline_schema_path=str(payload.get("offline_schema_path") or ""),
+            offline_tracker_configuration_path=str(
+                payload.get("offline_tracker_configuration_path") or ""
+            ),
+            test_mode_validated_signature=str(
+                payload.get("test_mode_validated_signature") or ""
+            ),
+            test_mode_validated_at=str(payload.get("test_mode_validated_at") or ""),
+            default_project_id=str(payload.get("default_project_id") or ""),
+            default_tracker_id=str(payload.get("default_tracker_id") or ""),
+            migrated_from_legacy=bool(payload.get("migrated_from_legacy", False)),
+        )
+        return self._normalize_app_settings(settings)
+
+    @staticmethod
+    def _read_json_object(path: Path) -> dict[str, Any]:
+        if not path.exists():
+            return {}
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+
+    def _write_json_atomic(self, path: Path, payload: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = path.with_name(f".{path.name}.tmp")
+        temporary_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary_path.replace(path)
 
     def _get_fernet(self):
         try:

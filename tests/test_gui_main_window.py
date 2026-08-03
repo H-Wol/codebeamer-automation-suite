@@ -15,14 +15,19 @@ from src.gui.main_window import _merge_root_item_page_configs
 from src.gui.main_window import _merge_window_preferences
 from src.gui.main_window import _window_size_from_settings
 from src.gui.main_window import APP_ROUTE_LABELS
+from src.gui.main_window import APP_ROUTE_COLLAPSED_LABELS
+from src.gui.main_window import APPLICATION_NAVIGATION_COLLAPSED_WIDTH
 from src.gui.main_window import MainWindow
 from src.gui.main_window import ROUTE_ACTIVITY
 from src.gui.main_window import ROUTE_BATCH_UPLOAD
 from src.gui.main_window import ROUTE_SETTINGS
 from src.gui.main_window import ROUTE_TRACKER_WORKSPACE
 from src.gui.batch_window import BatchUploadWindow
+from src.gui.settings_center import SettingsCenterPage
 from src.gui.settings_store import GuiSettings
 from src.gui.settings_store import GuiSettingsStore
+from src.gui.settings_store import AppSettings
+from src.gui.settings_store import test_mode_validation_signature
 from src.gui.window_support import GuiSessionState
 from src.gui.window_support import UploadProgressState
 
@@ -121,6 +126,7 @@ class GuiMainWindowPreferencesTest(unittest.TestCase):
             window_height=900,
             window_is_maximized=False,
             window_is_fullscreen=True,
+            navigation_collapsed=True,
             theme_name="kefico",
         )
         incoming = GuiSettings(
@@ -137,6 +143,7 @@ class GuiMainWindowPreferencesTest(unittest.TestCase):
         self.assertEqual(merged.window_height, 900)
         self.assertFalse(merged.window_is_maximized)
         self.assertTrue(merged.window_is_fullscreen)
+        self.assertTrue(merged.navigation_collapsed)
         self.assertEqual(merged.theme_name, "igloo")
 
 
@@ -210,19 +217,75 @@ class GuiMainWindowSmokeTest(unittest.TestCase):
             window.close()
             self._app.processEvents()
 
-    def test_settings_placeholder_can_open_existing_batch_settings(self) -> None:
+    def test_application_navigation_can_collapse_and_restore_on_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = GuiSettingsStore(root_dir=Path(temp_dir))
+            window = MainWindow(store)
+            window.show()
+            self._app.processEvents()
+
+            self.assertFalse(window.navigation_collapsed)
+            self.assertTrue(window.navigation_title.isVisible())
+            self.assertEqual(
+                [button.text() for button in window.nav_buttons.values()],
+                list(APP_ROUTE_LABELS.values()),
+            )
+
+            window.navigation_toggle_button.click()
+            self._app.processEvents()
+
+            self.assertTrue(window.navigation_collapsed)
+            self.assertEqual(
+                window.navigation_frame.minimumWidth(),
+                APPLICATION_NAVIGATION_COLLAPSED_WIDTH,
+            )
+            self.assertEqual(
+                window.navigation_frame.maximumWidth(),
+                APPLICATION_NAVIGATION_COLLAPSED_WIDTH,
+            )
+            self.assertFalse(window.navigation_title.isVisible())
+            self.assertEqual(
+                [button.text() for button in window.nav_buttons.values()],
+                list(APP_ROUTE_COLLAPSED_LABELS.values()),
+            )
+            for route, button in window.nav_buttons.items():
+                self.assertEqual(button.toolTip(), APP_ROUTE_LABELS[route])
+                self.assertEqual(button.accessibleName(), APP_ROUTE_LABELS[route])
+
+            window.close()
+            self._app.processEvents()
+            self.assertTrue(store.load_app_settings().navigation_collapsed)
+
+            restored = MainWindow(store)
+            restored.show()
+            self._app.processEvents()
+
+            self.assertTrue(restored.navigation_collapsed)
+            self.assertEqual(
+                [button.text() for button in restored.nav_buttons.values()],
+                list(APP_ROUTE_COLLAPSED_LABELS.values()),
+            )
+
+            restored.close()
+            self._app.processEvents()
+
+    def test_settings_route_uses_dedicated_center_and_batch_can_open_it(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             window = MainWindow(GuiSettingsStore(root_dir=Path(temp_dir)))
 
             window.nav_buttons[ROUTE_SETTINGS].click()
-            window._open_existing_batch_settings()
             self._app.processEvents()
 
-            self.assertEqual(window.current_route, ROUTE_BATCH_UPLOAD)
-            self.assertIs(
-                window.batch_window.stack.currentWidget(),
-                window.batch_window.page_scroll_areas[window.batch_window.settings_page],
-            )
+            self.assertEqual(window.current_route, ROUTE_SETTINGS)
+            self.assertIsInstance(window.settings_center_page, SettingsCenterPage)
+            self.assertIs(window.route_stack.currentWidget(), window.settings_center_page)
+
+            window.nav_buttons[ROUTE_BATCH_UPLOAD].click()
+            window.batch_window.settings_page.global_settings_button.click()
+            self._app.processEvents()
+
+            self.assertEqual(window.current_route, ROUTE_SETTINGS)
+            self.assertIs(window.route_stack.currentWidget(), window.settings_center_page)
 
             window.close()
             self._app.processEvents()
@@ -230,7 +293,16 @@ class GuiMainWindowSmokeTest(unittest.TestCase):
     def test_mode_badge_reflects_offline_settings(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = GuiSettingsStore(root_dir=Path(temp_dir))
-            store.save(GuiSettings(offline_mode=True))
+            schema_path = Path(temp_dir) / "schema.json"
+            schema_path.write_text("{}", encoding="utf-8")
+            app_settings = AppSettings(
+                offline_mode=True,
+                offline_schema_path=str(schema_path),
+            )
+            app_settings.test_mode_validated_signature = test_mode_validation_signature(
+                app_settings
+            )
+            store.save_app_settings(app_settings)
 
             window = MainWindow(store)
 

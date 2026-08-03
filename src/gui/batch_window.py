@@ -30,6 +30,7 @@ class BatchUploadWindow(WindowShellMixin, WindowWorkflowMixin, WindowUploadMixin
         parent=None,
         embedded: bool = False,
         settings_changed_callback: Callable[[GuiSettings], None] | None = None,
+        global_settings_requested_callback: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.qt = _QT
@@ -37,6 +38,7 @@ class BatchUploadWindow(WindowShellMixin, WindowWorkflowMixin, WindowUploadMixin
         self._embedded = bool(embedded)
         self._persist_window_preferences_on_close = not self._embedded
         self._settings_changed_callback = settings_changed_callback
+        self._global_settings_requested_callback = global_settings_requested_callback
         if self._embedded:
             self.setWindowFlags(self.qt["Qt"].WindowType.Widget)
 
@@ -86,5 +88,25 @@ class BatchUploadWindow(WindowShellMixin, WindowWorkflowMixin, WindowUploadMixin
         if self._settings_changed_callback is not None:
             self._settings_changed_callback(updated_settings)
         return updated_settings
+
+    def apply_global_settings(self, settings: GuiSettings) -> GuiSettings:
+        """전용 설정 센터에서 적용한 전역 설정을 현재 배치 세션에 반영한다."""
+
+        current = self.session_state.settings
+        merged = GuiSettings(
+            **{
+                **settings.__dict__,
+                "upload_mode": current.upload_mode,
+                "excel_header_row": current.excel_header_row,
+                "summary_column": current.summary_column,
+                "excel_sheet_name": current.excel_sheet_name,
+                "last_file_path": current.last_file_path,
+            }
+        )
+        updated = self._on_settings_changed(merged)
+        set_settings = getattr(self.settings_page, "set_settings", None)
+        if callable(set_settings):
+            set_settings(updated)
+        return updated
 
 __all__ = ["BatchUploadWindow"]

@@ -24,6 +24,7 @@ from src.gui.pages import create_result_page
 from src.gui.pages import create_root_item_page
 from src.gui.pages import create_upload_page
 from src.gui.pages import create_validation_page
+from src.gui.page_batch_settings import create_batch_settings_page
 from src.gui.settings_store import GuiSettings
 
 
@@ -221,6 +222,52 @@ class GuiPagesUploadPageTest(unittest.TestCase):
             self._expanding_policy,
         )
         self.assertGreaterEqual(panel.maximumWidth(), 1_000_000)
+
+
+class GuiBatchSettingsPageTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        cls._app = QApplication.instance() or QApplication([])
+
+    def test_batch_settings_preserve_global_values_and_edit_only_batch_fields(self) -> None:
+        changes = []
+        initial = GuiSettings(
+            base_url="https://example.test",
+            username="tester",
+            password="secret",
+            theme_name="igloo",
+            excel_header_row=1,
+            summary_column="Summary",
+        )
+        page = create_batch_settings_page(initial, changes.append)
+
+        page.header_row.setValue(3)
+        page.summary_column.setText("요약")
+        current = page.get_settings()
+
+        self.assertEqual(current.base_url, "https://example.test")
+        self.assertEqual(current.username, "tester")
+        self.assertEqual(current.password, "secret")
+        self.assertEqual(current.theme_name, "igloo")
+        self.assertEqual(current.excel_header_row, 3)
+        self.assertEqual(current.summary_column, "요약")
+        self.assertTrue(changes)
+        self.assertNotIn("base_url", page.__dict__)
+
+    def test_batch_settings_link_opens_global_settings_callback(self) -> None:
+        requests = []
+        page = create_batch_settings_page(
+            GuiSettings(),
+            lambda _settings: None,
+            lambda: requests.append("open"),
+        )
+
+        page.global_settings_button.click()
+
+        self.assertEqual(requests, ["open"])
+        self.assertFalse(page.next_button.isEnabled())
 
 
 if __name__ == "__main__":

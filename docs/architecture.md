@@ -161,11 +161,14 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 
 주요 책임:
 - 최상위에서 `트래커 작업공간`, `배치 작업`, `실행 기록`, `설정` 전환
+- 최상위 좌측 앱 메뉴 접기·펼치기와 접힘 상태 영속화
 - 기존 9단계 create/update/upsert 마법사를 `배치 작업` 안에 보존
 - 단계형 화면 전환과 상태 유지
-- 설정 저장 및 암호화된 비밀번호 저장
-- 전체 설정 preset 저장 및 재적용
-- 테마 전환과 테스트 모드 제어
+- 전용 설정 센터에서 다중 연결 profile과 활성 profile 관리
+- 로컬 암호화 또는 OS 자격증명 저장소 선택과 안전한 저장소 전환
+- 연결·snapshot 검증, 명시적 저장·적용과 legacy 설정 migration
+- 전역 설정과 배치 workflow preset 분리
+- 테마 전환과 전역 테스트 모드 제어
 - 연결 테스트와 프로젝트/트래커 조회
 - 다중 Excel 파일 선택과 대표 파일 미리보기 표시
 - 파일명 정규식 기반 상단 데이터 preview/payload 구성
@@ -180,16 +183,20 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - `src/gui/pages.py`
 - `src/gui/services.py`
 - `src/gui/settings_store.py`
+- `src/gui/settings_center.py`
+- `src/gui/page_batch_settings.py`
 - `src/gui/worker.py`
 
 현재 내부 구조:
 - 페이지 공통 요소: `src/gui/page_common.py`
-- 설정·프로젝트 화면: `src/gui/page_setup_settings.py`
+- 전역 설정 센터: `src/gui/settings_center.py`
+- 배치 설정 화면: `src/gui/page_batch_settings.py`
+- legacy 설정·프로젝트 화면: `src/gui/page_setup_settings.py`
 - 파일·루트 항목 화면: `src/gui/page_setup_file.py`
 - 매핑 화면: `src/gui/page_execution_mapping.py`
 - 검증·업로드·결과 화면: `src/gui/page_execution_run.py`
 - 페이지 호환 façade: `src/gui/page_setup.py`, `src/gui/page_execution.py`
-- 최상위 앱 셸과 route 전환: `src/gui/main_window.py`
+- 최상위 앱 셸, 접이식 탐색 메뉴와 route 전환: `src/gui/main_window.py`
 - 기존 배치 마법사 조합: `src/gui/batch_window.py`, `src/gui/window_support.py`, `src/gui/window_shell.py`, `src/gui/window_workflow.py`, `src/gui/window_upload.py`
 - GUI 서비스 분리: `src/gui/service_core.py`, `src/gui/upload_service.py`
 - 업로드 context 모델: `src/gui/upload_context.py`
@@ -205,6 +212,9 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 `BatchValidationService`, `BatchUploadService`가 담당합니다.
 
 `MainWindow` 는 런타임에 내부 클래스를 조립하지 않고 `QMainWindow`를 직접 상속합니다.
+최상위 설정 route는 `SettingsCenterPage`를 직접 포함하고, 저장·검증을 통과한 전역 설정만
+`BatchUploadWindow.apply_global_settings()`를 통해 현재 배치 세션에 반영합니다. 앱 시작 시에도
+저장된 검증 signature와 현재 profile 또는 snapshot signature가 일치해야 활성 환경으로 복원합니다.
 세션의 mapping/validation context는 실제 dataclass 타입으로 선언하며, 업로드 건수·단계·
 시간 측정값은 `UploadProgressState` 하나에서 관리합니다. Window mixin 사이의 호출은
 현재 클래스 구성만으로 명확하므로 별도 `Protocol`은 추가하지 않습니다.

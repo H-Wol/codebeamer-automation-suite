@@ -196,11 +196,23 @@ class WindowWorkflowMixin:
     def _apply_workflow_preset(self, preset: GuiWorkflowPreset, *, startup: bool = False) -> None:
         """`apply_workflow_preset` 변경을 적용한다."""
         self.session_state.workflow_preset = preset
-        normalized_theme = self._apply_theme(preset.settings.theme_name)
-        self.session_state.settings = _merge_window_preferences(
-            self.session_state.settings,
-            replace(preset.settings, theme_name=normalized_theme),
-        )
+        if self.settings_store.app_settings_path.exists():
+            current = self.session_state.settings
+            self.session_state.settings = replace(
+                current,
+                upload_mode=normalize_gui_upload_mode(preset.settings.upload_mode),
+                excel_header_row=max(int(preset.settings.excel_header_row or 1), 1),
+                summary_column=str(preset.settings.summary_column or "Summary"),
+                excel_sheet_name=str(preset.settings.excel_sheet_name or "0"),
+                last_file_path=str(preset.settings.last_file_path or current.last_file_path or ""),
+            )
+            self._apply_theme(current.theme_name)
+        else:
+            normalized_theme = self._apply_theme(preset.settings.theme_name)
+            self.session_state.settings = _merge_window_preferences(
+                self.session_state.settings,
+                replace(preset.settings, theme_name=normalized_theme),
+            )
 
         set_settings = getattr(self.settings_page, "set_settings", None)
         if callable(set_settings):
@@ -257,7 +269,8 @@ class WindowWorkflowMixin:
             preset = self._collect_workflow_preset()
             self.settings_store.save_workflow_preset(preset)
             self.session_state.workflow_preset = preset
-            self.settings_store.save(preset.settings)
+            if not self.settings_store.app_settings_path.exists():
+                self.settings_store.save(preset.settings)
         except Exception as exc:
             self.statusBar().showMessage(str(exc))
             self._show_error_dialog("전체 설정 저장 실패", str(exc))

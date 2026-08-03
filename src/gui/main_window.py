@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from .batch_window import BatchUploadWindow
+from .settings_center import SettingsCenterPage
 from .settings_store import GuiSettings
 from .settings_store import GuiSettingsStore
 from .window_support import _estimate_upload_remaining_seconds
@@ -27,6 +28,15 @@ APP_ROUTE_LABELS = {
     ROUTE_ACTIVITY: "실행 기록",
     ROUTE_SETTINGS: "설정",
 }
+APP_ROUTE_COLLAPSED_LABELS = {
+    ROUTE_TRACKER_WORKSPACE: "조회",
+    ROUTE_BATCH_UPLOAD: "배치",
+    ROUTE_ACTIVITY: "기록",
+    ROUTE_SETTINGS: "설정",
+}
+APPLICATION_NAVIGATION_EXPANDED_MIN_WIDTH = 170
+APPLICATION_NAVIGATION_EXPANDED_MAX_WIDTH = 220
+APPLICATION_NAVIGATION_COLLAPSED_WIDTH = 68
 
 
 _QT = _require_qt()
@@ -40,10 +50,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.qt = _QT
         self.settings_store = settings_store
+        settings_store.ensure_app_settings()
         initial_settings = settings_store.load()
         self._last_normal_window_width = max(int(initial_settings.window_width), 860)
         self._last_normal_window_height = max(int(initial_settings.window_height), 620)
         self.current_route = ""
+        self.navigation_collapsed = bool(initial_settings.navigation_collapsed)
         self.route_widgets: dict[str, object] = {}
         self.nav_buttons: dict[str, object] = {}
 
@@ -102,25 +114,41 @@ class MainWindow(QMainWindow):
 
         navigation = QFrame(root)
         navigation.setObjectName("application_navigation")
-        navigation.setMinimumWidth(170)
-        navigation.setMaximumWidth(220)
+        self.navigation_frame = navigation
         navigation_layout = QVBoxLayout(navigation)
         navigation_layout.setContentsMargins(10, 12, 10, 12)
         navigation_layout.setSpacing(6)
 
-        navigation_title = QLabel("작업 영역")
-        navigation_title.setObjectName("application_navigation_title")
-        navigation_layout.addWidget(navigation_title)
+        navigation_header = QHBoxLayout()
+        navigation_header.setContentsMargins(0, 0, 0, 0)
+        navigation_header.setSpacing(4)
+        self.navigation_title = QLabel("작업 영역")
+        self.navigation_title.setObjectName("application_navigation_title")
+        navigation_header.addWidget(self.navigation_title)
+        navigation_header.addStretch(1)
+
+        self.navigation_toggle_button = QPushButton(navigation)
+        self.navigation_toggle_button.setObjectName("application_navigation_toggle")
+        self.navigation_toggle_button.clicked.connect(
+            lambda checked=False: self._set_navigation_collapsed(
+                not self.navigation_collapsed
+            )
+        )
+        navigation_header.addWidget(self.navigation_toggle_button)
+        navigation_layout.addLayout(navigation_header)
 
         for route, label in APP_ROUTE_LABELS.items():
             button = QPushButton(label, navigation)
             button.setObjectName("application_nav_button")
             button.setCheckable(True)
+            button.setAccessibleName(label)
+            button.setToolTip(label)
             button.clicked.connect(
                 lambda checked=False, selected_route=route: self._show_route(selected_route)
             )
             navigation_layout.addWidget(button)
             self.nav_buttons[route] = button
+        self._set_navigation_collapsed(self.navigation_collapsed, announce=False)
         navigation_layout.addStretch(1)
 
         content = QFrame(root)
@@ -156,6 +184,7 @@ class MainWindow(QMainWindow):
             parent=self.batch_page,
             embedded=True,
             settings_changed_callback=self._on_batch_settings_changed,
+            global_settings_requested_callback=self._open_global_settings,
         )
         batch_layout.addWidget(self.batch_window)
 
@@ -168,16 +197,13 @@ class MainWindow(QMainWindow):
                 "통합 실행 기록은 쓰기 작업과 내보내기 흐름이 연결되는 단계에서 추가합니다."
             ),
         )
-        self.settings_center_page = self._create_placeholder_page(
-            title="설정",
-            phase="Foundation 2",
-            description="연결 profile, 화면, 네트워크·저장소, 테스트 모드를 관리하는 전용 설정 영역입니다.",
-            scope_text=(
-                "전용 설정 센터와 기존 설정 변환은 다음 구현 단계에서 추가합니다. "
-                "그 전까지 현재 연결과 업로드 설정은 배치 작업의 첫 단계에서 그대로 사용할 수 있습니다."
+        self.settings_center_page = SettingsCenterPage(
+            self.settings_store,
+            on_applied=self._on_global_settings_applied,
+            connection_tester=(
+                self.batch_window.codebeamer_service.test_connection_and_load_projects
             ),
-            action_text="배치 작업의 기존 설정 열기",
-            action_handler=self._open_existing_batch_settings,
+            parent=content,
         )
 
         self.route_widgets = {
@@ -262,23 +288,77 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
         return page
 
-    def _show_route(self, route: str) -> None:
+    def _show_route(self, route: str) -> bool:
         if route not in self.route_widgets:
             raise ValueError(f"알 수 없는 작업 영역입니다: {route}")
+        if (
+            self.current_route == ROUTE_SETTINGS
+            and route != ROUTE_SETTINGS
+            and not self.settings_center_page.request_leave()
+        ):
+            for button_route, button in self.nav_buttons.items():
+                button.setChecked(button_route == ROUTE_SETTINGS)
+            return False
         self.current_route = route
         self.route_stack.setCurrentWidget(self.route_widgets[route])
         for button_route, button in self.nav_buttons.items():
             button.setChecked(button_route == route)
         if route == ROUTE_BATCH_UPLOAD:
             self.statusBar().hide()
-            return
+            return True
         self.statusBar().show()
         self.statusBar().showMessage(f"{APP_ROUTE_LABELS[route]} 화면을 열었습니다.")
+        return True
 
-    def _open_existing_batch_settings(self) -> None:
-        self._show_route(ROUTE_BATCH_UPLOAD)
-        self.batch_window._show_page(self.batch_window.settings_page)
-        self.batch_window.statusBar().showMessage("기존 배치 설정 페이지를 열었습니다.")
+    def _open_global_settings(self) -> None:
+        self._show_route(ROUTE_SETTINGS)
+
+    def _set_navigation_collapsed(self, collapsed: bool, *, announce: bool = True) -> None:
+        self.navigation_collapsed = bool(collapsed)
+        if self.navigation_collapsed:
+            self.navigation_frame.setMinimumWidth(0)
+            self.navigation_frame.setMaximumWidth(APPLICATION_NAVIGATION_COLLAPSED_WIDTH)
+            self.navigation_frame.setMinimumWidth(APPLICATION_NAVIGATION_COLLAPSED_WIDTH)
+        else:
+            self.navigation_frame.setMaximumWidth(
+                APPLICATION_NAVIGATION_EXPANDED_MAX_WIDTH
+            )
+            self.navigation_frame.setMinimumWidth(
+                APPLICATION_NAVIGATION_EXPANDED_MIN_WIDTH
+            )
+
+        self.navigation_title.setVisible(not self.navigation_collapsed)
+        toggle_text = "›" if self.navigation_collapsed else "‹"
+        toggle_tooltip = (
+            "메뉴 펼치기" if self.navigation_collapsed else "메뉴 접기"
+        )
+        self.navigation_toggle_button.setText(toggle_text)
+        self.navigation_toggle_button.setToolTip(toggle_tooltip)
+        self.navigation_toggle_button.setAccessibleName(toggle_tooltip)
+
+        for route, button in self.nav_buttons.items():
+            button.setText(
+                APP_ROUTE_COLLAPSED_LABELS[route]
+                if self.navigation_collapsed
+                else APP_ROUTE_LABELS[route]
+            )
+            button.setProperty("navigationCollapsed", self.navigation_collapsed)
+            button.style().unpolish(button)
+            button.style().polish(button)
+
+        settings_center = getattr(self, "settings_center_page", None)
+        if settings_center is not None:
+            settings_center.update_navigation_preference(self.navigation_collapsed)
+
+        if announce:
+            state_text = "접었습니다" if self.navigation_collapsed else "펼쳤습니다"
+            self.statusBar().showMessage(f"왼쪽 메뉴를 {state_text}.")
+
+    def _on_global_settings_applied(self, settings: GuiSettings) -> None:
+        applied = self.batch_window.apply_global_settings(settings)
+        self._update_mode_badge(applied)
+        self.batch_window._apply_theme(applied.theme_name)
+        self.statusBar().showMessage("전역 설정을 현재 작업에 적용했습니다.")
 
     def _on_batch_settings_changed(self, settings: GuiSettings) -> None:
         self._update_mode_badge(settings)
@@ -287,7 +367,13 @@ class MainWindow(QMainWindow):
         if bool(getattr(settings, "offline_mode", False)):
             text = "테스트 모드"
             mode = "test"
-        elif str(getattr(settings, "base_url", "") or "").strip():
+        elif all(
+            (
+                str(getattr(settings, "base_url", "") or "").strip(),
+                str(getattr(settings, "username", "") or "").strip(),
+                str(getattr(settings, "password", "") or ""),
+            )
+        ):
             text = "온라인 설정"
             mode = "online"
         else:
@@ -305,6 +391,9 @@ class MainWindow(QMainWindow):
             self._last_normal_window_height = max(int(self.height()), self.minimumHeight())
 
     def closeEvent(self, event) -> None:
+        if self.settings_center_page.has_unsaved_changes() and not self.settings_center_page.request_leave():
+            event.ignore()
+            return
         current_settings = replace(self.batch_window.session_state.settings)
         updated_settings = replace(
             current_settings,
@@ -312,17 +401,20 @@ class MainWindow(QMainWindow):
             window_height=max(int(self._last_normal_window_height), self.minimumHeight()),
             window_is_maximized=bool(self.isMaximized()),
             window_is_fullscreen=bool(self.isFullScreen()),
+            navigation_collapsed=self.navigation_collapsed,
         )
         self.batch_window.session_state.settings = updated_settings
         try:
-            self.settings_store.save(updated_settings)
+            self.settings_store.save_window_preferences(updated_settings)
         except Exception:
             pass
         super().closeEvent(event)
 
 
 __all__ = [
+    "APP_ROUTE_COLLAPSED_LABELS",
     "APP_ROUTE_LABELS",
+    "APPLICATION_NAVIGATION_COLLAPSED_WIDTH",
     "BatchUploadWindow",
     "MainWindow",
     "ROUTE_ACTIVITY",

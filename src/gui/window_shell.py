@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from .page_batch_settings import create_batch_settings_page
 from .pages import create_file_selection_page
 from .pages import create_mapping_page
 from .pages import create_project_selection_page
 from .pages import create_result_page
 from .pages import create_root_item_page
-from .pages import create_settings_page
 from .pages import create_upload_page
 from .pages import create_validation_page
 from .styles import build_gui_stylesheet
@@ -67,7 +67,7 @@ class WindowShellMixin:
         steps_row = QHBoxLayout()
         steps_row.setSpacing(6)
         self.step_labels = []
-        for step_name in ("설정", "프로젝트", "파일", "상단 구조", "상단 필드", "매핑", "검증", "업로드", "결과"):
+        for step_name in ("배치 설정", "프로젝트", "파일", "상단 구조", "상단 필드", "매핑", "검증", "업로드", "결과"):
             label = QLabel(step_name)
             label.setObjectName("step_badge")
             steps_row.addWidget(label)
@@ -307,11 +307,10 @@ class WindowShellMixin:
         return result_box.get("result")
 
     def _build_pages(self) -> None:
-        self.settings_page = create_settings_page(
-            self.settings_store,
+        self.settings_page = create_batch_settings_page(
             self.session_state.settings,
             self._on_settings_changed,
-            self._apply_theme,
+            getattr(self, "_global_settings_requested_callback", None),
         )
         self.project_page = create_project_selection_page(
             self.session_state.settings,
@@ -409,7 +408,7 @@ class WindowShellMixin:
             self.stack.addWidget(self._create_page_scroll_area(page))
 
         self.page_meta = {
-            self.settings_page: ("설정", "연결 정보와 기본 실행 옵션을 입력합니다.", 0),
+            self.settings_page: ("배치 설정", "작업 모드와 Excel 해석 기준을 확인합니다.", 0),
             self.project_page: ("프로젝트 선택", "업로드 대상 프로젝트와 트래커를 선택합니다.", 1),
             self.file_page: ("파일 선택", "Excel 파일과 시트, 헤더 정보를 확인합니다.", 2),
             self.root_item_structure_page: ("상단 구조", "상단 폴더를 어떤 구조로 만들지 결정합니다.", 3),

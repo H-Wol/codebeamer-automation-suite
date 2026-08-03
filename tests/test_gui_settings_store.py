@@ -8,6 +8,13 @@ from pathlib import Path
 from src.gui.settings_store import GuiSettings
 from src.gui.settings_store import GuiSettingsStore
 from src.gui.settings_store import GuiWorkflowPreset
+from src.gui.settings_store import AppSettings
+from src.gui.settings_store import ConnectionProfile
+from src.gui.settings_store import CREDENTIAL_STORAGE_LOCAL
+from src.gui.settings_store import CREDENTIAL_STORAGE_NONE
+from src.gui.settings_store import CREDENTIAL_STORAGE_OS
+from src.gui.settings_store import effective_gui_settings
+from src.gui.settings_store import profile_validation_signature
 from src.gui.settings_store import GUI_UPLOAD_MODE_UPSERT
 from src.gui.settings_store import GUI_UPLOAD_MODE_UPDATE
 from src.gui.styles import DEFAULT_GUI_THEME
@@ -213,3 +220,380 @@ class GuiSettingsStoreTest(unittest.TestCase):
             loaded = store.load()
 
             self.assertEqual(loaded.upload_mode, GUI_UPLOAD_MODE_UPSERT)
+
+    def test_app_profile_local_storage_encrypts_secret_with_real_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = GuiSettingsStore(Path(tmp_dir), credential_store=_FakeCredentialStore())
+            profile = ConnectionProfile(
+                profile_id="primary",
+                name="기본",
+                base_url="https://example.test",
+                username="tester",
+                password="profile-secret",
+                credential_storage=CREDENTIAL_STORAGE_LOCAL,
+            )
+
+            store.save_app_settings(
+                AppSettings(active_profile_id="primary", profiles=[profile])
+            )
+            serialized = store.app_settings_path.read_text(encoding="utf-8")
+            loaded = store.load_app_settings()
+
+            self.assertNotIn("profile-secret", serialized)
+            self.assertEqual(loaded.active_profile().password, "profile-secret")
+
+
+class _FakeCredentialStore:
+    available = True
+    availability_error = ""
+
+    def __init__(self) -> None:
+        self.passwords: dict[str, str] = {}
+        self.fail_on_set = False
+
+    def get_password(self, profile_id: str) -> str | None:
+        return self.passwords.get(profile_id)
+
+    def set_password(self, profile_id: str, password: str) -> None:
+        if self.fail_on_set:
+            raise RuntimeError("OS credential write failed")
+        self.passwords[profile_id] = password
+
+    def delete_password(self, profile_id: str) -> None:
+        self.passwords.pop(profile_id, None)
+
+
+class _DeterministicSettingsStore(GuiSettingsStore):
+    def _encrypt_password(self, password: str) -> str:
+        return f"encrypted::{password[::-1]}"
+
+    def _decrypt_password(self, encrypted_password: str) -> str:
+        prefix = "encrypted::"
+        if not encrypted_password.startswith(prefix):
+            raise ValueError("invalid encrypted value")
+        return encrypted_password[len(prefix):][::-1]
+
+
+class GuiAppSettingsStoreTest(unittest.TestCase):
+    def test_legacy_settings_are_migrated_without_removing_source_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = _DeterministicSettingsStore(
+                Path(tmp_dir), credential_store=_FakeCredentialStore()
+            )
+            legacy = GuiSettings(
+                base_url="https://example.test/cb",
+                username="tester",
+                password="legacy-secret",
+                save_password=True,
+                offline_mode=True,
+                offline_schema_path="/tmp/schema.json",
+                theme_name="igloo",
+            )
+            store.save(legacy)
+            source_bytes = store.settings_path.read_bytes()
+
+            migrated = store.ensure_app_settings()
+
+            self.assertTrue(store.settings_path.exists())
+            self.assertEqual(store.settings_path.read_bytes(), source_bytes)
+            self.assertTrue(store.app_settings_path.exists())
+            self.assertTrue(migrated.migrated_from_legacy)
+            self.assertEqual(migrated.active_profile().name, "기존 연결")
+            self.assertEqual(migrated.active_profile().password, "legacy-secret")
+            self.assertEqual(migrated.theme_name, "igloo")
+            self.assertTrue(migrated.offline_mode)
+            self.assertNotIn("legacy-secret", store.app_settings_path.read_text(encoding="utf-8"))
+
+    def test_multiple_profiles_round_trip_with_one_active_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            credential_store = _FakeCredentialStore()
+            store = _DeterministicSettingsStore(
+                Path(tmp_dir), credential_store=credential_store
+            )
+            settings = AppSettings(
+                active_profile_id="production",
+                profiles=[
+                    ConnectionProfile(
+                        profile_id="development",
+                        name="개발",
+                        base_url="https://dev.example.test",
+                        username="dev-user",
+                        password="dev-secret",
+                        credential_storage=CREDENTIAL_STORAGE_LOCAL,
+                    ),
+                    ConnectionProfile(
+                        profile_id="production",
+                        name="운영",
+                        base_url="https://prod.example.test",
+                        username="prod-user",
+                        password="prod-secret",
+                        credential_storage=CREDENTIAL_STORAGE_OS,
+                    ),
+                ],
+            )
+
+            store.save_app_settings(settings)
+            loaded = store.load_app_settings()
+
+            self.assertEqual(len(loaded.profiles), 2)
+            self.assertEqual(loaded.active_profile().name, "운영")
+            self.assertEqual(loaded.active_profile().password, "prod-secret")
+            self.assertEqual(credential_store.passwords["production"], "prod-secret")
+            serialized = store.app_settings_path.read_text(encoding="utf-8")
+            self.assertNotIn("dev-secret", serialized)
+            self.assertNotIn("prod-secret", serialized)
+
+    def test_legacy_workflow_preset_globals_are_included_in_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = _DeterministicSettingsStore(
+                Path(tmp_dir), credential_store=_FakeCredentialStore()
+            )
+            store.save_workflow_preset(
+                GuiWorkflowPreset(
+                    settings=GuiSettings(
+                        base_url="https://preset.example.test",
+                        username="preset-user",
+                        password="preset-secret",
+                        save_password=True,
+                        theme_name="igloo",
+                        output_dir="preset-output",
+                    )
+                )
+            )
+
+            migrated = store.ensure_app_settings()
+
+            self.assertEqual(migrated.active_profile().base_url, "https://preset.example.test")
+            self.assertEqual(migrated.active_profile().username, "preset-user")
+            self.assertEqual(migrated.active_profile().password, "preset-secret")
+            self.assertEqual(migrated.theme_name, "igloo")
+            self.assertEqual(migrated.output_dir, "preset-output")
+            self.assertTrue(store.workflow_preset_path.exists())
+
+    def test_credential_transition_verifies_target_before_removing_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            credential_store = _FakeCredentialStore()
+            store = _DeterministicSettingsStore(
+                Path(tmp_dir), credential_store=credential_store
+            )
+            settings = AppSettings(
+                active_profile_id="primary",
+                profiles=[
+                    ConnectionProfile(
+                        profile_id="primary",
+                        name="기본",
+                        password="secret",
+                        credential_storage=CREDENTIAL_STORAGE_LOCAL,
+                    )
+                ],
+            )
+            store.save_app_settings(settings)
+
+            settings.profiles[0].credential_storage = CREDENTIAL_STORAGE_OS
+            store.save_app_settings(settings)
+            payload = json.loads(store.app_settings_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(credential_store.passwords["primary"], "secret")
+            self.assertNotIn("password_encrypted", payload["profiles"][0])
+
+            settings.profiles[0].credential_storage = CREDENTIAL_STORAGE_LOCAL
+            store.save_app_settings(settings)
+
+            self.assertNotIn("primary", credential_store.passwords)
+            payload = json.loads(store.app_settings_path.read_text(encoding="utf-8"))
+            self.assertTrue(payload["profiles"][0]["password_encrypted"])
+
+    def test_failed_os_credential_transition_restores_previous_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            credential_store = _FakeCredentialStore()
+            store = _DeterministicSettingsStore(
+                Path(tmp_dir), credential_store=credential_store
+            )
+            settings = AppSettings(
+                active_profile_id="primary",
+                profiles=[
+                    ConnectionProfile(
+                        profile_id="primary",
+                        name="기본",
+                        password="secret",
+                        credential_storage=CREDENTIAL_STORAGE_LOCAL,
+                    )
+                ],
+            )
+            store.save_app_settings(settings)
+            previous_bytes = store.app_settings_path.read_bytes()
+            settings.profiles[0].credential_storage = CREDENTIAL_STORAGE_OS
+            credential_store.fail_on_set = True
+
+            with self.assertRaisesRegex(RuntimeError, "OS credential write failed"):
+                store.save_app_settings(settings)
+
+            self.assertEqual(store.app_settings_path.read_bytes(), previous_bytes)
+            self.assertEqual(credential_store.passwords, {})
+
+    def test_export_and_import_exclude_all_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            store = _DeterministicSettingsStore(
+                root, credential_store=_FakeCredentialStore()
+            )
+            settings = AppSettings(
+                active_profile_id="primary",
+                navigation_collapsed=True,
+                profiles=[
+                    ConnectionProfile(
+                        profile_id="primary",
+                        name="기본",
+                        base_url="https://example.test",
+                        username="tester",
+                        password="secret",
+                        credential_storage=CREDENTIAL_STORAGE_LOCAL,
+                        validated_signature="signature",
+                    )
+                ],
+            )
+            export_path = root / "export.json"
+
+            store.export_app_settings(export_path, settings)
+            serialized = export_path.read_text(encoding="utf-8")
+            imported = store.import_app_settings(export_path)
+
+            self.assertNotIn("secret", serialized)
+            self.assertNotIn("password", serialized)
+            self.assertNotIn("validated_signature", serialized)
+            self.assertEqual(imported.profiles[0].password, "")
+            self.assertEqual(
+                imported.profiles[0].credential_storage,
+                CREDENTIAL_STORAGE_NONE,
+            )
+            self.assertTrue(imported.navigation_collapsed)
+
+    def test_effective_settings_use_active_profile_and_keep_batch_values(self) -> None:
+        app_settings = AppSettings(
+            active_profile_id="second",
+            profiles=[
+                ConnectionProfile(profile_id="first", name="첫 번째", base_url="https://one"),
+                ConnectionProfile(
+                    profile_id="second",
+                    name="두 번째",
+                    base_url="https://two",
+                    username="user",
+                    password="secret",
+                ),
+            ],
+            theme_name="igloo",
+            navigation_collapsed=True,
+            offline_mode=False,
+            output_dir="global-output",
+        )
+        batch_settings = GuiSettings(
+            upload_mode=GUI_UPLOAD_MODE_UPDATE,
+            excel_header_row=3,
+            summary_column="요약",
+        )
+
+        effective = effective_gui_settings(app_settings, batch_settings)
+
+        self.assertEqual(effective.base_url, "https://two")
+        self.assertEqual(effective.password, "secret")
+        self.assertEqual(effective.theme_name, "igloo")
+        self.assertTrue(effective.navigation_collapsed)
+        self.assertEqual(effective.output_dir, "global-output")
+        self.assertEqual(effective.upload_mode, GUI_UPLOAD_MODE_UPDATE)
+        self.assertEqual(effective.excel_header_row, 3)
+        self.assertEqual(effective.summary_column, "요약")
+
+    def test_version_two_workflow_preset_contains_only_batch_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = _DeterministicSettingsStore(
+                Path(tmp_dir), credential_store=_FakeCredentialStore()
+            )
+            store.ensure_app_settings()
+            store.save_workflow_preset(
+                GuiWorkflowPreset(
+                    settings=GuiSettings(
+                        base_url="https://example.test",
+                        username="tester",
+                        password="secret",
+                        save_password=True,
+                        theme_name="igloo",
+                        upload_mode=GUI_UPLOAD_MODE_UPDATE,
+                        excel_header_row=3,
+                        summary_column="요약",
+                    )
+                )
+            )
+
+            payload = json.loads(store.workflow_preset_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(payload["version"], 2)
+            self.assertEqual(payload["settings"]["upload_mode"], GUI_UPLOAD_MODE_UPDATE)
+            self.assertEqual(payload["settings"]["excel_header_row"], 3)
+            self.assertEqual(payload["settings"]["summary_column"], "요약")
+            self.assertNotIn("base_url", payload["settings"])
+            self.assertNotIn("username", payload["settings"])
+            self.assertNotIn("theme_name", payload["settings"])
+            self.assertNotIn("secret", store.workflow_preset_path.read_text(encoding="utf-8"))
+
+    def test_profile_validation_signature_changes_with_connection_secret(self) -> None:
+        profile = ConnectionProfile(
+            profile_id="primary",
+            base_url="https://example.test",
+            username="tester",
+            password="one",
+        )
+        original = profile_validation_signature(profile)
+
+        profile.password = "two"
+
+        self.assertNotEqual(profile_validation_signature(profile), original)
+
+    def test_unvalidated_saved_profile_is_not_activated_on_load(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = _DeterministicSettingsStore(
+                Path(tmp_dir), credential_store=_FakeCredentialStore()
+            )
+            settings = AppSettings(
+                active_profile_id="primary",
+                profiles=[
+                    ConnectionProfile(
+                        profile_id="primary",
+                        name="기본",
+                        base_url="https://example.test",
+                        username="tester",
+                        password="secret",
+                        credential_storage=CREDENTIAL_STORAGE_LOCAL,
+                    )
+                ],
+            )
+            store.save_app_settings(settings)
+
+            effective = store.load()
+
+            self.assertEqual(effective.base_url, "")
+            self.assertEqual(effective.username, "")
+            self.assertEqual(effective.password, "")
+
+    def test_validated_saved_profile_is_activated_on_load(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = _DeterministicSettingsStore(
+                Path(tmp_dir), credential_store=_FakeCredentialStore()
+            )
+            profile = ConnectionProfile(
+                profile_id="primary",
+                name="기본",
+                base_url="https://example.test",
+                username="tester",
+                password="secret",
+                credential_storage=CREDENTIAL_STORAGE_LOCAL,
+            )
+            profile.validated_signature = profile_validation_signature(profile)
+            store.save_app_settings(
+                AppSettings(active_profile_id="primary", profiles=[profile])
+            )
+
+            effective = store.load()
+
+            self.assertEqual(effective.base_url, "https://example.test")
+            self.assertEqual(effective.username, "tester")
+            self.assertEqual(effective.password, "secret")

@@ -66,9 +66,13 @@
 
 - `gui_main.py`
 - `src/gui/main_window.py`
-  최상위 앱 셸과 작업 영역 전환을 담당합니다.
+  접이식 좌측 메뉴를 포함한 최상위 앱 셸과 작업 영역 전환을 담당합니다.
 - `src/gui/batch_window.py`
   기존 9단계 create/update/upsert 마법사를 보존합니다.
+- `src/gui/settings_center.py`
+  다중 연결 profile, 화면, 네트워크·저장소, 테스트 모드와 설정 데이터 관리를 담당합니다.
+- `src/gui/page_batch_settings.py`
+  전역 설정과 분리된 배치 작업 mode 및 Excel 해석 기준을 담당합니다.
 - `cli_main.py`
   유지보수와 보조 실행 경로입니다.
 - `src/mapping_service.py`
