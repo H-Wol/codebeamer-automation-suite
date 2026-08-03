@@ -23,8 +23,14 @@ GUI는 최상위 앱 셸에서 작업 영역을 전환하고, `배치 작업`에
   - 배치 작업 전용 workflow preset 저장 / 불러오기
 - 온라인 / 테스트 모드
   - 온라인 모드에서 Codebeamer 연결
-  - 테스트 모드에서 offline schema / tracker configuration snapshot 사용
+  - 테스트 모드에서 offline schema / tracker configuration / 조회 데이터 snapshot 사용
   - 테스트 모드에서는 실제 업로드 차단, Dry Run만 허용
+- 트래커 조회 서비스 기반
+  - 프로젝트·트래커, 최상위·직접 하위 아이템과 ID 상세 조회 정규화
+  - 간편·조건 조합·CbQL에서 현재 tracker ID 범위 강제
+  - 서버 `page`, `pageSize`, `total`과 실제 pagination 적용 여부 보존
+  - builtin/custom field, 부모·자식, 원본 JSON 민감값 마스킹
+  - 두 개 tracker를 포함한 익명 테스트 fixture
 - 프로젝트 / 트래커 선택
   - 온라인 조회
   - 테스트 모드 자동 채움
@@ -74,7 +80,7 @@ GUI는 최상위 앱 셸에서 작업 영역을 전환하고, `배치 작업`에
 ### 테스트 모드
 
 1. 앱 셸에서 `설정 > 테스트 모드`를 선택합니다.
-2. `테스트 모드 사용`을 켜고 schema snapshot과 tracker configuration snapshot 경로를 지정합니다.
+2. `테스트 모드 사용`을 켜고 schema, tracker configuration, 조회 데이터 snapshot 경로를 지정합니다.
 3. `Snapshot 검증`, `저장`, `적용`을 순서대로 누릅니다.
 4. `배치 작업`의 프로젝트 화면으로 이동하면 테스트 프로젝트와 트래커가 자동으로 채워집니다.
 5. 이후 흐름은 온라인 모드와 같지만 실제 업로드는 허용되지 않고 Dry Run만 가능합니다.
@@ -99,7 +105,7 @@ GUI는 최상위 앱 셸에서 작업 영역을 전환하고, `배치 작업`에
 - `연결`: profile 이름, Base URL, Username, Password, 비밀번호 저장 방식, 활성 profile
 - `화면`: `케피코` / `이글루` 테마
 - `네트워크·저장소`: Retry Delay, Max Retries, Output Directory
-- `테스트 모드`: 전역 토글, Schema Snapshot, Config Snapshot
+- `테스트 모드`: 전역 토글, Schema Snapshot, Config Snapshot, 조회 데이터 Snapshot
 - `데이터 관리`: credential 제외 설정 가져오기 / 내보내기
 
 동작 원칙:
@@ -281,12 +287,12 @@ GUI는 최상위 앱 셸에서 작업 영역을 전환하고, `배치 작업`에
 ## 현재 제한 사항
 
 - 테스트 모드에서는 실제 Codebeamer 업로드를 지원하지 않습니다.
-- `트래커 작업공간`의 계층 탐색, 조건 검색, 상세 조회는 아직 구현하지 않았습니다.
+- `트래커 작업공간`의 조회 서비스와 테스트 fixture는 구현했지만, 확장형 트리·검색 결과·상세 화면 연결은 아직 구현하지 않았습니다.
 - 통합 `실행 기록`은 아직 안내 화면이며, 기존 실행 로그는 `배치 작업`에서 계속 확인합니다.
 - 현재 실행 환경에 사용 가능한 `keyring` backend가 없으면 OS 자격증명 저장 방식은 비활성화됩니다.
 - `Status` transition 후처리는 아직 구현하지 않았습니다.
 - tracker configuration 에 source tracker 정보가 없는 `TrackerItemChoiceField` 는 query 모드를 지원하지 않습니다.
-- offline snapshot 에 사용자 / 그룹 / tracker item query 데이터가 없으면 관련 lookup 은 실패하도록 유지합니다.
+- offline snapshot 에 사용자 / 그룹 데이터가 없으면 관련 lookup 은 실패하도록 유지합니다. 작업공간 조회는 별도 `조회 데이터 Snapshot`이 있어야 활성화할 수 있습니다.
 - 결과 화면의 상세 상호작용은 아직 최소 구성입니다.
 
 ## 권장 테스트 시나리오

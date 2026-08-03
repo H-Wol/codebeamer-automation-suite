@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field
 import json
@@ -10,6 +11,7 @@ from typing import Any
 
 import pandas as pd
 
+from .offline_query import build_offline_cbql_predicate
 from src.codebeamer_client import CodebeamerClient
 from src.excel_reader import ExcelReader
 from src.hierarchy_processor import HierarchyProcessor
@@ -92,8 +94,31 @@ def _load_json_snapshot(path_value: Any, *, label: str) -> Any:
         raise ValueError(f"{label} JSON을 읽을 수 없습니다: {exc}") from exc
 
 
+class OfflineQueryDataUnavailable(RuntimeError):
+    query_error_kind = "offline_data_unavailable"
+
+
+def _offline_page(
+    items: list[dict[str, Any]],
+    *,
+    page: int,
+    page_size: int,
+    item_key: str,
+) -> dict[str, Any]:
+    normalized_page = max(int(page), 1)
+    normalized_page_size = min(max(int(page_size), 1), 500)
+    start = (normalized_page - 1) * normalized_page_size
+    end = start + normalized_page_size
+    return {
+        "page": normalized_page,
+        "pageSize": normalized_page_size,
+        "total": len(items),
+        item_key: deepcopy(items[start:end]),
+    }
+
+
 class OfflineGuiClient:
-    """로컬 schema/config snapshot만으로 GUI 오프라인 테스트를 지원한다."""
+    """로컬 schema/config/query snapshot으로 GUI 테스트 모드를 지원한다."""
 
     def __init__(
         self,
@@ -101,6 +126,8 @@ class OfflineGuiClient:
         schema: dict[str, Any],
         schema_path: str,
         tracker_configuration: Any = None,
+        query_data: dict[str, Any] | None = None,
+        query_data_path: str = "",
         project_id: int = DEFAULT_OFFLINE_PROJECT_ID,
         tracker_id: int = DEFAULT_OFFLINE_TRACKER_ID,
     ) -> None:
@@ -108,6 +135,10 @@ class OfflineGuiClient:
         self.schema = dict(schema or {})
         self.schema_path = str(schema_path)
         self.tracker_configuration = tracker_configuration
+        if query_data is not None and not isinstance(query_data, dict):
+            raise ValueError("테스트 조회 데이터 snapshot은 JSON 객체여야 합니다.")
+        self.query_data = deepcopy(query_data) if isinstance(query_data, dict) else None
+        self.query_data_path = str(query_data_path or "")
         self.project_id = int(project_id)
         self.tracker_id = int(tracker_id)
         self.project_name = DEFAULT_OFFLINE_PROJECT_NAME
@@ -116,6 +147,12 @@ class OfflineGuiClient:
             or Path(self.schema_path).stem
             or DEFAULT_OFFLINE_TRACKER_NAME
         )
+        self._offline_projects: dict[int, dict[str, Any]] = {}
+        self._offline_trackers: dict[int, dict[str, Any]] = {}
+        self._offline_items: dict[int, dict[str, Any]] = {}
+        self._offline_children: dict[int | None, list[int]] = {}
+        if self.query_data is not None:
+            self._load_query_data(self.query_data)
 
     @classmethod
     def from_settings(cls, settings) -> "OfflineGuiClient":
@@ -130,33 +167,238 @@ class OfflineGuiClient:
                 configuration_path,
                 label="테스트 tracker configuration",
             )
-        return cls(
-            schema=schema,
-            schema_path=schema_path,
-            tracker_configuration=tracker_configuration,
-            project_id=_normalize_offline_id(
-                getattr(settings, "default_project_id", ""),
-                DEFAULT_OFFLINE_PROJECT_ID,
-            ),
-            tracker_id=_normalize_offline_id(
-                getattr(settings, "default_tracker_id", ""),
-                DEFAULT_OFFLINE_TRACKER_ID,
-            ),
-        )
+        query_data = None
+        query_data_path = str(
+            getattr(settings, "offline_query_data_path", "") or ""
+        ).strip()
+        if query_data_path:
+            try:
+                query_data = _load_json_snapshot(
+                    query_data_path,
+                    label="테스트 조회 데이터",
+                )
+            except Exception as exc:
+                raise OfflineQueryDataUnavailable(
+                    "테스트 조회 데이터 Snapshot을 읽을 수 없습니다."
+                ) from exc
+        try:
+            return cls(
+                schema=schema,
+                schema_path=schema_path,
+                tracker_configuration=tracker_configuration,
+                query_data=query_data,
+                query_data_path=query_data_path,
+                project_id=_normalize_offline_id(
+                    getattr(settings, "default_project_id", ""),
+                    DEFAULT_OFFLINE_PROJECT_ID,
+                ),
+                tracker_id=_normalize_offline_id(
+                    getattr(settings, "default_tracker_id", ""),
+                    DEFAULT_OFFLINE_TRACKER_ID,
+                ),
+            )
+        except OfflineQueryDataUnavailable:
+            raise
+        except ValueError as exc:
+            if query_data_path:
+                raise OfflineQueryDataUnavailable(
+                    "테스트 조회 데이터 Snapshot 형식이 올바르지 않습니다."
+                ) from exc
+            raise
+
+    def _load_query_data(self, payload: dict[str, Any]) -> None:
+        if int(payload.get("version") or 0) != 1:
+            raise ValueError("테스트 조회 데이터 version은 1이어야 합니다.")
+        projects = payload.get("projects")
+        trackers = payload.get("trackers")
+        items = payload.get("items")
+        if not isinstance(projects, list) or not isinstance(trackers, list) or not isinstance(items, list):
+            raise ValueError("테스트 조회 데이터에는 projects, trackers, items 목록이 필요합니다.")
+        if not projects or not trackers:
+            raise ValueError("테스트 조회 데이터에는 프로젝트와 트래커가 하나 이상 필요합니다.")
+
+        for raw_project in projects:
+            if not isinstance(raw_project, dict):
+                raise ValueError("테스트 조회 데이터의 프로젝트 형식이 올바르지 않습니다.")
+            project_id = int(raw_project.get("id") or 0)
+            if project_id <= 0 or project_id in self._offline_projects:
+                raise ValueError("테스트 조회 데이터의 프로젝트 ID가 없거나 중복됩니다.")
+            self._offline_projects[project_id] = deepcopy(raw_project)
+
+        for raw_tracker in trackers:
+            if not isinstance(raw_tracker, dict):
+                raise ValueError("테스트 조회 데이터의 트래커 형식이 올바르지 않습니다.")
+            tracker_id = int(raw_tracker.get("id") or 0)
+            project = raw_tracker.get("project") if isinstance(raw_tracker.get("project"), dict) else {}
+            project_id = int(raw_tracker.get("projectId") or project.get("id") or 0)
+            if tracker_id <= 0 or tracker_id in self._offline_trackers:
+                raise ValueError("테스트 조회 데이터의 트래커 ID가 없거나 중복됩니다.")
+            if project_id not in self._offline_projects:
+                raise ValueError("테스트 조회 데이터의 트래커가 알 수 없는 프로젝트를 참조합니다.")
+            normalized_tracker = deepcopy(raw_tracker)
+            normalized_tracker["projectId"] = project_id
+            normalized_tracker["project"] = {
+                "id": project_id,
+                "name": self._offline_projects[project_id].get("name", str(project_id)),
+                "type": "ProjectReference",
+            }
+            self._offline_trackers[tracker_id] = normalized_tracker
+
+        parent_ids: dict[int, int | None] = {}
+        for raw_item in items:
+            if not isinstance(raw_item, dict):
+                raise ValueError("테스트 조회 데이터의 아이템 형식이 올바르지 않습니다.")
+            item_id = int(raw_item.get("id") or 0)
+            tracker = raw_item.get("tracker") if isinstance(raw_item.get("tracker"), dict) else {}
+            tracker_id = int(raw_item.get("trackerId") or tracker.get("id") or 0)
+            parent = raw_item.get("parent") if isinstance(raw_item.get("parent"), dict) else {}
+            parent_id_value = raw_item.get("parentId") or parent.get("id")
+            parent_id = int(parent_id_value) if parent_id_value not in (None, "") else None
+            if item_id <= 0 or item_id in self._offline_items:
+                raise ValueError("테스트 조회 데이터의 아이템 ID가 없거나 중복됩니다.")
+            if tracker_id not in self._offline_trackers:
+                raise ValueError("테스트 조회 데이터의 아이템이 알 수 없는 트래커를 참조합니다.")
+            normalized_item = deepcopy(raw_item)
+            normalized_item["trackerId"] = tracker_id
+            normalized_item["parentId"] = parent_id
+            self._offline_items[item_id] = normalized_item
+            parent_ids[item_id] = parent_id
+
+        for item_id, parent_id in parent_ids.items():
+            if parent_id is not None:
+                parent = self._offline_items.get(parent_id)
+                if parent is None:
+                    raise ValueError("테스트 조회 데이터의 parent 아이템을 찾을 수 없습니다.")
+                if int(parent.get("trackerId") or 0) != int(
+                    self._offline_items[item_id].get("trackerId") or 0
+                ):
+                    raise ValueError("테스트 조회 데이터의 parent는 같은 트래커에 있어야 합니다.")
+            self._offline_children.setdefault(parent_id, []).append(item_id)
+
+        if self._offline_projects and self.project_id not in self._offline_projects:
+            self.project_id = next(iter(self._offline_projects))
+        if self._offline_trackers and self.tracker_id not in self._offline_trackers:
+            self.tracker_id = next(iter(self._offline_trackers))
+        if self.tracker_id in self._offline_trackers:
+            self.tracker_name = str(
+                self._offline_trackers[self.tracker_id].get("name") or self.tracker_name
+            )
+        if self.project_id in self._offline_projects:
+            self.project_name = str(
+                self._offline_projects[self.project_id].get("name") or self.project_name
+            )
+
+    def _require_query_data(self) -> None:
+        if self.query_data is None:
+            raise OfflineQueryDataUnavailable(
+                "테스트 조회 데이터 Snapshot이 설정되지 않았습니다."
+            )
+
+    def _item_reference(self, item_id: int) -> dict[str, Any]:
+        item = self._offline_items[int(item_id)]
+        child_ids = self._offline_children.get(int(item_id), [])
+        tracker_id = int(item.get("trackerId") or 0)
+        tracker = self._offline_trackers[tracker_id]
+        reference: dict[str, Any] = {
+            "id": int(item_id),
+            "name": str(item.get("name") or item.get("summary") or item_id),
+            "type": "TrackerItemReference",
+            "tracker": {
+                "id": tracker_id,
+                "name": str(tracker.get("name") or tracker_id),
+                "type": "TrackerReference",
+            },
+            "status": deepcopy(item.get("status")),
+            "assignedTo": deepcopy(item.get("assignedTo") or []),
+            "modifiedAt": str(item.get("modifiedAt") or ""),
+            "version": item.get("version"),
+            "hasChildren": bool(child_ids),
+            "childCount": len(child_ids),
+        }
+        parent_id = item.get("parentId")
+        if parent_id is not None:
+            parent = self._offline_items[int(parent_id)]
+            reference["parent"] = {
+                "id": int(parent_id),
+                "name": str(parent.get("name") or parent_id),
+                "type": "TrackerItemReference",
+            }
+        return reference
+
+    def _item_payload(self, item_id: int) -> dict[str, Any]:
+        item = deepcopy(self._offline_items[int(item_id)])
+        tracker_id = int(item.pop("trackerId"))
+        parent_id = item.pop("parentId", None)
+        tracker = self._offline_trackers[tracker_id]
+        project_id = int(tracker.get("projectId") or 0)
+        item["tracker"] = {
+            "id": tracker_id,
+            "name": str(tracker.get("name") or tracker_id),
+            "type": "TrackerReference",
+            "project": {
+                "id": project_id,
+                "name": str(self._offline_projects[project_id].get("name") or project_id),
+                "type": "ProjectReference",
+            },
+        }
+        if parent_id is not None:
+            item["parent"] = self._item_reference(int(parent_id))
+        else:
+            item.pop("parent", None)
+        child_ids = self._offline_children.get(int(item_id), [])
+        item["children"] = [self._item_reference(child_id) for child_id in child_ids]
+        item["hasChildren"] = bool(child_ids)
+        item["childCount"] = len(child_ids)
+        return item
 
     def get_projects(self) -> list[dict[str, Any]]:
         """`get_projects` 값을 반환한다."""
+        if self.query_data is not None:
+            return [deepcopy(project) for project in self._offline_projects.values()]
         return [{"id": self.project_id, "name": self.project_name}]
 
     def get_trackers(self, project_id: int) -> list[dict[str, Any]]:
         """`get_trackers` 값을 반환한다."""
+        if self.query_data is not None:
+            return [
+                deepcopy(tracker)
+                for tracker in self._offline_trackers.values()
+                if int(tracker.get("projectId") or 0) == int(project_id)
+            ]
         del project_id
         return [{"id": self.tracker_id, "name": self.tracker_name}]
 
+    def get_tracker(self, tracker_id: int) -> dict[str, Any]:
+        if self.query_data is None:
+            return {
+                "id": self.tracker_id,
+                "name": self.tracker_name,
+                "project": {
+                    "id": self.project_id,
+                    "name": self.project_name,
+                    "type": "ProjectReference",
+                },
+            }
+        tracker = self._offline_trackers.get(int(tracker_id))
+        if tracker is None:
+            raise KeyError(f"offline tracker not found: {tracker_id}")
+        return deepcopy(tracker)
+
     def get_tracker_schema(self, tracker_id: int) -> dict[str, Any]:
         """`get_tracker_schema` 값을 반환한다."""
+        if self.query_data is not None:
+            tracker = self._offline_trackers.get(int(tracker_id))
+            if tracker is None:
+                raise KeyError(f"offline tracker not found: {tracker_id}")
+            tracker_schema = tracker.get("schema")
+            if isinstance(tracker_schema, dict):
+                return deepcopy(tracker_schema)
+            schema = deepcopy(self.schema)
+            schema["id"] = int(tracker_id)
+            schema["name"] = str(tracker.get("name") or schema.get("name") or tracker_id)
+            return schema
         del tracker_id
-        return self.schema
+        return deepcopy(self.schema)
 
     def get_tracker_configuration(self, tracker_id: int) -> Any:
         """`get_tracker_configuration` 값을 반환한다."""
@@ -164,6 +406,80 @@ class OfflineGuiClient:
         if self.tracker_configuration is None:
             raise RuntimeError("offline tracker configuration snapshot is not configured")
         return self.tracker_configuration
+
+    def get_tracker_items_page(
+        self,
+        tracker_id: int,
+        *,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> dict[str, Any]:
+        self._require_query_data()
+        if int(tracker_id) not in self._offline_trackers:
+            raise KeyError(f"offline tracker not found: {tracker_id}")
+        references = [
+            self._item_reference(item_id)
+            for item_id, item in self._offline_items.items()
+            if int(item.get("trackerId") or 0) == int(tracker_id)
+        ]
+        return _offline_page(
+            references,
+            page=page,
+            page_size=page_size,
+            item_key="itemRefs",
+        )
+
+    def get_tracker_items(self, tracker_id: int) -> list[dict[str, Any]]:
+        return self.get_tracker_items_page(tracker_id)["itemRefs"]
+
+    def get_tracker_children_page(
+        self,
+        tracker_id: int,
+        *,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> dict[str, Any]:
+        self._require_query_data()
+        if int(tracker_id) not in self._offline_trackers:
+            raise KeyError(f"offline tracker not found: {tracker_id}")
+        references = [
+            self._item_reference(item_id)
+            for item_id in self._offline_children.get(None, [])
+            if int(self._offline_items[item_id].get("trackerId") or 0) == int(tracker_id)
+        ]
+        return _offline_page(
+            references,
+            page=page,
+            page_size=page_size,
+            item_key="itemRefs",
+        )
+
+    def get_tracker_children(self, tracker_id: int) -> list[dict[str, Any]]:
+        return self.get_tracker_children_page(tracker_id)["itemRefs"]
+
+    def get_item_children_page(
+        self,
+        item_id: int,
+        *,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> dict[str, Any]:
+        self._require_query_data()
+        if int(item_id) not in self._offline_items:
+            raise KeyError(f"offline item not found: {item_id}")
+        references = [
+            self._item_reference(child_id)
+            for child_id in self._offline_children.get(int(item_id), [])
+        ]
+        return _offline_page(
+            references,
+            page=page,
+            page_size=page_size,
+            item_key="itemRefs",
+        )
+
+    def get_item_children(self, item_id: int) -> list[dict[str, Any]]:
+        return self.get_item_children_page(item_id)["itemRefs"]
 
     def create_item(self, tracker_id: int, payload: dict[str, Any], parent_item_id: int | None = None) -> dict[str, Any]:
         del tracker_id, payload, parent_item_id
@@ -175,7 +491,92 @@ class OfflineGuiClient:
 
     def get_item(self, item_id: int) -> dict[str, Any]:
         """`get_item` 값을 반환한다."""
-        raise RuntimeError(f"offline snapshot does not provide item lookup by id: {item_id}")
+        self._require_query_data()
+        if int(item_id) not in self._offline_items:
+            raise KeyError(f"offline item not found: {item_id}")
+        return self._item_payload(int(item_id))
+
+    def search_items(
+        self,
+        *,
+        query_string: str,
+        baseline_id: int | None = None,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> dict[str, Any]:
+        del baseline_id
+        self._require_query_data()
+        tracker_match = re.search(
+            r"\btracker\.id\s*=\s*(\d+)",
+            str(query_string or ""),
+            re.IGNORECASE,
+        )
+        if tracker_match is None:
+            raise ValueError("테스트 조회는 tracker.id 범위가 반드시 필요합니다.")
+        tracker_id = int(tracker_match.group(1))
+        if tracker_id not in self._offline_trackers:
+            return _offline_page([], page=page, page_size=page_size, item_key="items")
+
+        condition_expression = re.sub(
+            r"\s+ORDER\s+BY\s+.+$",
+            "",
+            str(query_string or "").strip(),
+            flags=re.IGNORECASE,
+        )
+        predicate = build_offline_cbql_predicate(condition_expression)
+        matches: list[dict[str, Any]] = []
+        for item_id in self._offline_items:
+            item_payload = self._item_payload(item_id)
+            if predicate(item_payload):
+                matches.append(item_payload)
+
+        order_match = re.search(r"\bORDER\s+BY\s+(.+)$", query_string, re.IGNORECASE)
+        if order_match is not None:
+            order_terms: list[tuple[str, bool]] = []
+            for raw_term in order_match.group(1).split(","):
+                term_match = re.fullmatch(
+                    r"\s*([A-Za-z_][A-Za-z0-9_.]*)\s*(ASC|DESC)?\s*",
+                    raw_term,
+                    re.IGNORECASE,
+                )
+                if term_match is None:
+                    raise ValueError(f"테스트 모드 정렬식을 해석할 수 없습니다: {raw_term}")
+                order_terms.append(
+                    (
+                        term_match.group(1).lower(),
+                        (term_match.group(2) or "ASC").upper() == "DESC",
+                    )
+                )
+
+            def _sort_value(item: dict[str, Any], field_name: str):
+                if field_name in {"item.id", "id"}:
+                    return int(item.get("id") or 0)
+                if field_name in {"summary", "name"}:
+                    return str(item.get("name") or "").casefold()
+                if field_name == "modifiedat":
+                    return str(item.get("modifiedAt") or "")
+                if field_name == "status":
+                    status = item.get("status")
+                    return str(status.get("name") or "").casefold() if isinstance(
+                        status, dict
+                    ) else str(status or "").casefold()
+                return str(item.get(field_name) or "").casefold()
+
+            for field_name, reverse in reversed(order_terms):
+                matches.sort(
+                    key=lambda item, selected_field=field_name: _sort_value(
+                        item,
+                        selected_field,
+                    ),
+                    reverse=reverse,
+                )
+
+        return _offline_page(
+            matches,
+            page=page,
+            page_size=page_size,
+            item_key="items",
+        )
 
     def get_user(self, user_id: int):
         """`get_user` 값을 반환한다."""
@@ -196,8 +597,18 @@ class OfflineGuiClient:
         )
 
     def search_tracker_items_by_name(self, *, tracker_id: int, name: str, **kwargs):
-        del tracker_id, name, kwargs
-        raise RuntimeError("offline snapshot does not provide tracker item lookup")
+        page = int(kwargs.get("page") or 1)
+        page_size = int(kwargs.get("page_size") or 100)
+        escaped = str(name or "").replace("'", "''")
+        payload = self.search_items(
+            query_string=(
+                f"tracker.id = {int(tracker_id)} AND summary LIKE '%{escaped}%' "
+                "ORDER BY item.id ASC"
+            ),
+            page=page,
+            page_size=page_size,
+        )
+        return [self._item_reference(int(item["id"])) for item in payload["items"]]
 
 
 def _build_gui_client(settings, client_factory, logger=None):

@@ -112,11 +112,18 @@ class GuiSettingsCenterTest(unittest.TestCase):
             root = Path(tmp_dir)
             schema_path = root / "schema.json"
             schema_path.write_text(json.dumps({"tracker": {"id": 100}}), encoding="utf-8")
+            query_path = root / "query-items.json"
+            query_path.write_text(
+                json.dumps({"version": 1, "projects": [], "trackers": [], "items": []}),
+                encoding="utf-8",
+            )
             tested_modes: list[bool] = []
+            tested_query_paths: list[str] = []
             applied = []
 
             def _tester(settings):
                 tested_modes.append(settings.offline_mode)
+                tested_query_paths.append(settings.offline_query_data_path)
                 return [{"id": 1, "name": "Offline"}]
 
             page = SettingsCenterPage(
@@ -127,15 +134,18 @@ class GuiSettingsCenterTest(unittest.TestCase):
             page.show_category(SETTINGS_CATEGORY_TEST_MODE)
             page.test_mode_checkbox.setChecked(True)
             page.schema_path_edit.setText(str(schema_path))
+            page.query_data_path_edit.setText(str(query_path))
 
             page.start_validation()
             self._finish_background_validation(page)
 
             self.assertEqual(tested_modes, [True])
+            self.assertEqual(tested_query_paths, [str(query_path)])
             self.assertTrue(page.save_changes(), page.status_label.text())
             self.assertTrue(page.apply_saved_settings(), page.status_label.text())
             self.assertTrue(applied[0].offline_mode)
             self.assertEqual(applied[0].offline_schema_path, str(schema_path))
+            self.assertEqual(applied[0].offline_query_data_path, str(query_path))
 
     def test_unsaved_navigation_supports_cancel_and_discard(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

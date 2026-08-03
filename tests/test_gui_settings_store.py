@@ -15,6 +15,7 @@ from src.gui.settings_store import CREDENTIAL_STORAGE_NONE
 from src.gui.settings_store import CREDENTIAL_STORAGE_OS
 from src.gui.settings_store import effective_gui_settings
 from src.gui.settings_store import profile_validation_signature
+from src.gui.settings_store import test_mode_validation_signature
 from src.gui.settings_store import GUI_UPLOAD_MODE_UPSERT
 from src.gui.settings_store import GUI_UPLOAD_MODE_UPDATE
 from src.gui.styles import DEFAULT_GUI_THEME
@@ -440,6 +441,7 @@ class GuiAppSettingsStoreTest(unittest.TestCase):
             settings = AppSettings(
                 active_profile_id="primary",
                 navigation_collapsed=True,
+                offline_query_data_path="query-items.json",
                 profiles=[
                     ConnectionProfile(
                         profile_id="primary",
@@ -467,6 +469,26 @@ class GuiAppSettingsStoreTest(unittest.TestCase):
                 CREDENTIAL_STORAGE_NONE,
             )
             self.assertTrue(imported.navigation_collapsed)
+            self.assertEqual(imported.offline_query_data_path, "query-items.json")
+
+    def test_test_mode_signature_changes_when_query_snapshot_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            schema_path = root / "schema.json"
+            query_path = root / "query-items.json"
+            schema_path.write_text("{}", encoding="utf-8")
+            query_path.write_text('{"version": 1}', encoding="utf-8")
+            settings = AppSettings(
+                offline_mode=True,
+                offline_schema_path=str(schema_path),
+                offline_query_data_path=str(query_path),
+            )
+
+            before = test_mode_validation_signature(settings)
+            query_path.write_text('{"version": 1, "items": []}', encoding="utf-8")
+            after = test_mode_validation_signature(settings)
+
+            self.assertNotEqual(before, after)
 
     def test_effective_settings_use_active_profile_and_keep_batch_values(self) -> None:
         app_settings = AppSettings(

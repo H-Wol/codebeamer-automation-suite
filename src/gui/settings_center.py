@@ -382,8 +382,17 @@ class SettingsCenterPage(QWidget):
         config_layout.setSpacing(6)
         config_layout.addWidget(self.tracker_config_path_edit, 1)
         config_layout.addWidget(self.tracker_config_path_button)
+        self.query_data_path_edit = QLineEdit()
+        self.query_data_path_button = QPushButton("파일 선택")
+        query_data_row = QWidget()
+        query_data_layout = QHBoxLayout(query_data_row)
+        query_data_layout.setContentsMargins(0, 0, 0, 0)
+        query_data_layout.setSpacing(6)
+        query_data_layout.addWidget(self.query_data_path_edit, 1)
+        query_data_layout.addWidget(self.query_data_path_button)
         form.addRow("Schema Snapshot", schema_row)
         form.addRow("Config Snapshot", config_row)
+        form.addRow("조회 데이터 Snapshot", query_data_row)
         card_layout.addLayout(form)
         self.test_mode_help_label = QLabel("")
         self.test_mode_help_label.setObjectName("section_label")
@@ -395,6 +404,7 @@ class SettingsCenterPage(QWidget):
         self.test_mode_checkbox.toggled.connect(self._test_mode_changed)
         self.schema_path_edit.textChanged.connect(self._test_mode_changed)
         self.tracker_config_path_edit.textChanged.connect(self._test_mode_changed)
+        self.query_data_path_edit.textChanged.connect(self._test_mode_changed)
         self.schema_path_button.clicked.connect(
             lambda: self._choose_snapshot_file(self.schema_path_edit, "Schema Snapshot 선택")
         )
@@ -402,6 +412,12 @@ class SettingsCenterPage(QWidget):
             lambda: self._choose_snapshot_file(
                 self.tracker_config_path_edit,
                 "Tracker Configuration Snapshot 선택",
+            )
+        )
+        self.query_data_path_button.clicked.connect(
+            lambda: self._choose_snapshot_file(
+                self.query_data_path_edit,
+                "트래커 조회 데이터 Snapshot 선택",
             )
         )
         return page
@@ -469,6 +485,9 @@ class SettingsCenterPage(QWidget):
             self.schema_path_edit.setText(str(self.draft_settings.offline_schema_path or ""))
             self.tracker_config_path_edit.setText(
                 str(self.draft_settings.offline_tracker_configuration_path or "")
+            )
+            self.query_data_path_edit.setText(
+                str(self.draft_settings.offline_query_data_path or "")
             )
         finally:
             self._updating_controls = False
@@ -684,6 +703,7 @@ class SettingsCenterPage(QWidget):
         self.draft_settings.offline_tracker_configuration_path = (
             self.tracker_config_path_edit.text().strip()
         )
+        self.draft_settings.offline_query_data_path = self.query_data_path_edit.text().strip()
         self.draft_settings.test_mode_validated_signature = ""
         self.draft_settings.test_mode_validated_at = ""
         self._sync_test_mode_controls()
@@ -696,6 +716,8 @@ class SettingsCenterPage(QWidget):
             self.schema_path_button,
             self.tracker_config_path_edit,
             self.tracker_config_path_button,
+            self.query_data_path_edit,
+            self.query_data_path_button,
         ):
             widget.setEnabled(enabled)
         signature = test_mode_validation_signature(self.draft_settings)
@@ -787,6 +809,9 @@ class SettingsCenterPage(QWidget):
             ).strip()
             if configuration_path and not Path(configuration_path).expanduser().is_file():
                 raise ValueError("Config Snapshot 파일을 확인해야 합니다.")
+            query_data_path = str(self.draft_settings.offline_query_data_path or "").strip()
+            if query_data_path and not Path(query_data_path).expanduser().is_file():
+                raise ValueError("조회 데이터 Snapshot 파일을 확인해야 합니다.")
             return
         profile = self._active_profile()
         if profile is None:
@@ -1006,12 +1031,14 @@ class SettingsCenterPage(QWidget):
             self.draft_settings.offline_mode = False
             self.draft_settings.offline_schema_path = ""
             self.draft_settings.offline_tracker_configuration_path = ""
+            self.draft_settings.offline_query_data_path = ""
             self.draft_settings.test_mode_validated_signature = ""
             self.draft_settings.test_mode_validated_at = ""
             self._updating_controls = True
             self.test_mode_checkbox.setChecked(False)
             self.schema_path_edit.clear()
             self.tracker_config_path_edit.clear()
+            self.query_data_path_edit.clear()
             self._updating_controls = False
             self._sync_test_mode_controls()
         else:

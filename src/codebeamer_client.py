@@ -116,27 +116,100 @@ class CodebeamerClient:
 
     def get_projects(self) -> list[dict]:
         """접근 가능한 프로젝트 목록을 가져온다."""
-        return self._get("/v3/projects")
+        return self._run_rate_limited_request(
+            "get_projects",
+            lambda: self._get("/v3/projects"),
+        )
 
     def get_trackers(self, project_id: int) -> list[dict]:
         """프로젝트 안에 있는 트래커 목록을 가져온다."""
-        return self._get(f"/v3/projects/{project_id}/trackers")
+        return self._run_rate_limited_request(
+            "get_trackers",
+            lambda: self._get(f"/v3/projects/{project_id}/trackers"),
+        )
 
     def get_tracker(self, tracker_id: int) -> dict:
         """트래커 한 개의 상세 정보를 가져온다."""
-        return self._get(f"/v3/trackers/{tracker_id}")
+        return self._run_rate_limited_request(
+            "get_tracker",
+            lambda: self._get(f"/v3/trackers/{tracker_id}"),
+        )
 
     def get_tracker_items(self, tracker_id: int) -> list[dict]:
         """트래커에 속한 아이템 참조 목록을 가져온다."""
         return self._get(f"/v3/trackers/{tracker_id}/items").get("itemRefs", [])
 
+    def get_tracker_items_page(
+        self,
+        tracker_id: int,
+        *,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> dict:
+        """트래커 아이템 참조와 서버 pagination 메타데이터를 함께 가져온다."""
+        return self._run_rate_limited_request(
+            "get_tracker_items_page",
+            lambda: self._get(
+                f"/v3/trackers/{int(tracker_id)}/items",
+                params={
+                    "page": max(int(page), 1),
+                    "pageSize": min(max(int(page_size), 1), 500),
+                },
+            ),
+        )
+
     def get_tracker_children(self, tracker_id: int) -> list[dict]:
         """트래커 루트 아래에 있는 자식 아이템 목록을 가져온다."""
         return self._get(f"/v3/trackers/{tracker_id}/children").get("itemRefs", [])
 
+    def get_tracker_children_page(
+        self,
+        tracker_id: int,
+        *,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> dict:
+        """트래커 최상위 아이템과 서버 pagination 메타데이터를 가져온다."""
+        return self._run_rate_limited_request(
+            "get_tracker_children_page",
+            lambda: self._get(
+                f"/v3/trackers/{int(tracker_id)}/children",
+                params={
+                    "page": max(int(page), 1),
+                    "pageSize": min(max(int(page_size), 1), 500),
+                },
+            ),
+        )
+
+    def get_item_children(self, item_id: int) -> list[dict]:
+        """아이템의 직접 하위 아이템 참조 목록을 가져온다."""
+        return self._get(f"/v3/items/{int(item_id)}/children").get("itemRefs", [])
+
+    def get_item_children_page(
+        self,
+        item_id: int,
+        *,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> dict:
+        """아이템의 직접 하위 목록과 서버 pagination 메타데이터를 가져온다."""
+        return self._run_rate_limited_request(
+            "get_item_children_page",
+            lambda: self._get(
+                f"/v3/items/{int(item_id)}/children",
+                params={
+                    "page": max(int(page), 1),
+                    "pageSize": min(max(int(page_size), 1), 500),
+                },
+            ),
+        )
+
     def get_tracker_schema(self, tracker_id: int) -> dict:
         """트래커 스키마를 가져와 필드 구조를 분석할 수 있게 한다."""
-        return self._get(f"/v3/trackers/{tracker_id}/schema")
+        return self._run_rate_limited_request(
+            "get_tracker_schema",
+            lambda: self._get(f"/v3/trackers/{tracker_id}/schema"),
+        )
 
     def get_tracker_configuration(self, tracker_id: int) -> Any:
         """트래커 configuration 메타데이터를 가져온다."""
@@ -180,7 +253,10 @@ class CodebeamerClient:
 
     def get_item(self, item_id: int) -> dict:
         """아이템 한 개의 상세 정보를 가져온다."""
-        return self._get(f"/v3/items/{item_id}")
+        return self._run_rate_limited_request(
+            "get_item",
+            lambda: self._get(f"/v3/items/{item_id}"),
+        )
 
     def search_items(
         self,
@@ -198,7 +274,10 @@ class CodebeamerClient:
         }
         if baseline_id is not None:
             params["baselineId"] = int(baseline_id)
-        return self._get("/v3/items/query", params=params)
+        return self._run_rate_limited_request(
+            "search_items",
+            lambda: self._get("/v3/items/query", params=params),
+        )
 
     def search_tracker_items_by_name(
         self,
@@ -336,8 +415,8 @@ class CodebeamerClient:
             lambda: self._put(f"/v3/items/{int(item_id)}", json_body=payload),
         )
 
-    def _run_rate_limited_request(self, request_name: str, request_func) -> dict:
-        """rate limit 재시도를 포함해 쓰기 요청을 실행한다."""
+    def _run_rate_limited_request(self, request_name: str, request_func) -> Any:
+        """rate limit 재시도를 포함해 요청을 실행한다."""
         attempts = self.rate_limit_max_retries + 1
         last_exc: Exception | None = None
 

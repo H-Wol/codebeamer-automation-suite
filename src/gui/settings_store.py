@@ -57,6 +57,7 @@ class GuiSettings:
     offline_mode: bool = False
     offline_schema_path: str = ""
     offline_tracker_configuration_path: str = ""
+    offline_query_data_path: str = ""
     default_project_id: str = ""
     default_tracker_id: str = ""
     excel_header_row: int = 1
@@ -98,6 +99,7 @@ class AppSettings:
     offline_mode: bool = False
     offline_schema_path: str = ""
     offline_tracker_configuration_path: str = ""
+    offline_query_data_path: str = ""
     test_mode_validated_signature: str = ""
     test_mode_validated_at: str = ""
     default_project_id: str = ""
@@ -210,6 +212,7 @@ def test_mode_validation_signature(settings: AppSettings) -> str:
         "tracker_configuration": _file_validation_marker(
             settings.offline_tracker_configuration_path
         ),
+        "query_data": _file_validation_marker(settings.offline_query_data_path),
     }
     serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
@@ -242,6 +245,7 @@ def effective_gui_settings(
             "offline_tracker_configuration_path": str(
                 app_settings.offline_tracker_configuration_path or ""
             ),
+            "offline_query_data_path": str(app_settings.offline_query_data_path or ""),
             "default_project_id": str(app_settings.default_project_id or ""),
             "default_tracker_id": str(app_settings.default_tracker_id or ""),
             "rate_limit_retry_delay_seconds": float(
@@ -378,6 +382,7 @@ class GuiSettingsStore:
             offline_tracker_configuration_path=str(
                 legacy.offline_tracker_configuration_path or ""
             ),
+            offline_query_data_path=str(legacy.offline_query_data_path or ""),
             default_project_id=str(legacy.default_project_id or ""),
             default_tracker_id=str(legacy.default_tracker_id or ""),
             migrated_from_legacy=has_legacy_file or self.workflow_preset_path.exists(),
@@ -482,6 +487,7 @@ class GuiSettingsStore:
             "offline_mode": value.offline_mode,
             "offline_schema_path": value.offline_schema_path,
             "offline_tracker_configuration_path": value.offline_tracker_configuration_path,
+            "offline_query_data_path": value.offline_query_data_path,
             "default_project_id": value.default_project_id,
             "default_tracker_id": value.default_tracker_id,
         }
@@ -672,6 +678,7 @@ class GuiSettingsStore:
             offline_tracker_configuration_path=str(
                 settings.offline_tracker_configuration_path or ""
             ).strip(),
+            offline_query_data_path=str(settings.offline_query_data_path or "").strip(),
             test_mode_validated_signature=str(settings.test_mode_validated_signature or ""),
             test_mode_validated_at=str(settings.test_mode_validated_at or ""),
             default_project_id=str(settings.default_project_id or ""),
@@ -726,6 +733,7 @@ class GuiSettingsStore:
             "offline_mode": settings.offline_mode,
             "offline_schema_path": settings.offline_schema_path,
             "offline_tracker_configuration_path": settings.offline_tracker_configuration_path,
+            "offline_query_data_path": settings.offline_query_data_path,
             "test_mode_validated_signature": settings.test_mode_validated_signature,
             "test_mode_validated_at": settings.test_mode_validated_at,
             "default_project_id": settings.default_project_id,
@@ -804,6 +812,7 @@ class GuiSettingsStore:
             offline_tracker_configuration_path=str(
                 payload.get("offline_tracker_configuration_path") or ""
             ),
+            offline_query_data_path=str(payload.get("offline_query_data_path") or ""),
             test_mode_validated_signature=str(
                 payload.get("test_mode_validated_signature") or ""
             ),

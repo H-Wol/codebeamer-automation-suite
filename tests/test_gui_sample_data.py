@@ -12,6 +12,26 @@ FILES_DIR = SAMPLE_DIR / "files"
 
 
 class GuiOfflineSampleDataTest(unittest.TestCase):
+    def test_query_snapshot_contains_two_isolated_tracker_hierarchies(self) -> None:
+        payload = json.loads(
+            (SAMPLE_DIR / "offline_tracker_items.json").read_text(encoding="utf-8")
+        )
+        tracker_ids = {int(tracker["id"]) for tracker in payload["trackers"]}
+        items_by_id = {int(item["id"]): item for item in payload["items"]}
+
+        self.assertEqual(tracker_ids, {24680001, 24680002})
+        self.assertTrue(
+            {int(item["trackerId"]) for item in payload["items"]} <= tracker_ids
+        )
+        for item in payload["items"]:
+            parent_id = item.get("parentId")
+            if parent_id is None:
+                continue
+            self.assertEqual(
+                int(items_by_id[int(parent_id)]["trackerId"]),
+                int(item["trackerId"]),
+            )
+
     def test_sample_snapshot_includes_tracker_item_query_source(self) -> None:
         schema = json.loads((SAMPLE_DIR / "offline_schema.json").read_text(encoding="utf-8"))
         config = json.loads((SAMPLE_DIR / "offline_tracker_configuration.json").read_text(encoding="utf-8"))

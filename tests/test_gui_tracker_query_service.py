@@ -1,0 +1,466 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+import tempfile
+import unittest
+
+from src.gui.settings_store import GuiSettings
+from src.gui.tracker_query_models import TrackerQuery
+from src.gui.tracker_query_models import TrackerQueryCondition
+from src.gui.tracker_query_models import TrackerQueryErrorKind
+from src.gui.tracker_query_models import TrackerQueryGroup
+from src.gui.tracker_query_models import TrackerQueryServiceError
+from src.gui.tracker_query_models import TrackerSearchMode
+from src.gui.tracker_query_service import TrackerQueryService
+from src.gui.tracker_query_service import classify_tracker_query_error
+
+
+SAMPLE_DIR = Path(__file__).resolve().parent.parent / "data" / "gui-offline-sample"
+
+
+class QueryFakeClient:
+    calls: list[tuple] = []
+
+    def __init__(self, base_url, username, password, logger=None, **kwargs) -> None:
+        del base_url, username, password, logger, kwargs
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.calls = []
+
+    def get_projects(self):
+        self.__class__.calls.append(("projects",))
+        return [{"id": 10, "name": "Vehicle"}]
+
+    def get_trackers(self, project_id: int):
+        self.__class__.calls.append(("trackers", project_id))
+        return [{"id": 20, "name": "Requirements"}]
+
+    def get_tracker(self, tracker_id: int):
+        self.__class__.calls.append(("tracker", tracker_id))
+        return {
+            "id": tracker_id,
+            "name": "Requirements",
+            "project": {"id": 10, "name": "Vehicle"},
+        }
+
+    def get_tracker_schema(self, tracker_id: int):
+        self.__class__.calls.append(("schema", tracker_id))
+        return {"id": tracker_id, "fields": [{"id": 1, "name": "Summary"}]}
+
+    def get_tracker_children_page(self, tracker_id: int, *, page: int, page_size: int):
+        self.__class__.calls.append(("roots", tracker_id, page, page_size))
+        return {
+            "page": page,
+            "pageSize": page_size,
+            "total": 2,
+            "itemRefs": [
+                {"id": 1001, "name": "Root A", "hasChildren": True},
+                {"id": 1002, "name": "Root B", "hasChildren": False},
+            ],
+        }
+
+    def get_item_children_page(self, item_id: int, *, page: int, page_size: int):
+        self.__class__.calls.append(("children", item_id, page, page_size))
+        return {
+            "page": page,
+            "pageSize": page_size,
+            "total": 1,
+            "itemRefs": [{"id": 1010, "name": "Child"}],
+        }
+
+    def search_items(
+        self,
+        *,
+        query_string: str,
+        baseline_id=None,
+        page: int,
+        page_size: int,
+    ):
+        self.__class__.calls.append(
+            ("search", query_string, baseline_id, page, page_size)
+        )
+        tracker_id = int(re.search(r"tracker\.id = (\d+)", query_string).group(1))
+        return {
+            "page": page,
+            "pageSize": page_size,
+            "total": 1,
+            "items": [
+                {
+                    "id": 1001,
+                    "name": "Steering",
+                    "tracker": {"id": tracker_id, "name": "Requirements"},
+                    "status": {"id": 1, "name": "Open"},
+                }
+            ],
+        }
+
+    def get_item(self, item_id: int):
+        self.__class__.calls.append(("item", item_id))
+        return {
+            "id": item_id,
+            "name": "Steering",
+            "description": "Description",
+            "descriptionFormat": "PlainText",
+            "version": 4,
+            "tracker": {"id": 20, "name": "Requirements"},
+            "status": {"id": 1, "name": "Open"},
+            "assignedTo": [{"id": 7, "name": "sample_user"}],
+            "children": [{"id": 1003, "name": "Nested"}],
+            "customFields": [
+                {
+                    "fieldId": 90,
+                    "name": "Risk",
+                    "type": "TextFieldValue",
+                    "value": "High",
+                }
+            ],
+            "password": "must-not-leak",
+        }
+
+
+class _Response:
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+
+
+class _HttpError(RuntimeError):
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"HTTP {status_code} with unsafe server detail")
+        self.response = _Response(status_code)
+
+
+class ForbiddenFakeClient(QueryFakeClient):
+    def get_projects(self):
+        raise _HttpError(403)
+
+
+class LeakingSearchFakeClient(QueryFakeClient):
+    def search_items(self, **kwargs):
+        payload = super().search_items(**kwargs)
+        payload["items"].append(
+            {
+                "id": 9999,
+                "name": "Other tracker item",
+                "tracker": {"id": 99, "name": "Other"},
+            }
+        )
+        payload["total"] = 2
+        return payload
+
+
+class TrackerMetadataFailureFakeClient(QueryFakeClient):
+    def get_tracker(self, tracker_id: int):
+        raise _HttpError(403)
+
+
+class TrackerQueryServiceTest(unittest.TestCase):
+    def setUp(self) -> None:
+        QueryFakeClient.reset()
+        self.settings = GuiSettings(
+            base_url="https://example.test/cb",
+            username="sample",
+            password="placeholder",
+        )
+        self.service = TrackerQueryService(client_factory=QueryFakeClient)
+
+    def test_context_lists_are_normalized_without_exposing_server_dicts(self) -> None:
+        projects = self.service.load_projects(self.settings)
+        trackers = self.service.load_trackers(
+            self.settings,
+            projects[0].project_id,
+            project_name=projects[0].name,
+        )
+
+        self.assertEqual(projects[0].project_id, 10)
+        self.assertEqual(trackers[0].tracker_id, 20)
+        self.assertEqual(trackers[0].project_id, 10)
+        self.assertEqual(trackers[0].project_name, "Vehicle")
+
+    def test_hierarchy_uses_root_and_direct_child_endpoints_with_server_metadata(self) -> None:
+        roots = self.service.load_top_level_items(
+            self.settings,
+            20,
+            tracker_name="Requirements",
+            project_id=10,
+            page=2,
+            page_size=25,
+        )
+        children = self.service.load_child_items(
+            self.settings,
+            1001,
+            tracker_id=20,
+            page=1,
+            page_size=10,
+        )
+
+        self.assertIn(("roots", 20, 2, 25), QueryFakeClient.calls)
+        self.assertIn(("children", 1001, 1, 10), QueryFakeClient.calls)
+        self.assertEqual(roots.page, 2)
+        self.assertEqual(roots.total, 2)
+        self.assertTrue(roots.items[0].has_children)
+        self.assertEqual(children.items[0].parent_id, 1001)
+        self.assertEqual(children.items[0].tracker_id, 20)
+
+    def test_search_passes_only_scoped_cbql_and_preserves_it_as_metadata(self) -> None:
+        result = self.service.search(
+            self.settings,
+            TrackerQuery(tracker_id=20, text="Steering", page=3, page_size=30),
+        )
+
+        search_call = next(call for call in QueryFakeClient.calls if call[0] == "search")
+        self.assertIn("tracker.id = 20", search_call[1])
+        self.assertIn("summary LIKE '%Steering%'", search_call[1])
+        self.assertEqual(search_call[3:], (3, 30))
+        self.assertEqual(result.items[0].tracker_id, 20)
+        self.assertEqual(result.server_metadata["scopedCbql"], search_call[1])
+
+    def test_detail_enriches_project_context_and_masks_raw_credentials(self) -> None:
+        detail = self.service.load_detail(self.settings, 1001)
+
+        self.assertEqual(detail.summary.project_id, 10)
+        self.assertEqual(detail.summary.project_name, "Vehicle")
+        self.assertEqual(detail.custom_fields[0].display_value, "High")
+        self.assertEqual(detail.raw_payload["password"], "***")
+        self.assertNotIn("must-not-leak", str(detail.raw_payload))
+
+    def test_direct_item_context_contains_target_project_and_tracker(self) -> None:
+        context = self.service.resolve_item_context(self.settings, 1001)
+
+        self.assertEqual(context.item.item_id, 1001)
+        self.assertEqual(context.project_id, 10)
+        self.assertEqual(context.tracker_id, 20)
+        self.assertEqual(context.tracker_name, "Requirements")
+
+    def test_detail_remains_available_when_project_metadata_lookup_fails(self) -> None:
+        service = TrackerQueryService(client_factory=TrackerMetadataFailureFakeClient)
+
+        detail = service.load_detail(self.settings, 1001)
+
+        self.assertEqual(detail.item_id, 1001)
+        self.assertIsNone(detail.summary.project_id)
+        self.assertEqual(len(detail.warnings), 1)
+        self.assertIn("아이템 상세만 표시", detail.warnings[0])
+
+    def test_http_errors_are_classified_without_returning_server_message(self) -> None:
+        service = TrackerQueryService(client_factory=ForbiddenFakeClient)
+
+        with self.assertRaises(TrackerQueryServiceError) as raised:
+            service.load_projects(self.settings)
+
+        self.assertEqual(raised.exception.kind, TrackerQueryErrorKind.FORBIDDEN)
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertNotIn("unsafe server detail", str(raised.exception))
+
+    def test_expected_http_statuses_have_distinct_error_kinds(self) -> None:
+        expected = {
+            400: TrackerQueryErrorKind.INVALID_QUERY,
+            401: TrackerQueryErrorKind.UNAUTHORIZED,
+            403: TrackerQueryErrorKind.FORBIDDEN,
+            404: TrackerQueryErrorKind.NOT_FOUND,
+            429: TrackerQueryErrorKind.RATE_LIMITED,
+            503: TrackerQueryErrorKind.SERVER,
+        }
+
+        for status_code, expected_kind in expected.items():
+            with self.subTest(status_code=status_code):
+                kind, actual_status = classify_tracker_query_error(_HttpError(status_code))
+                self.assertEqual(kind, expected_kind)
+                self.assertEqual(actual_status, status_code)
+
+    def test_search_rejects_server_results_outside_selected_tracker(self) -> None:
+        service = TrackerQueryService(client_factory=LeakingSearchFakeClient)
+
+        with self.assertRaises(TrackerQueryServiceError) as raised:
+            service.search(self.settings, TrackerQuery(tracker_id=20))
+
+        self.assertEqual(raised.exception.kind, TrackerQueryErrorKind.SERVER)
+        self.assertIn("현재 트래커 범위", str(raised.exception))
+
+    def test_incomplete_condition_query_is_classified_before_server_call(self) -> None:
+        query = TrackerQuery(
+            tracker_id=20,
+            mode=TrackerSearchMode.CONDITIONS,
+            groups=(TrackerQueryGroup(),),
+        )
+
+        with self.assertRaises(TrackerQueryServiceError) as raised:
+            self.service.search(self.settings, query)
+
+        self.assertEqual(raised.exception.kind, TrackerQueryErrorKind.INVALID_QUERY)
+        self.assertFalse(any(call[0] == "search" for call in QueryFakeClient.calls))
+
+
+class OfflineTrackerQueryServiceIntegrationTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.settings = GuiSettings(
+            offline_mode=True,
+            offline_schema_path=str(SAMPLE_DIR / "offline_schema.json"),
+            offline_tracker_configuration_path=str(
+                SAMPLE_DIR / "offline_tracker_configuration.json"
+            ),
+            offline_query_data_path=str(SAMPLE_DIR / "offline_tracker_items.json"),
+        )
+        self.service = TrackerQueryService()
+
+    def test_fixture_exposes_two_trackers_and_lazy_hierarchy(self) -> None:
+        projects = self.service.load_projects(self.settings)
+        trackers = self.service.load_trackers(
+            self.settings,
+            projects[0].project_id,
+            project_name=projects[0].name,
+        )
+        roots = self.service.load_top_level_items(
+            self.settings,
+            24680001,
+            page_size=100,
+        )
+        children = self.service.load_child_items(
+            self.settings,
+            9001001,
+            tracker_id=24680001,
+        )
+        nested = self.service.load_child_items(
+            self.settings,
+            9001003,
+            tracker_id=24680001,
+        )
+
+        self.assertEqual([tracker.tracker_id for tracker in trackers], [24680001, 24680002])
+        self.assertEqual([item.item_id for item in roots.items], [9001001, 9001010])
+        self.assertEqual([item.item_id for item in children.items], [9001002, 9001003])
+        self.assertEqual([item.item_id for item in nested.items], [9001004])
+
+    def test_fixture_search_never_leaks_items_from_the_other_tracker(self) -> None:
+        requirement_results = self.service.search(
+            self.settings,
+            TrackerQuery(tracker_id=24680001, text="Steering"),
+        )
+        test_results = self.service.search(
+            self.settings,
+            TrackerQuery(tracker_id=24680002, text="Steering"),
+        )
+
+        self.assertEqual(
+            [item.item_id for item in requirement_results.items],
+            [9001003, 9001004],
+        )
+        self.assertEqual(
+            [item.item_id for item in test_results.items],
+            [9101002],
+        )
+        self.assertTrue(
+            all(item.tracker_id == 24680001 for item in requirement_results.items)
+        )
+        self.assertTrue(all(item.tracker_id == 24680002 for item in test_results.items))
+
+    def test_fixture_evaluates_and_or_condition_groups_against_custom_fields(self) -> None:
+        result = self.service.search(
+            self.settings,
+            TrackerQuery(
+                tracker_id=24680001,
+                mode=TrackerSearchMode.CONDITIONS,
+                groups=(
+                    TrackerQueryGroup(
+                        (TrackerQueryCondition("status", "equals", "Approved"),)
+                    ),
+                    TrackerQueryGroup(
+                        (TrackerQueryCondition("Risk Level", "equals", "High"),)
+                    ),
+                ),
+            ),
+        )
+
+        self.assertEqual([item.item_id for item in result.items], [9001003, 9001004])
+
+    def test_fixture_applies_multiple_server_sort_terms(self) -> None:
+        result = self.service.search(
+            self.settings,
+            TrackerQuery(
+                tracker_id=24680001,
+                sort="status ASC, item.id DESC",
+            ),
+        )
+
+        self.assertEqual(
+            [item.item_id for item in result.items],
+            [9001004, 9001003, 9001001, 9001010, 9001002],
+        )
+
+    def test_fixture_rejects_cbql_outside_supported_offline_subset(self) -> None:
+        query = TrackerQuery(
+            tracker_id=24680001,
+            mode=TrackerSearchMode.CBQL,
+            cbql="exists(tracker.id = 24680002)",
+        )
+
+        with self.assertRaises(TrackerQueryServiceError) as raised:
+            self.service.search(self.settings, query)
+
+        self.assertEqual(raised.exception.kind, TrackerQueryErrorKind.INVALID_QUERY)
+
+    def test_fixture_pagination_and_detail_context_match_snapshot(self) -> None:
+        first_page = self.service.load_top_level_items(
+            self.settings,
+            24680001,
+            page=1,
+            page_size=1,
+        )
+        second_page = self.service.load_top_level_items(
+            self.settings,
+            24680001,
+            page=2,
+            page_size=1,
+        )
+        context = self.service.resolve_item_context(self.settings, 9001003)
+        ancestor_path = self.service.load_ancestor_path(self.settings, 9001004)
+
+        self.assertEqual([item.item_id for item in first_page.items], [9001001])
+        self.assertEqual([item.item_id for item in second_page.items], [9001010])
+        self.assertEqual(first_page.total, 2)
+        self.assertTrue(first_page.has_next)
+        self.assertEqual(context.project_id, 246800)
+        self.assertEqual(context.tracker_id, 24680001)
+        self.assertEqual(context.item.custom_fields[0].display_value, "High")
+        self.assertEqual(
+            [item.item_id for item in ancestor_path],
+            [9001001, 9001003, 9001004],
+        )
+
+    def test_offline_query_without_item_snapshot_is_reported_explicitly(self) -> None:
+        settings = GuiSettings(
+            offline_mode=True,
+            offline_schema_path=str(SAMPLE_DIR / "offline_schema.json"),
+        )
+
+        with self.assertRaises(TrackerQueryServiceError) as raised:
+            self.service.load_top_level_items(settings, 24680001)
+
+        self.assertEqual(
+            raised.exception.kind,
+            TrackerQueryErrorKind.OFFLINE_DATA_UNAVAILABLE,
+        )
+
+    def test_invalid_offline_query_snapshot_is_reported_without_raw_parser_detail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            invalid_path = Path(tmp_dir) / "invalid-query.json"
+            invalid_path.write_text("[]", encoding="utf-8")
+            settings = GuiSettings(
+                offline_mode=True,
+                offline_schema_path=str(SAMPLE_DIR / "offline_schema.json"),
+                offline_query_data_path=str(invalid_path),
+            )
+
+            with self.assertRaises(TrackerQueryServiceError) as raised:
+                self.service.load_projects(settings)
+
+        self.assertEqual(
+            raised.exception.kind,
+            TrackerQueryErrorKind.OFFLINE_DATA_UNAVAILABLE,
+        )
+        self.assertNotIn("JSON", str(raised.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()
