@@ -175,7 +175,8 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - 두 tracker 익명 조회 snapshot과 온라인 조회가 같은 서비스 계약을 사용
 - 프로젝트·트래커 선택, 지연 로딩 트리, tracker 범위 검색, ID 직접 접근과 상세 화면 연결
 - 조회 요청의 화면 세션 캐시와 request token 기반 오래된 응답 차단
-- schema 기반 선택 필드 부분 수정, version 충돌 확인, 단건 상태 전환과 삭제
+- schema 기반 단건 생성, 선택 필드 부분 수정, version 충돌 확인, 단건 상태 전환과 삭제
+- 단건 쓰기와 배치 최종 결과의 제한된 로컬 실행 기록 및 필터 화면
 - 테스트 모드 UI·서비스 이중 쓰기 차단
 - 다중 Excel 파일 선택과 대표 파일 미리보기 표시
 - 파일명 정규식 기반 상단 데이터 preview/payload 구성
@@ -197,6 +198,9 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - `src/gui/tracker_workspace.py`
 - `src/gui/tracker_item_editor.py`
 - `src/gui/tracker_item_editor_panel.py`
+- `src/gui/tracker_item_create_dialog.py`
+- `src/gui/activity_history.py`
+- `src/gui/activity_history_page.py`
 - `src/gui/offline_query.py`
 - `src/gui/worker.py`
 
@@ -214,8 +218,11 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - GUI 서비스 분리: `src/gui/service_core.py`, `src/gui/upload_service.py`
 - 트래커 조회 모델·서비스: `src/gui/tracker_query_models.py`, `src/gui/tracker_query_service.py`
 - 트래커 계층·검색·상세 화면: `src/gui/tracker_workspace.py`
-- 트래커 부분 수정·상태 전환·삭제 계약: `src/gui/tracker_item_editor.py`
+- 트래커 단건 생성·부분 수정·상태 전환·삭제 계약: `src/gui/tracker_item_editor.py`
 - schema 기반 필드 편집과 삭제 확인 UI: `src/gui/tracker_item_editor_panel.py`
+- schema 기반 최상위·하위 단건 생성 UI: `src/gui/tracker_item_create_dialog.py`
+- 실행 기록 모델·민감정보 제한·영속 저장: `src/gui/activity_history.py`
+- 실행 기록 필터·상세·비우기 화면: `src/gui/activity_history_page.py`
 - 테스트 모드 CbQL subset 평가: `src/gui/offline_query.py`
 - 업로드 context 모델: `src/gui/upload_context.py`
 - TRACKER configuration 해석: `src/gui/tracker_config.py`

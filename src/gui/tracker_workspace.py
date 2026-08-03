@@ -29,6 +29,9 @@ except ImportError as exc:  # pragma: no cover - GUI dependency guard
     raise RuntimeError("GUI 실행에는 PySide6 패키지가 필요합니다.") from exc
 
 from .settings_store import GuiSettings
+from .activity_history import ActivityOperation
+from .activity_history import ActivityRecord
+from .activity_history import ActivityResult
 from .tracker_item_editor import EditableTrackerField
 from .tracker_item_editor import EditableTrackerSchema
 from .tracker_item_editor import TrackerItemEditorService
@@ -79,6 +82,7 @@ class TrackerWorkspacePage(QWidget):
             TrackerItemCreateRequest | None,
         ]
         | None = None,
+        activity_recorder: Callable[[ActivityRecord], None] | None = None,
         task_factory=BackgroundTask,
         synchronous: bool = False,
         parent=None,
@@ -93,6 +97,7 @@ class TrackerWorkspacePage(QWidget):
         self.open_settings = open_settings
         self.delete_confirmer = delete_confirmer
         self.create_request_provider = create_request_provider
+        self.activity_recorder = activity_recorder
         self.task_factory = task_factory
         self.synchronous = bool(synchronous)
 
@@ -565,6 +570,70 @@ class TrackerWorkspacePage(QWidget):
         self.workspace_status_label.setProperty("tone", tone)
         self.workspace_status_label.style().unpolish(self.workspace_status_label)
         self.workspace_status_label.style().polish(self.workspace_status_label)
+
+    def _record_activity(self, record: ActivityRecord) -> None:
+        if self.activity_recorder is None:
+            return
+        try:
+            self.activity_recorder(record)
+        except Exception:
+            pass
+
+    def _record_item_activity(
+        self,
+        operation: ActivityOperation,
+        result: ActivityResult,
+        *,
+        message: str,
+        detail: TrackerItemDetail | None = None,
+        item_id: int | None = None,
+        item_name: str = "",
+        parent_item_id: int | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        item_summary = detail.summary if detail is not None else None
+        tracker = self._current_tracker
+        project = self._current_project
+        self._record_activity(
+            ActivityRecord.create(
+                operation,
+                result,
+                source="tracker_workspace",
+                summary=message,
+                project_id=(
+                    item_summary.project_id
+                    if item_summary is not None
+                    else project.project_id if project is not None else None
+                ),
+                project_name=(
+                    item_summary.project_name
+                    if item_summary is not None
+                    else project.name if project is not None else ""
+                ),
+                tracker_id=(
+                    item_summary.tracker_id
+                    if item_summary is not None
+                    else tracker.tracker_id if tracker is not None else None
+                ),
+                tracker_name=(
+                    item_summary.tracker_name
+                    if item_summary is not None
+                    else tracker.name if tracker is not None else ""
+                ),
+                item_id=(detail.item_id if detail is not None else item_id),
+                item_name=(
+                    item_summary.name if item_summary is not None else item_name
+                ),
+                parent_item_id=(
+                    parent_item_id
+                    if parent_item_id is not None
+                    else detail.parent.item_id
+                    if detail is not None and detail.parent is not None
+                    else None
+                ),
+                details=details,
+            )
+        )
 
     def _next_token(self, key: str) -> int:
         token = self._request_tokens.get(key, 0) + 1
@@ -1080,6 +1149,14 @@ class TrackerWorkspacePage(QWidget):
                 and request.parent_item_id == selected_detail.item_id
                 else None
             )
+            requested_name = next(
+                (
+                    str(change.value or "").strip()
+                    for change in request.changes
+                    if change.field.tracker_item_field == "name"
+                ),
+                "",
+            )
             self._set_workspace_status(
                 f"'{current_tracker.name}' 트래커에 새 아이템을 생성하는 중입니다.",
                 tone="loading",
@@ -1087,6 +1164,19 @@ class TrackerWorkspacePage(QWidget):
 
             def created(detail: TrackerItemDetail) -> None:
                 self._finish_create_busy()
+                self._record_item_activity(
+                    ActivityOperation.TRACKER_CREATE,
+                    ActivityResult.SUCCESS,
+                    message=f"#{detail.item_id} 아이템을 생성했습니다.",
+                    detail=detail,
+                    parent_item_id=request.parent_item_id,
+                    details={
+                        "field_count": len(request.changes),
+                        "position": (
+                            "child" if request.parent_item_id is not None else "root"
+                        ),
+                    },
+                )
                 self._show_created_item(
                     detail,
                     parent_item_id=request.parent_item_id,
@@ -1095,6 +1185,27 @@ class TrackerWorkspacePage(QWidget):
 
             def create_failed(exc: Exception) -> None:
                 self._finish_create_busy()
+                result = (
+                    ActivityResult.PARTIAL
+                    if isinstance(exc, TrackerItemWriteError)
+                    and exc.operation in {
+                        "create_item_response",
+                        "load_created_detail",
+                    }
+                    else ActivityResult.FAILED
+                )
+                self._record_item_activity(
+                    ActivityOperation.TRACKER_CREATE,
+                    result,
+                    message=(
+                        "아이템 생성 결과를 확인해야 합니다."
+                        if result == ActivityResult.PARTIAL
+                        else "아이템 생성에 실패했습니다."
+                    ),
+                    item_name=requested_name,
+                    parent_item_id=request.parent_item_id,
+                    details={"error": str(exc)},
+                )
                 prefix = (
                     "생성 결과 확인 필요"
                     if isinstance(exc, TrackerItemWriteError)
@@ -1606,6 +1717,17 @@ class TrackerWorkspacePage(QWidget):
         )
 
         def loaded(updated_detail: TrackerItemDetail) -> None:
+            self._record_item_activity(
+                ActivityOperation.TRACKER_UPDATE,
+                ActivityResult.SUCCESS,
+                message=f"#{item_id}의 필드 {len(changes)}개를 저장했습니다.",
+                detail=updated_detail,
+                details={
+                    "changed_fields": [change.field.label for change in changes],
+                    "previous_version": detail.version,
+                    "new_version": updated_detail.version,
+                },
+            )
             self._refresh_visible_item(updated_detail)
             self._render_detail(updated_detail)
             self._set_workspace_status(
@@ -1613,6 +1735,16 @@ class TrackerWorkspacePage(QWidget):
             )
 
         def failed(exc: Exception) -> None:
+            self._record_item_activity(
+                ActivityOperation.TRACKER_UPDATE,
+                ActivityResult.FAILED,
+                message=f"#{item_id} 필드 저장에 실패했습니다.",
+                detail=detail,
+                details={
+                    "changed_fields": [change.field.label for change in changes],
+                    "error": str(exc),
+                },
+            )
             self.editor_panel.set_busy(False)
             self.editor_panel.set_error(str(exc) or "필드 저장에 실패했습니다.")
             self._show_error(exc, prefix="필드 저장 실패")
@@ -1650,6 +1782,21 @@ class TrackerWorkspacePage(QWidget):
         )
 
         def loaded(updated_detail: TrackerItemDetail) -> None:
+            self._record_item_activity(
+                ActivityOperation.STATUS_TRANSITION,
+                ActivityResult.SUCCESS,
+                message=(
+                    f"#{item_id} 상태를 "
+                    f"'{updated_detail.summary.status or target_name}'(으)로 전환했습니다."
+                ),
+                detail=updated_detail,
+                details={
+                    "from_status": detail.summary.status,
+                    "to_status": updated_detail.summary.status or target_name,
+                    "previous_version": detail.version,
+                    "new_version": updated_detail.version,
+                },
+            )
             self._refresh_visible_item(updated_detail)
             self._render_detail(updated_detail)
             self._set_workspace_status(
@@ -1657,6 +1804,17 @@ class TrackerWorkspacePage(QWidget):
             )
 
         def failed(exc: Exception) -> None:
+            self._record_item_activity(
+                ActivityOperation.STATUS_TRANSITION,
+                ActivityResult.FAILED,
+                message=f"#{item_id} 상태 전환에 실패했습니다.",
+                detail=detail,
+                details={
+                    "from_status": detail.summary.status,
+                    "to_status": target_name,
+                    "error": str(exc),
+                },
+            )
             self.editor_panel.set_busy(False)
             self.editor_panel.set_error(str(exc) or "상태 전환에 실패했습니다.")
             self._show_error(exc, prefix="상태 전환 실패")
@@ -1694,6 +1852,13 @@ class TrackerWorkspacePage(QWidget):
 
         def loaded(result: Any) -> None:
             del result
+            self._record_item_activity(
+                ActivityOperation.TRACKER_DELETE,
+                ActivityResult.SUCCESS,
+                message=f"#{item_id} 아이템을 삭제했습니다.",
+                detail=detail,
+                details={"deleted_version": detail.version},
+            )
             self._remove_visible_item(item_id)
             if tracker_id is not None:
                 self._invalidate_tracker_cache(int(tracker_id))
@@ -1702,6 +1867,13 @@ class TrackerWorkspacePage(QWidget):
             self._set_workspace_status(f"#{item_id}을(를) 삭제했습니다.")
 
         def failed(exc: Exception) -> None:
+            self._record_item_activity(
+                ActivityOperation.TRACKER_DELETE,
+                ActivityResult.FAILED,
+                message=f"#{item_id} 아이템 삭제에 실패했습니다.",
+                detail=detail,
+                details={"error": str(exc)},
+            )
             self.editor_panel.set_busy(False)
             self.editor_panel.set_error(str(exc) or "아이템 삭제에 실패했습니다.")
             self._show_error(exc, prefix="아이템 삭제 실패")

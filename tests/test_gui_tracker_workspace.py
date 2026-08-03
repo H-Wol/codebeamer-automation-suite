@@ -365,11 +365,13 @@ class TrackerWorkspaceWriteIntegrationTest(unittest.TestCase):
             client_factory=EditableWorkspaceClient,
             query_service=query_service,
         )
+        self.activities = []
         self.page = TrackerWorkspacePage(
             settings_provider=lambda: self.settings,
             service=query_service,
             editor_service=editor_service,
             delete_confirmer=lambda detail: detail.item_id == 1001,
+            activity_recorder=self.activities.append,
             synchronous=True,
         )
         self.page.show()
@@ -411,6 +413,10 @@ class TrackerWorkspaceWriteIntegrationTest(unittest.TestCase):
         self.assertEqual(self.page.item_tree.topLevelItemCount(), 0)
         self.assertEqual(self.page.detail_title.text(), "아이템 상세")
         self.assertIn(("delete", 1001), EditableWorkspaceClient.calls)
+        self.assertEqual(
+            [record.operation.value for record in self.activities],
+            ["tracker_update", "status_transition", "tracker_delete"],
+        )
 
     def test_version_conflict_keeps_editor_and_visible_item_unchanged(self) -> None:
         from PySide6.QtCore import Qt
@@ -430,6 +436,8 @@ class TrackerWorkspaceWriteIntegrationTest(unittest.TestCase):
         self.assertFalse(
             any(call[0] == "update" for call in EditableWorkspaceClient.calls)
         )
+        self.assertEqual(self.activities[-1].operation.value, "tracker_update")
+        self.assertEqual(self.activities[-1].result.value, "failed")
 
     def test_single_create_adds_selected_child_and_opens_created_detail(self) -> None:
         def create_request(schema, tracker, selected_detail):
@@ -457,6 +465,8 @@ class TrackerWorkspaceWriteIntegrationTest(unittest.TestCase):
         self.assertEqual(self.page.detail_id_badge.text(), "#1002")
         self.assertEqual(self.page.detail_title.text(), "Created child")
         self.assertIn("생성했습니다", self.page.workspace_status_label.text())
+        self.assertEqual(self.activities[-1].operation.value, "tracker_create")
+        self.assertEqual(self.activities[-1].item_id, 1002)
 
 
 if __name__ == "__main__":

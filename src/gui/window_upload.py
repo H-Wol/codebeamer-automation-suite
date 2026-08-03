@@ -5,6 +5,9 @@ import time
 
 from src.upload_policy import upload_mode_action_label as gui_upload_mode_action_label
 
+from .activity_history import ActivityOperation
+from .activity_history import ActivityRecord
+from .activity_history import ActivityResult
 from .window_support import _format_clock_text
 from .window_support import _format_duration_text
 from .window_support import _format_upload_eta_text
@@ -25,6 +28,7 @@ class WindowUploadMixin:
             return
         output_dir = str(Path(self.session_state.settings.output_dir))
         self.upload_page.reset(0)
+        self._activity_dry_run = bool(self.upload_page.dry_run_checkbox.isChecked())
         self.upload_progress = UploadProgressState(
             batch_started_at=time.perf_counter()
         )
@@ -114,6 +118,105 @@ class WindowUploadMixin:
             return 0
         phase_series = df["phase"].fillna("").astype(str).str.lower()
         return int(phase_series.eq(phase).sum())
+
+    @staticmethod
+    def _activity_entity_name(values, entity_id: int | None) -> str:
+        if entity_id is None:
+            return ""
+        for value in values or []:
+            if isinstance(value, dict):
+                raw_id = (
+                    value.get("id")
+                    or value.get("projectId")
+                    or value.get("trackerId")
+                )
+                name = value.get("name") or value.get("label") or ""
+            else:
+                raw_id = (
+                    getattr(value, "id", None)
+                    or getattr(value, "project_id", None)
+                    or getattr(value, "tracker_id", None)
+                )
+                name = getattr(value, "name", "")
+            try:
+                if int(raw_id) != int(entity_id):
+                    continue
+            except (TypeError, ValueError):
+                continue
+            return str(name or "")
+        return ""
+
+    @staticmethod
+    def _activity_positive_int(value) -> int | None:
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return None
+        return normalized if normalized > 0 else None
+
+    def _record_batch_activity(
+        self,
+        result: ActivityResult,
+        *,
+        summary: str,
+        success_count: int,
+        failed_count: int,
+        unresolved_count: int,
+    ) -> None:
+        settings = self.session_state.settings
+        project_id = self._activity_positive_int(settings.default_project_id)
+        tracker_id = self._activity_positive_int(settings.default_tracker_id)
+        mapping_context = self.session_state.mapping_context
+        file_count = (
+            len(mapping_context.file_paths) if mapping_context is not None else 0
+        )
+        upload_mode = str(
+            (
+                getattr(mapping_context, "upload_mode", "")
+                if mapping_context is not None
+                else ""
+            )
+            or getattr(settings, "upload_mode", "")
+            or ""
+        )
+        elapsed = (
+            None
+            if self.upload_progress.batch_started_at is None
+            else max(time.perf_counter() - self.upload_progress.batch_started_at, 0.0)
+        )
+        action_label = gui_upload_mode_action_label(
+            upload_mode
+        )
+        self._record_activity(
+            ActivityRecord.create(
+                ActivityOperation.BATCH_UPLOAD,
+                result,
+                source="batch_upload",
+                summary=summary,
+                project_id=project_id,
+                project_name=self._activity_entity_name(
+                    self.session_state.projects,
+                    project_id,
+                ),
+                tracker_id=tracker_id,
+                tracker_name=self._activity_entity_name(
+                    self.session_state.trackers,
+                    tracker_id,
+                ),
+                item_name=f"{action_label} · {file_count}개 파일",
+                details={
+                    "upload_mode": upload_mode,
+                    "dry_run": bool(getattr(self, "_activity_dry_run", False)),
+                    "file_count": file_count,
+                    "success_count": int(success_count),
+                    "failed_count": int(failed_count),
+                    "unresolved_count": int(unresolved_count),
+                    "duration_seconds": None if elapsed is None else round(elapsed, 3),
+                    "phase_totals": dict(self.upload_progress.phase_totals),
+                    "phase_counts": dict(self.upload_progress.phase_counts),
+                },
+            )
+        )
 
     def _append_timestamped_log(self, message: str) -> None:
         text = str(message or "").strip()
@@ -346,6 +449,26 @@ class WindowUploadMixin:
         self.upload_page.cancel_button.setEnabled(False)
         self.upload_page.result_button.setEnabled(True)
         unresolved_count = 0 if unresolved_df is None else len(unresolved_df)
+        result_status = (
+            ActivityResult.PARTIAL
+            if self.upload_progress.failed_count or unresolved_count
+            else ActivityResult.SUCCESS
+        )
+        execution_label = (
+            "배치 Dry Run"
+            if bool(getattr(self, "_activity_dry_run", False))
+            else "배치 작업"
+        )
+        self._record_batch_activity(
+            result_status,
+            summary=(
+                f"{execution_label} 완료: 성공 {self.upload_progress.success_count}건, "
+                f"실패 {self.upload_progress.failed_count}건, 미해결 {unresolved_count}건"
+            ),
+            success_count=self.upload_progress.success_count,
+            failed_count=self.upload_progress.failed_count,
+            unresolved_count=unresolved_count,
+        )
         if self.upload_progress.failed_count or unresolved_count:
             self._show_error_dialog(
                 "업로드 결과 확인 필요",
@@ -363,5 +486,17 @@ class WindowUploadMixin:
         self.upload_page.resume_button.setEnabled(False)
         self.upload_page.cancel_button.setEnabled(False)
         self.upload_page.result_button.setEnabled(True)
-        if "사용자 요청으로 중단" not in str(message):
+        cancelled = "사용자 요청으로 중단" in str(message)
+        self._record_batch_activity(
+            ActivityResult.CANCELLED if cancelled else ActivityResult.FAILED,
+            summary=(
+                "배치 작업이 사용자 요청으로 중단되었습니다."
+                if cancelled
+                else "배치 작업에 실패했습니다. 배치 화면의 로그를 확인하세요."
+            ),
+            success_count=self.upload_progress.success_count,
+            failed_count=self.upload_progress.failed_count,
+            unresolved_count=0,
+        )
+        if not cancelled:
             self._show_error_dialog("업로드 오류", message)

@@ -13,11 +13,12 @@
 7. [GUI 사용 가이드](./gui-plan.md)
 8. [트래커 조회 서비스 계약](./tracker-query-service.md)
 9. [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)
-10. [트러블슈팅](./troubleshooting.md)
-11. [호환 경로 감사](./compatibility.md)
-12. [샘플 데이터 및 자격증명 감사](./security-audit.md)
-13. [GUI 리팩토링 진행 및 검증 기록](./refactoring-progress.md)
-14. [v2 변경 사항](./v2-changes.md)
+10. [통합 실행 기록](./activity-history.md)
+11. [트러블슈팅](./troubleshooting.md)
+12. [호환 경로 감사](./compatibility.md)
+13. [샘플 데이터 및 자격증명 감사](./security-audit.md)
+14. [GUI 리팩토링 진행 및 검증 기록](./refactoring-progress.md)
+15. [v2 변경 사항](./v2-changes.md)
 
 ## 문서별 역할
 
@@ -45,6 +46,8 @@
   tracker 범위 검색, 계층·상세·ID 경로 모델, pagination 차이와 익명 조회 fixture 계약을 정리합니다.
 - [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)
   schema 기반 단건 생성과 부분 수정, version 충돌 확인, 상태 전환과 삭제 안전장치를 정리합니다.
+- [통합 실행 기록](./activity-history.md)
+  단건 쓰기와 배치 결과의 로컬 저장 범위, 필터, 보안 경계와 현재 제한을 정리합니다.
 
 - [트러블슈팅](./troubleshooting.md)
   자주 발생하는 에러와 대응 방법을 정리합니다.

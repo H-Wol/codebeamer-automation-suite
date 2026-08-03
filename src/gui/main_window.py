@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from .activity_history import ActivityHistoryStore
+from .activity_history import ActivityRecord
+from .activity_history import default_activity_history_path
+from .activity_history_page import ActivityHistoryPage
 from .batch_window import BatchUploadWindow
 from .settings_center import SettingsCenterPage
 from .settings_store import GuiSettings
@@ -163,9 +167,18 @@ class MainWindow(QMainWindow):
         self.route_stack.setObjectName("application_route_stack")
         content_layout.addWidget(self.route_stack)
 
+        self.activity_store = ActivityHistoryStore(
+            default_activity_history_path(self.settings_store.root_dir)
+        )
+        self.activity_page = ActivityHistoryPage(
+            self.activity_store,
+            parent=content,
+        )
+
         self.tracker_workspace_page = TrackerWorkspacePage(
             settings_provider=self.settings_store.load,
             open_settings=self._open_global_settings,
+            activity_recorder=self._record_activity,
             parent=content,
         )
 
@@ -180,18 +193,9 @@ class MainWindow(QMainWindow):
             embedded=True,
             settings_changed_callback=self._on_batch_settings_changed,
             global_settings_requested_callback=self._open_global_settings,
+            activity_recorder=self._record_activity,
         )
         batch_layout.addWidget(self.batch_window)
-
-        self.activity_page = self._create_placeholder_page(
-            title="실행 기록",
-            phase="Foundation 1",
-            description="쓰기 작업과 조회 결과 내보내기의 실행 결과를 확인하는 영역입니다.",
-            scope_text=(
-                "현재 배치 작업의 세부 진행 로그와 결과는 기존 마법사에서 계속 확인할 수 있습니다. "
-                "통합 실행 기록은 쓰기 작업과 내보내기 흐름이 연결되는 단계에서 추가합니다."
-            ),
-        )
         self.settings_center_page = SettingsCenterPage(
             self.settings_store,
             on_applied=self._on_global_settings_applied,
@@ -305,7 +309,19 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{APP_ROUTE_LABELS[route]} 화면을 열었습니다.")
         if route == ROUTE_TRACKER_WORKSPACE:
             self.tracker_workspace_page.activate()
+        elif route == ROUTE_ACTIVITY:
+            self.activity_page.activate()
         return True
+
+    def _record_activity(self, record: ActivityRecord) -> None:
+        try:
+            self.activity_store.append(record)
+        except Exception:
+            self.statusBar().showMessage(
+                "작업은 완료됐지만 실행 기록을 저장하지 못했습니다."
+            )
+            return
+        self.activity_page.on_activity_recorded(record)
 
     def _open_global_settings(self) -> None:
         self._show_route(ROUTE_SETTINGS)

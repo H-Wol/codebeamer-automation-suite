@@ -23,6 +23,7 @@ from src.gui.main_window import ROUTE_BATCH_UPLOAD
 from src.gui.main_window import ROUTE_SETTINGS
 from src.gui.main_window import ROUTE_TRACKER_WORKSPACE
 from src.gui.batch_window import BatchUploadWindow
+from src.gui.activity_history_page import ActivityHistoryPage
 from src.gui.settings_center import SettingsCenterPage
 from src.gui.tracker_workspace import TrackerWorkspacePage
 from src.gui.settings_store import GuiSettings
@@ -172,6 +173,7 @@ class GuiMainWindowSmokeTest(unittest.TestCase):
             self.assertIs(window.route_stack.currentWidget(), window.tracker_workspace_page)
             self.assertTrue(window.nav_buttons[ROUTE_TRACKER_WORKSPACE].isChecked())
             self.assertIsInstance(window.tracker_workspace_page, TrackerWorkspacePage)
+            self.assertIsInstance(window.activity_page, ActivityHistoryPage)
 
             self.assertIsInstance(window.batch_window, BatchUploadWindow)
             self.assertIsInstance(window.batch_window.session_state, GuiSessionState)
@@ -215,6 +217,8 @@ class GuiMainWindowSmokeTest(unittest.TestCase):
                 self._app.processEvents()
                 self.assertEqual(window.current_route, route)
                 self.assertIs(window.route_stack.currentWidget(), page)
+
+            self.assertEqual(window.activity_page.table.rowCount(), 0)
 
             window.close()
             self._app.processEvents()

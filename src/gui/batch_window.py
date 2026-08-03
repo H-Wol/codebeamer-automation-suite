@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from .activity_history import ActivityRecord
 from .services import GuiCodebeamerService
 from .services import GuiExcelService
 from .services import GuiUploadPipelineService
@@ -31,6 +32,7 @@ class BatchUploadWindow(WindowShellMixin, WindowWorkflowMixin, WindowUploadMixin
         embedded: bool = False,
         settings_changed_callback: Callable[[GuiSettings], None] | None = None,
         global_settings_requested_callback: Callable[[], None] | None = None,
+        activity_recorder: Callable[[ActivityRecord], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.qt = _QT
@@ -39,6 +41,7 @@ class BatchUploadWindow(WindowShellMixin, WindowWorkflowMixin, WindowUploadMixin
         self._persist_window_preferences_on_close = not self._embedded
         self._settings_changed_callback = settings_changed_callback
         self._global_settings_requested_callback = global_settings_requested_callback
+        self._activity_recorder = activity_recorder
         if self._embedded:
             self.setWindowFlags(self.qt["Qt"].WindowType.Widget)
 
@@ -59,6 +62,7 @@ class BatchUploadWindow(WindowShellMixin, WindowWorkflowMixin, WindowUploadMixin
         self.upload_worker = None
         self.background_task = None
         self.upload_progress = UploadProgressState()
+        self._activity_dry_run = False
         self._build_shell()
         self._build_pages()
 
@@ -108,5 +112,13 @@ class BatchUploadWindow(WindowShellMixin, WindowWorkflowMixin, WindowUploadMixin
         if callable(set_settings):
             set_settings(updated)
         return updated
+
+    def _record_activity(self, record: ActivityRecord) -> None:
+        if self._activity_recorder is None:
+            return
+        try:
+            self._activity_recorder(record)
+        except Exception:
+            pass
 
 __all__ = ["BatchUploadWindow"]

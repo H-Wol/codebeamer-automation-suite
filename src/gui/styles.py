@@ -140,12 +140,15 @@ QFrame#application_placeholder_card {
 
 QWidget#tracker_workspace_page,
 QWidget#tracker_hierarchy_tab,
-QWidget#tracker_search_tab {
+QWidget#tracker_search_tab,
+QWidget#activity_history_page {
     background: transparent;
 }
 
 QFrame#tracker_context_card,
-QFrame#tracker_workspace_panel {
+QFrame#tracker_workspace_panel,
+QFrame#activity_summary_card,
+QFrame#activity_detail_card {
     background: #F8FBFD;
     border: 1px solid #D8E1EA;
     border-radius: 10px;
@@ -178,6 +181,25 @@ QLabel#tracker_detail_warning {
 }
 
 QLabel#tracker_workspace_status[tone="error"] {
+    color: #A93636;
+    background: #FDEEEE;
+    border: 1px solid #F2C9C9;
+    border-radius: 8px;
+    padding: 5px 7px;
+}
+
+QLabel#activity_summary_value {
+    color: #425466;
+    font-weight: 700;
+}
+
+QLabel#activity_history_status {
+    min-height: 20px;
+    color: #425466;
+    padding: 2px 4px;
+}
+
+QLabel#activity_history_status[tone="error"] {
     color: #A93636;
     background: #FDEEEE;
     border: 1px solid #F2C9C9;
@@ -233,7 +255,8 @@ QLabel#tracker_current_status {
 }
 
 QDialog#tracker_delete_dialog,
-QDialog#tracker_item_create_dialog {
+QDialog#tracker_item_create_dialog,
+QDialog#activity_history_clear_dialog {
     background: #F4F7FB;
 }
 
@@ -258,6 +281,11 @@ QTreeWidget#tracker_item_tree::item:hover {
 QSplitter#tracker_workspace_splitter::handle {
     background: transparent;
     width: 8px;
+}
+
+QSplitter#activity_history_splitter::handle {
+    background: transparent;
+    height: 8px;
 }
 
 QFrame#settings_category_navigation,
@@ -821,7 +849,9 @@ QFrame#application_placeholder_card {
 }
 
 QFrame#tracker_context_card,
-QFrame#tracker_workspace_panel {
+QFrame#tracker_workspace_panel,
+QFrame#activity_summary_card,
+QFrame#activity_detail_card {
     background: #F7FCFC;
     border: 1px solid #D3E7E9;
 }
@@ -845,7 +875,8 @@ QLabel#tracker_current_status {
 }
 
 QDialog#tracker_delete_dialog,
-QDialog#tracker_item_create_dialog {
+QDialog#tracker_item_create_dialog,
+QDialog#activity_history_clear_dialog {
     background: #F2FBFC;
 }
 
