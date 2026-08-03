@@ -76,6 +76,8 @@
   다중 연결 profile, 화면, 네트워크·저장소, 테스트 모드와 설정 데이터 관리를 담당합니다.
 - `src/gui/tracker_query_models.py`, `src/gui/tracker_query_service.py`
   tracker 범위 검색, pagination, 계층·상세·ID 경로의 UI 독립 조회 계약을 담당합니다.
+- `src/gui/tracker_workspace.py`
+  프로젝트·트래커 선택, 지연 로딩 확장형 트리, tracker 검색, ID 직접 접근과 상세 표시를 담당합니다.
 - `src/gui/page_batch_settings.py`
   전역 설정과 분리된 배치 작업 mode 및 Excel 해석 기준을 담당합니다.
 - `cli_main.py`

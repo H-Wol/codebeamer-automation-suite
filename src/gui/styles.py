@@ -138,6 +138,87 @@ QFrame#application_placeholder_card {
     border-radius: 10px;
 }
 
+QWidget#tracker_workspace_page,
+QWidget#tracker_hierarchy_tab,
+QWidget#tracker_search_tab {
+    background: transparent;
+}
+
+QFrame#tracker_context_card,
+QFrame#tracker_workspace_panel {
+    background: #F8FBFD;
+    border: 1px solid #D8E1EA;
+    border-radius: 10px;
+}
+
+QLabel#tracker_context_label,
+QLabel#tracker_panel_status,
+QLabel#tracker_page_label,
+QLabel#tracker_detail_breadcrumb {
+    color: #5B6B7F;
+}
+
+QLabel#tracker_workspace_status {
+    min-height: 20px;
+    color: #425466;
+    padding: 2px 4px;
+}
+
+QLabel#tracker_workspace_status[tone="loading"] {
+    color: #0E4A84;
+}
+
+QLabel#tracker_workspace_status[tone="warning"],
+QLabel#tracker_detail_warning {
+    color: #8A4B08;
+    background: #FFF3DC;
+    border: 1px solid #F1D49A;
+    border-radius: 8px;
+    padding: 5px 7px;
+}
+
+QLabel#tracker_workspace_status[tone="error"] {
+    color: #A93636;
+    background: #FDEEEE;
+    border: 1px solid #F2C9C9;
+    border-radius: 8px;
+    padding: 5px 7px;
+}
+
+QLabel#tracker_detail_title {
+    color: #13263A;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+QLabel#tracker_detail_section_title {
+    color: #425466;
+    font-weight: 700;
+}
+
+QTreeWidget#tracker_item_tree {
+    background: #FFFFFF;
+    color: #13263A;
+    border: 1px solid #D8E1EA;
+    border-radius: 8px;
+    alternate-background-color: #F8FBFD;
+    selection-background-color: #DCEFFD;
+    selection-color: #13263A;
+}
+
+QTreeWidget#tracker_item_tree::item {
+    min-height: 26px;
+}
+
+QTreeWidget#tracker_item_tree::item:hover {
+    background: #EEF6FC;
+}
+
+QSplitter#tracker_workspace_splitter::handle {
+    background: transparent;
+    width: 8px;
+}
+
 QFrame#settings_category_navigation,
 QFrame#settings_footer,
 QFrame#settings_card {
@@ -696,6 +777,33 @@ QPushButton#application_nav_button:checked {
 QFrame#application_placeholder_card {
     background: #F7FCFC;
     border: 1px solid #D3E7E9;
+}
+
+QFrame#tracker_context_card,
+QFrame#tracker_workspace_panel {
+    background: #F7FCFC;
+    border: 1px solid #D3E7E9;
+}
+
+QLabel#tracker_context_label,
+QLabel#tracker_panel_status,
+QLabel#tracker_page_label,
+QLabel#tracker_detail_breadcrumb {
+    color: #60797E;
+}
+
+QLabel#tracker_workspace_status[tone="loading"] {
+    color: #0B6E70;
+}
+
+QTreeWidget#tracker_item_tree {
+    border: 1px solid #D3E7E9;
+    alternate-background-color: #F7FCFC;
+    selection-background-color: #D9F0EF;
+}
+
+QTreeWidget#tracker_item_tree::item:hover {
+    background: #EEF8F9;
 }
 
 QFrame#settings_category_navigation,

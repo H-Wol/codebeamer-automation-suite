@@ -2,8 +2,8 @@
 
 ## 현재 상태
 
-이 문서는 `feature/tracker-query-service`에서 구현한 읽기 전용 데이터 계층을 설명합니다.
-확장형 트리와 상세 화면은 다음 `feature/tracker-item-browser` 단계에서 이 계약을 사용합니다.
+이 문서는 읽기 전용 데이터 계층과 이를 사용하는 `TrackerWorkspacePage`의 경계를 설명합니다.
+확장형 트리, tracker 범위 검색, ID 직접 접근과 상세 화면이 이 계약을 사용합니다.
 
 현재 구현된 범위:
 
@@ -92,10 +92,12 @@ Qt widget은 서버 원본 dict를 직접 탐색하지 않고 위 모델만 사�
 
 기본 fixture는 `data/gui-offline-sample/offline_tracker_items.json`입니다.
 
-## 다음 화면 단계의 사용 원칙
+## 작업공간 화면 연결
 
-- 최상위 목록은 `load_top_level_items()`로 한 번만 요청합니다.
-- 노드를 펼칠 때 `load_child_items()`를 호출하고 화면 세션에서 결과를 캐시합니다.
-- 행 선택은 `load_detail()`을 별도 비동기 요청으로 실행합니다.
-- ID 바로 열기는 `resolve_item_context()` 후 `load_ancestor_path()`를 사용합니다.
-- 늦게 끝난 요청이 현재 선택을 덮지 않도록 화면 controller가 request token을 비교합니다.
+- `src/gui/tracker_workspace.py`의 `TrackerWorkspacePage`가 화면 계약을 담당합니다.
+- 최상위 목록은 tracker와 page별로, 직접 하위는 parent item ID별로 화면 세션에서 캐시합니다.
+- 노드를 처음 펼칠 때만 `load_child_items()`를 호출합니다.
+- 계층 또는 검색 결과 행 선택은 `load_detail()`을 별도 백그라운드 요청으로 실행합니다.
+- tracker 검색은 선택 tracker ID로 `TrackerQuery`를 만들며 빈 검색 조건은 화면에서 차단합니다.
+- ID 바로 열기는 `resolve_item_context()` 후 `load_ancestor_path()`를 호출해 선택 컨텍스트와 경로를 함께 전환합니다.
+- 설정·선택이 바뀐 뒤 늦게 끝난 요청이 화면을 덮지 않도록 작업 종류별 request token과 현재 tracker/item을 비교합니다.

@@ -6,6 +6,7 @@ from .batch_window import BatchUploadWindow
 from .settings_center import SettingsCenterPage
 from .settings_store import GuiSettings
 from .settings_store import GuiSettingsStore
+from .tracker_workspace import TrackerWorkspacePage
 from .window_support import _estimate_upload_remaining_seconds
 from .window_support import _format_clock_text
 from .window_support import _format_duration_text
@@ -111,6 +112,7 @@ class MainWindow(QMainWindow):
 
         body_layout = QHBoxLayout()
         body_layout.setSpacing(8)
+        self.application_body_layout = body_layout
 
         navigation = QFrame(root)
         navigation.setObjectName("application_navigation")
@@ -161,17 +163,10 @@ class MainWindow(QMainWindow):
         self.route_stack.setObjectName("application_route_stack")
         content_layout.addWidget(self.route_stack)
 
-        self.tracker_workspace_page = self._create_placeholder_page(
-            title="트래커 작업공간",
-            phase="Foundation 1",
-            description=(
-                "프로젝트와 트래커를 선택한 뒤 계층 탐색, 조건 검색, 상세 조회로 이어지는 "
-                "작업공간입니다."
-            ),
-            scope_text=(
-                "현재 버전에서는 최상위 앱 셸과 작업 경로를 먼저 구성합니다. "
-                "실제 아이템 조회는 조회 서비스와 아이템 탐색 화면 구현 단계에서 순차적으로 활성화합니다."
-            ),
+        self.tracker_workspace_page = TrackerWorkspacePage(
+            settings_provider=self.settings_store.load,
+            open_settings=self._open_global_settings,
+            parent=content,
         )
 
         self.batch_page = QWidget(content)
@@ -308,6 +303,8 @@ class MainWindow(QMainWindow):
             return True
         self.statusBar().show()
         self.statusBar().showMessage(f"{APP_ROUTE_LABELS[route]} 화면을 열었습니다.")
+        if route == ROUTE_TRACKER_WORKSPACE:
+            self.tracker_workspace_page.activate()
         return True
 
     def _open_global_settings(self) -> None:
@@ -346,6 +343,14 @@ class MainWindow(QMainWindow):
             button.style().unpolish(button)
             button.style().polish(button)
 
+        self.navigation_frame.updateGeometry()
+        self.application_body_layout.invalidate()
+        self.application_body_layout.activate()
+        central_widget = self.centralWidget()
+        if central_widget is not None and central_widget.layout() is not None:
+            central_widget.layout().invalidate()
+            central_widget.layout().activate()
+
         settings_center = getattr(self, "settings_center_page", None)
         if settings_center is not None:
             settings_center.update_navigation_preference(self.navigation_collapsed)
@@ -358,6 +363,7 @@ class MainWindow(QMainWindow):
         applied = self.batch_window.apply_global_settings(settings)
         self._update_mode_badge(applied)
         self.batch_window._apply_theme(applied.theme_name)
+        self.tracker_workspace_page.on_settings_applied(applied)
         self.statusBar().showMessage("전역 설정을 현재 작업에 적용했습니다.")
 
     def _on_batch_settings_changed(self, settings: GuiSettings) -> None:
@@ -408,6 +414,7 @@ class MainWindow(QMainWindow):
             self.settings_store.save_window_preferences(updated_settings)
         except Exception:
             pass
+        self.tracker_workspace_page.shutdown()
         super().closeEvent(event)
 
 
@@ -417,6 +424,7 @@ __all__ = [
     "APPLICATION_NAVIGATION_COLLAPSED_WIDTH",
     "BatchUploadWindow",
     "MainWindow",
+    "TrackerWorkspacePage",
     "ROUTE_ACTIVITY",
     "ROUTE_BATCH_UPLOAD",
     "ROUTE_SETTINGS",

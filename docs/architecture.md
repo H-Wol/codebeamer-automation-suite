@@ -173,6 +173,8 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - 현재 tracker 범위를 강제하는 CbQL 변환과 서버 pagination 메타데이터 보존
 - 트래커 최상위·직접 하위·상세·조상 경로 응답의 UI 독립 모델 정규화
 - 두 tracker 익명 조회 snapshot과 온라인 조회가 같은 서비스 계약을 사용
+- 프로젝트·트래커 선택, 지연 로딩 트리, tracker 범위 검색, ID 직접 접근과 상세 화면 연결
+- 조회 요청의 화면 세션 캐시와 request token 기반 오래된 응답 차단
 - 다중 Excel 파일 선택과 대표 파일 미리보기 표시
 - 파일명 정규식 기반 상단 데이터 preview/payload 구성
 - 매핑/검증/업로드/결과 화면 구성
@@ -190,6 +192,7 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - `src/gui/page_batch_settings.py`
 - `src/gui/tracker_query_models.py`
 - `src/gui/tracker_query_service.py`
+- `src/gui/tracker_workspace.py`
 - `src/gui/offline_query.py`
 - `src/gui/worker.py`
 
@@ -206,6 +209,7 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - 기존 배치 마법사 조합: `src/gui/batch_window.py`, `src/gui/window_support.py`, `src/gui/window_shell.py`, `src/gui/window_workflow.py`, `src/gui/window_upload.py`
 - GUI 서비스 분리: `src/gui/service_core.py`, `src/gui/upload_service.py`
 - 트래커 조회 모델·서비스: `src/gui/tracker_query_models.py`, `src/gui/tracker_query_service.py`
+- 트래커 계층·검색·상세 화면: `src/gui/tracker_workspace.py`
 - 테스트 모드 CbQL subset 평가: `src/gui/offline_query.py`
 - 업로드 context 모델: `src/gui/upload_context.py`
 - TRACKER configuration 해석: `src/gui/tracker_config.py`
@@ -228,6 +232,9 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 서버가 반환한 `page`, `pageSize`, `total`과 요청값을 함께 보존해 pagination 지원 차이를
 화면 계층에서 판단할 수 있게 합니다. 최상위·직접 하위·상세·parent 경로 응답은
 `tracker_query_models.py`의 불변 모델로 변환하며 원본 JSON의 credential 계열 키는 마스킹합니다.
+`TrackerWorkspacePage`는 최상위와 직접 하위를 필요할 때만 불러오고 세션 캐시를 재사용합니다.
+프로젝트·트래커·선택 아이템이 바뀐 뒤 완료되는 이전 요청은 작업별 request token과 현재
+컨텍스트를 비교해 무시하며, ID 직접 접근은 검색과 분리해 소속 tracker와 조상 경로를 먼저 확인합니다.
 세션의 mapping/validation context는 실제 dataclass 타입으로 선언하며, 업로드 건수·단계·
 시간 측정값은 `UploadProgressState` 하나에서 관리합니다. Window mixin 사이의 호출은
 현재 클래스 구성만으로 명확하므로 별도 `Protocol`은 추가하지 않습니다.

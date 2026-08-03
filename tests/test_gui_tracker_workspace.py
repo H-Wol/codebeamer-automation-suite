@@ -1,0 +1,184 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import unittest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from src.gui.settings_store import GuiSettings
+from src.gui.tracker_query_service import TrackerQueryService
+from src.gui.tracker_workspace import ITEM_SUMMARY_ROLE
+from src.gui.tracker_workspace import TrackerWorkspacePage
+
+
+SAMPLE_DIR = Path(__file__).resolve().parent.parent / "data" / "gui-offline-sample"
+
+
+class CountingTrackerQueryService(TrackerQueryService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.child_load_count = 0
+
+    def load_child_items(self, *args, **kwargs):
+        self.child_load_count += 1
+        return super().load_child_items(*args, **kwargs)
+
+
+class TrackerWorkspacePageTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        cls._app = QApplication.instance() or QApplication([])
+
+    def setUp(self) -> None:
+        self.settings = GuiSettings(
+            offline_mode=True,
+            offline_schema_path=str(SAMPLE_DIR / "offline_schema.json"),
+            offline_tracker_configuration_path=str(
+                SAMPLE_DIR / "offline_tracker_configuration.json"
+            ),
+            offline_query_data_path=str(SAMPLE_DIR / "offline_tracker_items.json"),
+        )
+        self.service = CountingTrackerQueryService()
+        self.page = TrackerWorkspacePage(
+            settings_provider=lambda: self.settings,
+            service=self.service,
+            synchronous=True,
+        )
+        self.page.show()
+        self._app.processEvents()
+
+    def tearDown(self) -> None:
+        self.page.close()
+        self._app.processEvents()
+
+    def test_activation_loads_project_tracker_and_top_level_items(self) -> None:
+        self.page.activate()
+
+        self.assertEqual(self.page.project_combo.count(), 1)
+        self.assertEqual(self.page.project_combo.currentData(), 246800)
+        self.assertEqual(self.page.tracker_combo.count(), 2)
+        self.assertEqual(self.page.tracker_combo.currentData(), 24680001)
+        self.assertEqual(self.page.item_tree.topLevelItemCount(), 2)
+        self.assertEqual(self.page.item_tree.topLevelItem(0).text(0), "9001001")
+        self.assertIn("Offline Requirements", self.page.search_scope_label.text())
+        self.assertTrue(self.page.search_button.isEnabled())
+
+    def test_expanding_node_loads_direct_children_once_and_reuses_cache(self) -> None:
+        self.page.activate()
+        root = self.page.item_tree.topLevelItem(0)
+
+        self.page._on_tree_item_expanded(root)
+
+        self.assertEqual(self.service.child_load_count, 1)
+        self.assertEqual(root.childCount(), 2)
+        self.assertEqual(root.child(0).text(0), "9001002")
+        self.assertEqual(root.child(1).text(0), "9001003")
+
+        self.page._on_tree_item_expanded(root)
+
+        self.assertEqual(self.service.child_load_count, 1)
+        steering = root.child(1)
+        self.page._on_tree_item_expanded(steering)
+        self.assertEqual(self.service.child_load_count, 2)
+        self.assertEqual(steering.child(0).text(0), "9001004")
+
+    def test_tree_selection_loads_read_only_detail_and_masked_raw_json(self) -> None:
+        self.page.activate()
+        root = self.page.item_tree.topLevelItem(0)
+        self.page.item_tree.setCurrentItem(root)
+        self._app.processEvents()
+
+        self.assertEqual(self.page.detail_title.text(), "Vehicle requirements")
+        self.assertEqual(self.page.detail_id_badge.text(), "#9001001")
+        self.assertIn("Top-level sample requirement", self.page.detail_description.toPlainText())
+        self.assertGreaterEqual(self.page.detail_fields_table.rowCount(), 10)
+        self.assertIn('"Risk Level"', self.page.detail_raw_json.toPlainText())
+
+    def test_tracker_search_is_scoped_to_selected_tracker(self) -> None:
+        self.page.activate()
+        self.page.browser_tabs.setCurrentIndex(1)
+        self.page.search_text_input.setText("Steering")
+
+        self.page._run_search()
+
+        requirement_ids = {
+            int(self.page.search_table.item(row, 0).text())
+            for row in range(self.page.search_table.rowCount())
+        }
+        self.assertEqual(requirement_ids, {9001003, 9001004})
+
+        self.page._on_tracker_activated(1)
+        self.page.search_text_input.setText("Steering")
+        self.page._run_search()
+
+        test_case_ids = {
+            int(self.page.search_table.item(row, 0).text())
+            for row in range(self.page.search_table.rowCount())
+        }
+        self.assertEqual(test_case_ids, {9101002})
+        self.assertNotIn(9001003, test_case_ids)
+        self.assertIn("Offline Test Cases", self.page.search_scope_label.text())
+
+    def test_direct_id_open_resolves_other_tracker_and_builds_ancestor_path(self) -> None:
+        self.page.activate()
+        self.assertEqual(self.page.tracker_combo.currentData(), 24680001)
+        self.page.direct_id_input.setText("9101002")
+
+        self.page._open_direct_item()
+
+        self.assertEqual(self.page.tracker_combo.currentData(), 24680002)
+        self.assertEqual(self.page.detail_id_badge.text(), "#9101002")
+        self.assertEqual(self.page.detail_title.text(), "Steering response test")
+        self.assertEqual(self.page.item_tree.topLevelItemCount(), 1)
+        root = self.page.item_tree.topLevelItem(0)
+        self.assertEqual(root.text(0), "9101001")
+        self.assertEqual(root.childCount(), 1)
+        self.assertEqual(root.child(0).text(0), "9101002")
+        self.assertIn("ID 직접 접근 경로", self.page.tree_status_label.text())
+
+    def test_search_requires_filter_instead_of_loading_entire_tracker(self) -> None:
+        self.page.activate()
+
+        self.page._run_search()
+
+        self.assertEqual(self.page.search_table.rowCount(), 0)
+        self.assertIn("하나 이상", self.page.workspace_status_label.text())
+        self.assertEqual(self.page.workspace_status_label.property("tone"), "warning")
+
+    def test_unconfigured_workspace_guides_user_to_settings(self) -> None:
+        page = TrackerWorkspacePage(
+            settings_provider=GuiSettings,
+            service=self.service,
+            synchronous=True,
+        )
+        try:
+            page.activate()
+
+            self.assertFalse(page.direct_open_button.isEnabled())
+            self.assertFalse(page.refresh_context_button.isEnabled())
+            self.assertIn("활성 연결", page.workspace_status_label.text())
+            self.assertEqual(page.workspace_status_label.property("tone"), "warning")
+        finally:
+            page.close()
+
+    def test_request_tokens_reject_stale_results(self) -> None:
+        first = self.page._next_token("detail")
+        second = self.page._next_token("detail")
+
+        self.assertFalse(self.page._is_current_token("detail", first))
+        self.assertTrue(self.page._is_current_token("detail", second))
+
+    def test_tree_items_store_normalized_models_not_server_dicts(self) -> None:
+        self.page.activate()
+        value = self.page.item_tree.topLevelItem(0).data(0, ITEM_SUMMARY_ROLE)
+
+        self.assertEqual(value.item_id, 9001001)
+        self.assertEqual(value.tracker_id, 24680001)
+        self.assertFalse(isinstance(value, dict))
+
+
+if __name__ == "__main__":
+    unittest.main()

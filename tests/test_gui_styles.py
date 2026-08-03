@@ -27,6 +27,8 @@ class GuiStylesTest(unittest.TestCase):
         self.assertIn("QFrame#application_placeholder_card", stylesheet)
         self.assertIn("QFrame#settings_category_navigation", stylesheet)
         self.assertIn("QPushButton#settings_category_button:checked", stylesheet)
+        self.assertIn("QFrame#tracker_workspace_panel", stylesheet)
+        self.assertIn("QTreeWidget#tracker_item_tree", stylesheet)
 
     def test_build_gui_stylesheet_defaults_to_kefico_when_theme_is_invalid(self) -> None:
         default_stylesheet = build_gui_stylesheet(DEFAULT_GUI_THEME)

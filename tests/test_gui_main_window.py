@@ -24,6 +24,7 @@ from src.gui.main_window import ROUTE_SETTINGS
 from src.gui.main_window import ROUTE_TRACKER_WORKSPACE
 from src.gui.batch_window import BatchUploadWindow
 from src.gui.settings_center import SettingsCenterPage
+from src.gui.tracker_workspace import TrackerWorkspacePage
 from src.gui.settings_store import GuiSettings
 from src.gui.settings_store import GuiSettingsStore
 from src.gui.settings_store import AppSettings
@@ -170,6 +171,7 @@ class GuiMainWindowSmokeTest(unittest.TestCase):
             self.assertEqual(window.current_route, ROUTE_TRACKER_WORKSPACE)
             self.assertIs(window.route_stack.currentWidget(), window.tracker_workspace_page)
             self.assertTrue(window.nav_buttons[ROUTE_TRACKER_WORKSPACE].isChecked())
+            self.assertIsInstance(window.tracker_workspace_page, TrackerWorkspacePage)
 
             self.assertIsInstance(window.batch_window, BatchUploadWindow)
             self.assertIsInstance(window.batch_window.session_state, GuiSessionState)
@@ -218,6 +220,8 @@ class GuiMainWindowSmokeTest(unittest.TestCase):
             self._app.processEvents()
 
     def test_application_navigation_can_collapse_and_restore_on_restart(self) -> None:
+        from PySide6.QtCore import QPoint
+
         with tempfile.TemporaryDirectory() as temp_dir:
             store = GuiSettingsStore(root_dir=Path(temp_dir))
             window = MainWindow(store)
@@ -251,6 +255,15 @@ class GuiMainWindowSmokeTest(unittest.TestCase):
             for route, button in window.nav_buttons.items():
                 self.assertEqual(button.toolTip(), APP_ROUTE_LABELS[route])
                 self.assertEqual(button.accessibleName(), APP_ROUTE_LABELS[route])
+            direct_button_position = window.tracker_workspace_page.direct_open_button.mapTo(
+                window,
+                QPoint(0, 0),
+            )
+            self.assertLessEqual(
+                direct_button_position.x()
+                + window.tracker_workspace_page.direct_open_button.width(),
+                window.width(),
+            )
 
             window.close()
             self._app.processEvents()

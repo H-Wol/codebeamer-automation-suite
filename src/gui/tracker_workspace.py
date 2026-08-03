@@ -1,0 +1,1264 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+from typing import Any
+from typing import Callable
+
+try:
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QAbstractItemView
+    from PySide6.QtWidgets import QComboBox
+    from PySide6.QtWidgets import QFrame
+    from PySide6.QtWidgets import QHBoxLayout
+    from PySide6.QtWidgets import QHeaderView
+    from PySide6.QtWidgets import QLabel
+    from PySide6.QtWidgets import QLineEdit
+    from PySide6.QtWidgets import QPlainTextEdit
+    from PySide6.QtWidgets import QPushButton
+    from PySide6.QtWidgets import QSplitter
+    from PySide6.QtWidgets import QTabWidget
+    from PySide6.QtWidgets import QTableWidget
+    from PySide6.QtWidgets import QTableWidgetItem
+    from PySide6.QtWidgets import QTreeWidget
+    from PySide6.QtWidgets import QTreeWidgetItem
+    from PySide6.QtWidgets import QVBoxLayout
+    from PySide6.QtWidgets import QWidget
+except ImportError as exc:  # pragma: no cover - GUI dependency guard
+    raise RuntimeError("GUI 실행에는 PySide6 패키지가 필요합니다.") from exc
+
+from .settings_store import GuiSettings
+from .tracker_query_models import PageResult
+from .tracker_query_models import ProjectSummary
+from .tracker_query_models import TrackerItemContext
+from .tracker_query_models import TrackerItemDetail
+from .tracker_query_models import TrackerItemSummary
+from .tracker_query_models import TrackerQuery
+from .tracker_query_models import TrackerQueryServiceError
+from .tracker_query_models import TrackerSummary
+from .tracker_query_service import TrackerQueryService
+from .worker import BackgroundTask
+
+
+ITEM_SUMMARY_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+PLACEHOLDER_ROLE = int(Qt.ItemDataRole.UserRole) + 2
+CHILDREN_LOADED_ROLE = int(Qt.ItemDataRole.UserRole) + 3
+DEFAULT_BROWSER_PAGE_SIZE = 100
+DEFAULT_SEARCH_PAGE_SIZE = 50
+
+
+@dataclass(frozen=True)
+class _DirectItemResult:
+    context: TrackerItemContext
+    ancestor_path: tuple[TrackerItemSummary, ...]
+
+
+class TrackerWorkspacePage(QWidget):
+    """프로젝트와 트래커를 기준으로 계층, 검색, 상세를 연결한다."""
+
+    def __init__(
+        self,
+        *,
+        settings_provider: Callable[[], GuiSettings],
+        service: TrackerQueryService | None = None,
+        open_settings: Callable[[], None] | None = None,
+        task_factory=BackgroundTask,
+        synchronous: bool = False,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("tracker_workspace_page")
+        self.settings_provider = settings_provider
+        self.service = service or TrackerQueryService()
+        self.open_settings = open_settings
+        self.task_factory = task_factory
+        self.synchronous = bool(synchronous)
+
+        self._activated = False
+        self._settings_fingerprint: tuple[Any, ...] | None = None
+        self._projects: tuple[ProjectSummary, ...] = ()
+        self._trackers: tuple[TrackerSummary, ...] = ()
+        self._current_project: ProjectSummary | None = None
+        self._current_tracker: TrackerSummary | None = None
+        self._root_cache: dict[tuple[int, int], PageResult[TrackerItemSummary]] = {}
+        self._child_cache: dict[int, tuple[TrackerItemSummary, ...]] = {}
+        self._request_tokens: dict[str, int] = {}
+        self._tasks: set[Any] = set()
+        self._root_page = 1
+        self._search_page = 1
+        self._last_search_values: tuple[str, str, str] | None = None
+        self._selected_item_id: int | None = None
+
+        self._build_ui()
+        self._reset_workspace("프로젝트와 트래커를 불러오면 조회를 시작할 수 있습니다.")
+
+    def _build_ui(self) -> None:
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(18, 16, 18, 16)
+        root_layout.setSpacing(10)
+
+        heading_row = QHBoxLayout()
+        heading_row.setSpacing(8)
+        title_group = QVBoxLayout()
+        title_group.setSpacing(2)
+        title = QLabel("트래커 작업공간")
+        title.setObjectName("application_route_title")
+        subtitle = QLabel(
+            "프로젝트와 트래커를 선택해 계층을 탐색하거나, 현재 트래커 안에서 아이템을 검색합니다."
+        )
+        subtitle.setObjectName("application_route_description")
+        subtitle.setWordWrap(True)
+        title_group.addWidget(title)
+        title_group.addWidget(subtitle)
+        heading_row.addLayout(title_group, 1)
+
+        self.direct_id_input = QLineEdit(self)
+        self.direct_id_input.setObjectName("tracker_direct_id_input")
+        self.direct_id_input.setPlaceholderText("아이템 ID")
+        self.direct_id_input.setAccessibleName("아이템 ID 바로 열기")
+        self.direct_id_input.setMaximumWidth(130)
+        self.direct_id_input.returnPressed.connect(self._open_direct_item)
+        heading_row.addWidget(self.direct_id_input)
+        self.direct_open_button = QPushButton("ID 바로 열기", self)
+        self.direct_open_button.setObjectName("primary_button")
+        self.direct_open_button.clicked.connect(self._open_direct_item)
+        heading_row.addWidget(self.direct_open_button)
+        root_layout.addLayout(heading_row)
+
+        context_card = QFrame(self)
+        context_card.setObjectName("tracker_context_card")
+        context_layout = QHBoxLayout(context_card)
+        context_layout.setContentsMargins(12, 10, 12, 10)
+        context_layout.setSpacing(8)
+
+        project_label = QLabel("프로젝트")
+        project_label.setObjectName("tracker_context_label")
+        context_layout.addWidget(project_label)
+        self.project_combo = QComboBox(context_card)
+        self.project_combo.setObjectName("tracker_project_combo")
+        self.project_combo.setMinimumWidth(150)
+        self.project_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.project_combo.setMinimumContentsLength(18)
+        self.project_combo.activated.connect(self._on_project_activated)
+        context_layout.addWidget(self.project_combo, 1)
+
+        tracker_label = QLabel("트래커")
+        tracker_label.setObjectName("tracker_context_label")
+        context_layout.addWidget(tracker_label)
+        self.tracker_combo = QComboBox(context_card)
+        self.tracker_combo.setObjectName("tracker_tracker_combo")
+        self.tracker_combo.setMinimumWidth(150)
+        self.tracker_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.tracker_combo.setMinimumContentsLength(18)
+        self.tracker_combo.activated.connect(self._on_tracker_activated)
+        context_layout.addWidget(self.tracker_combo, 1)
+
+        self.refresh_context_button = QPushButton("새로고침", context_card)
+        self.refresh_context_button.clicked.connect(lambda: self.activate(force=True))
+        context_layout.addWidget(self.refresh_context_button)
+        root_layout.addWidget(context_card)
+
+        status_row = QHBoxLayout()
+        self.workspace_status_label = QLabel("")
+        self.workspace_status_label.setObjectName("tracker_workspace_status")
+        self.workspace_status_label.setWordWrap(True)
+        status_row.addWidget(self.workspace_status_label, 1)
+        self.open_settings_button = QPushButton("설정 열기", self)
+        self.open_settings_button.setVisible(self.open_settings is not None)
+        if self.open_settings is not None:
+            self.open_settings_button.clicked.connect(self.open_settings)
+        status_row.addWidget(self.open_settings_button)
+        root_layout.addLayout(status_row)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        splitter.setObjectName("tracker_workspace_splitter")
+        splitter.setChildrenCollapsible(False)
+        self.workspace_splitter = splitter
+
+        browser_panel = QFrame(splitter)
+        browser_panel.setObjectName("tracker_workspace_panel")
+        browser_panel.setMinimumWidth(300)
+        browser_layout = QVBoxLayout(browser_panel)
+        browser_layout.setContentsMargins(10, 10, 10, 10)
+        browser_layout.setSpacing(8)
+
+        self.browser_tabs = QTabWidget(browser_panel)
+        self.browser_tabs.setObjectName("tracker_browser_tabs")
+        self.browser_tabs.addTab(self._build_hierarchy_tab(), "계층")
+        self.browser_tabs.addTab(self._build_search_tab(), "트래커 검색")
+        browser_layout.addWidget(self.browser_tabs, 1)
+
+        detail_panel = QFrame(splitter)
+        detail_panel.setObjectName("tracker_workspace_panel")
+        detail_panel.setMinimumWidth(300)
+        detail_layout = QVBoxLayout(detail_panel)
+        detail_layout.setContentsMargins(12, 10, 12, 10)
+        detail_layout.setSpacing(8)
+
+        detail_heading = QHBoxLayout()
+        self.detail_title = QLabel("아이템 상세")
+        self.detail_title.setObjectName("tracker_detail_title")
+        detail_heading.addWidget(self.detail_title, 1)
+        self.detail_id_badge = QLabel("")
+        self.detail_id_badge.setObjectName("application_phase_badge")
+        self.detail_id_badge.hide()
+        detail_heading.addWidget(self.detail_id_badge)
+        detail_layout.addLayout(detail_heading)
+
+        self.detail_breadcrumb = QLabel("선택한 아이템이 없습니다.")
+        self.detail_breadcrumb.setObjectName("tracker_detail_breadcrumb")
+        self.detail_breadcrumb.setWordWrap(True)
+        detail_layout.addWidget(self.detail_breadcrumb)
+
+        self.detail_warning = QLabel("")
+        self.detail_warning.setObjectName("tracker_detail_warning")
+        self.detail_warning.setWordWrap(True)
+        self.detail_warning.hide()
+        detail_layout.addWidget(self.detail_warning)
+
+        self.detail_tabs = QTabWidget(detail_panel)
+        self.detail_tabs.setObjectName("tracker_detail_tabs")
+        self.detail_tabs.addTab(self._build_overview_tab(), "개요")
+        self.detail_tabs.addTab(self._build_raw_tab(), "원본 JSON")
+        detail_layout.addWidget(self.detail_tabs, 1)
+
+        splitter.addWidget(browser_panel)
+        splitter.addWidget(detail_panel)
+        splitter.setStretchFactor(0, 6)
+        splitter.setStretchFactor(1, 5)
+        splitter.setSizes([560, 470])
+        root_layout.addWidget(splitter, 1)
+
+    def _build_hierarchy_tab(self) -> QWidget:
+        tab = QWidget(self)
+        tab.setObjectName("tracker_hierarchy_tab")
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(6, 8, 6, 6)
+        layout.setSpacing(6)
+
+        toolbar = QHBoxLayout()
+        self.tree_status_label = QLabel("트래커를 선택하세요.")
+        self.tree_status_label.setObjectName("tracker_panel_status")
+        toolbar.addWidget(self.tree_status_label, 1)
+        self.reload_roots_button = QPushButton("최상위 다시 불러오기", tab)
+        self.reload_roots_button.clicked.connect(
+            lambda: self._load_roots(page=1, force=True)
+        )
+        toolbar.addWidget(self.reload_roots_button)
+        layout.addLayout(toolbar)
+
+        self.item_tree = QTreeWidget(tab)
+        self.item_tree.setObjectName("tracker_item_tree")
+        self.item_tree.setColumnCount(4)
+        self.item_tree.setHeaderLabels(["ID", "요약", "상태", "담당자"])
+        self.item_tree.setAlternatingRowColors(True)
+        self.item_tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.item_tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.item_tree.setUniformRowHeights(True)
+        self.item_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.item_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.item_tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.item_tree.header().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.item_tree.itemExpanded.connect(self._on_tree_item_expanded)
+        self.item_tree.itemSelectionChanged.connect(self._on_tree_selection_changed)
+        layout.addWidget(self.item_tree, 1)
+
+        page_row = QHBoxLayout()
+        self.root_previous_button = QPushButton("이전", tab)
+        self.root_previous_button.clicked.connect(
+            lambda: self._load_roots(page=max(self._root_page - 1, 1))
+        )
+        self.root_page_label = QLabel("1 페이지")
+        self.root_page_label.setObjectName("tracker_page_label")
+        self.root_next_button = QPushButton("다음", tab)
+        self.root_next_button.clicked.connect(
+            lambda: self._load_roots(page=self._root_page + 1)
+        )
+        page_row.addStretch(1)
+        page_row.addWidget(self.root_previous_button)
+        page_row.addWidget(self.root_page_label)
+        page_row.addWidget(self.root_next_button)
+        layout.addLayout(page_row)
+        return tab
+
+    def _build_search_tab(self) -> QWidget:
+        tab = QWidget(self)
+        tab.setObjectName("tracker_search_tab")
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(6, 8, 6, 6)
+        layout.setSpacing(6)
+
+        first_row = QHBoxLayout()
+        self.search_text_input = QLineEdit(tab)
+        self.search_text_input.setObjectName("tracker_search_text")
+        self.search_text_input.setPlaceholderText("ID 또는 요약")
+        self.search_text_input.returnPressed.connect(self._run_search)
+        first_row.addWidget(self.search_text_input, 2)
+        self.search_status_input = QLineEdit(tab)
+        self.search_status_input.setObjectName("tracker_search_status")
+        self.search_status_input.setPlaceholderText("상태")
+        self.search_status_input.returnPressed.connect(self._run_search)
+        first_row.addWidget(self.search_status_input, 1)
+        self.search_assignee_input = QLineEdit(tab)
+        self.search_assignee_input.setObjectName("tracker_search_assignee")
+        self.search_assignee_input.setPlaceholderText("담당자")
+        self.search_assignee_input.returnPressed.connect(self._run_search)
+        first_row.addWidget(self.search_assignee_input, 1)
+        self.search_button = QPushButton("현재 트래커 검색", tab)
+        self.search_button.setObjectName("primary_button")
+        self.search_button.clicked.connect(self._run_search)
+        first_row.addWidget(self.search_button)
+        layout.addLayout(first_row)
+
+        self.search_scope_label = QLabel("프로젝트와 트래커를 먼저 선택하세요.")
+        self.search_scope_label.setObjectName("tracker_panel_status")
+        self.search_scope_label.setWordWrap(True)
+        layout.addWidget(self.search_scope_label)
+
+        self.search_table = QTableWidget(0, 4, tab)
+        self.search_table.setObjectName("tracker_search_results")
+        self.search_table.setHorizontalHeaderLabels(["ID", "요약", "상태", "담당자"])
+        self.search_table.setAlternatingRowColors(True)
+        self.search_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.search_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.search_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.search_table.verticalHeader().setVisible(False)
+        self.search_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.search_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.search_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.search_table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.search_table.itemSelectionChanged.connect(self._on_search_selection_changed)
+        layout.addWidget(self.search_table, 1)
+
+        page_row = QHBoxLayout()
+        self.search_previous_button = QPushButton("이전", tab)
+        self.search_previous_button.clicked.connect(
+            lambda: self._run_search(page=max(self._search_page - 1, 1), reuse=True)
+        )
+        self.search_page_label = QLabel("1 페이지")
+        self.search_page_label.setObjectName("tracker_page_label")
+        self.search_next_button = QPushButton("다음", tab)
+        self.search_next_button.clicked.connect(
+            lambda: self._run_search(page=self._search_page + 1, reuse=True)
+        )
+        page_row.addStretch(1)
+        page_row.addWidget(self.search_previous_button)
+        page_row.addWidget(self.search_page_label)
+        page_row.addWidget(self.search_next_button)
+        layout.addLayout(page_row)
+        return tab
+
+    def _build_overview_tab(self) -> QWidget:
+        tab = QWidget(self)
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(6, 8, 6, 6)
+        layout.setSpacing(6)
+        description_label = QLabel("설명")
+        description_label.setObjectName("tracker_detail_section_title")
+        layout.addWidget(description_label)
+        self.detail_description = QPlainTextEdit(tab)
+        self.detail_description.setObjectName("tracker_detail_description")
+        self.detail_description.setReadOnly(True)
+        self.detail_description.setPlaceholderText("아이템을 선택하면 설명을 표시합니다.")
+        self.detail_description.setMaximumHeight(150)
+        layout.addWidget(self.detail_description)
+
+        fields_label = QLabel("필드")
+        fields_label.setObjectName("tracker_detail_section_title")
+        layout.addWidget(fields_label)
+        self.detail_fields_table = QTableWidget(0, 3, tab)
+        self.detail_fields_table.setObjectName("tracker_detail_fields")
+        self.detail_fields_table.setHorizontalHeaderLabels(["필드", "값", "유형"])
+        self.detail_fields_table.setAlternatingRowColors(True)
+        self.detail_fields_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.detail_fields_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.detail_fields_table.verticalHeader().setVisible(False)
+        self.detail_fields_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.detail_fields_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.detail_fields_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
+        layout.addWidget(self.detail_fields_table, 1)
+        return tab
+
+    def _build_raw_tab(self) -> QWidget:
+        tab = QWidget(self)
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(6, 8, 6, 6)
+        self.detail_raw_json = QPlainTextEdit(tab)
+        self.detail_raw_json.setObjectName("tracker_detail_raw_json")
+        self.detail_raw_json.setReadOnly(True)
+        self.detail_raw_json.setPlaceholderText(
+            "민감한 키가 마스킹된 Codebeamer 응답을 표시합니다."
+        )
+        layout.addWidget(self.detail_raw_json)
+        return tab
+
+    @staticmethod
+    def _settings_key(settings: GuiSettings) -> tuple[Any, ...]:
+        return (
+            bool(settings.offline_mode),
+            str(settings.base_url or "").strip().rstrip("/"),
+            str(settings.username or "").strip(),
+            bool(settings.password),
+            str(settings.offline_schema_path or "").strip(),
+            str(settings.offline_query_data_path or "").strip(),
+        )
+
+    @staticmethod
+    def _settings_available(settings: GuiSettings) -> tuple[bool, str]:
+        if bool(settings.offline_mode):
+            if not str(settings.offline_query_data_path or "").strip():
+                return (
+                    False,
+                    "테스트 모드 조회 데이터 Snapshot이 필요합니다. 설정에서 파일을 지정하고 적용하세요.",
+                )
+            return True, "테스트 모드 조회 데이터를 사용합니다."
+        if all(
+            (
+                str(settings.base_url or "").strip(),
+                str(settings.username or "").strip(),
+                str(settings.password or ""),
+            )
+        ):
+            return True, "온라인 연결을 사용합니다."
+        return False, "활성 연결이 없습니다. 설정에서 연결을 검증하고 적용하세요."
+
+    def activate(self, *, force: bool = False) -> None:
+        settings = self.settings_provider()
+        fingerprint = self._settings_key(settings)
+        settings_changed = fingerprint != self._settings_fingerprint
+        if settings_changed:
+            self._settings_fingerprint = fingerprint
+            self._clear_context_state()
+        available, message = self._settings_available(settings)
+        self._set_available(available)
+        if not available:
+            self._set_workspace_status(message, tone="warning")
+            self._activated = True
+            return
+        if self._activated and self._projects and not force and not settings_changed:
+            return
+        self._activated = True
+        self._load_projects(force=force or settings_changed)
+
+    def on_settings_applied(self, settings: GuiSettings | None = None) -> None:
+        del settings
+        self._activated = False
+        self._settings_fingerprint = None
+        self.activate(force=True)
+
+    def _clear_context_state(self) -> None:
+        self._invalidate_requests()
+        self._projects = ()
+        self._trackers = ()
+        self._current_project = None
+        self._current_tracker = None
+        self._root_cache.clear()
+        self._child_cache.clear()
+        self.project_combo.clear()
+        self.tracker_combo.clear()
+        self.search_table.setRowCount(0)
+        self._last_search_values = None
+        self._root_page = 1
+        self._search_page = 1
+        self._selected_item_id = None
+        self._reset_detail()
+        self._reset_workspace("프로젝트와 트래커를 불러오는 중입니다.")
+
+    def _reset_workspace(self, message: str) -> None:
+        self.item_tree.clear()
+        self.tree_status_label.setText(message)
+        self.root_page_label.setText("1 페이지")
+        self.root_previous_button.setEnabled(False)
+        self.root_next_button.setEnabled(False)
+        self.search_scope_label.setText("프로젝트와 트래커를 먼저 선택하세요.")
+        self.search_previous_button.setEnabled(False)
+        self.search_next_button.setEnabled(False)
+
+    def _set_available(self, available: bool) -> None:
+        self.direct_id_input.setEnabled(available)
+        self.direct_open_button.setEnabled(available)
+        self.refresh_context_button.setEnabled(available)
+        self.project_combo.setEnabled(available and bool(self._projects))
+        self.tracker_combo.setEnabled(available and bool(self._trackers))
+        self.reload_roots_button.setEnabled(available and self._current_tracker is not None)
+        self.search_text_input.setEnabled(available and self._current_tracker is not None)
+        self.search_status_input.setEnabled(available and self._current_tracker is not None)
+        self.search_assignee_input.setEnabled(available and self._current_tracker is not None)
+        self.search_button.setEnabled(available and self._current_tracker is not None)
+
+    def _set_workspace_status(self, message: str, *, tone: str = "info") -> None:
+        self.workspace_status_label.setText(str(message or ""))
+        self.workspace_status_label.setProperty("tone", tone)
+        self.workspace_status_label.style().unpolish(self.workspace_status_label)
+        self.workspace_status_label.style().polish(self.workspace_status_label)
+
+    def _next_token(self, key: str) -> int:
+        token = self._request_tokens.get(key, 0) + 1
+        self._request_tokens[key] = token
+        return token
+
+    def _is_current_token(self, key: str, token: int) -> bool:
+        return self._request_tokens.get(key) == token
+
+    def _invalidate_requests(self) -> None:
+        for key in tuple(self._request_tokens):
+            self._next_token(key)
+
+    def _submit(
+        self,
+        key: str,
+        operation: Callable[[], Any],
+        on_success: Callable[[Any], None],
+        on_failure: Callable[[Exception], None] | None = None,
+    ) -> int:
+        token = self._next_token(key)
+
+        def success(result: Any) -> None:
+            if self._is_current_token(key, token):
+                on_success(result)
+
+        def failure(exc: Exception) -> None:
+            if not self._is_current_token(key, token):
+                return
+            if on_failure is not None:
+                on_failure(exc)
+            else:
+                self._show_error(exc)
+
+        if self.synchronous:
+            try:
+                success(operation())
+            except Exception as exc:
+                failure(exc)
+            return token
+
+        task = self.task_factory(operation)
+        self._tasks.add(task)
+        task.completed.connect(success)
+        task.failed.connect(failure)
+
+        def cleanup() -> None:
+            self._tasks.discard(task)
+            task.deleteLater()
+
+        task.finished.connect(cleanup)
+        task.start()
+        return token
+
+    def _show_error(self, exc: Exception, *, prefix: str = "") -> None:
+        if isinstance(exc, TrackerQueryServiceError):
+            message = str(exc)
+        elif isinstance(exc, ValueError):
+            message = str(exc)
+        else:
+            message = "조회 중 예상하지 못한 오류가 발생했습니다."
+        if prefix:
+            message = f"{prefix}: {message}"
+        self._set_workspace_status(message, tone="error")
+
+    def _load_projects(self, *, force: bool = False) -> None:
+        del force
+        settings = self.settings_provider()
+        self.project_combo.setEnabled(False)
+        self.tracker_combo.setEnabled(False)
+        self.refresh_context_button.setEnabled(False)
+        self._set_workspace_status("프로젝트를 불러오는 중입니다.", tone="loading")
+
+        def loaded(projects: tuple[ProjectSummary, ...]) -> None:
+            self.refresh_context_button.setEnabled(True)
+            self._projects = tuple(projects)
+            self.project_combo.blockSignals(True)
+            self.project_combo.clear()
+            for project in self._projects:
+                self.project_combo.addItem(
+                    f"{project.name}  ·  {project.project_id}", project.project_id
+                )
+            preferred_id = self._preferred_id(
+                str(settings.default_project_id or ""),
+                self._current_project.project_id if self._current_project else None,
+            )
+            index = self._combo_index_for_id(self.project_combo, preferred_id)
+            if index < 0 and self.project_combo.count():
+                index = 0
+            self.project_combo.setCurrentIndex(index)
+            self.project_combo.blockSignals(False)
+            if index < 0:
+                self._current_project = None
+                self._trackers = ()
+                self.tracker_combo.clear()
+                self._set_available(True)
+                self._set_workspace_status("조회 가능한 프로젝트가 없습니다.", tone="warning")
+                self._reset_workspace("조회 가능한 프로젝트가 없습니다.")
+                return
+            self.project_combo.setEnabled(True)
+            self._current_project = self._projects[index]
+            self._set_workspace_status(
+                f"{len(self._projects)}개 프로젝트를 불러왔습니다. 트래커를 조회합니다."
+            )
+            self._load_trackers(self._current_project)
+
+        def failed(exc: Exception) -> None:
+            self.refresh_context_button.setEnabled(True)
+            self._set_available(True)
+            self._show_error(exc, prefix="프로젝트 조회 실패")
+
+        self._submit("projects", lambda: self.service.load_projects(settings), loaded, failed)
+
+    @staticmethod
+    def _preferred_id(primary: str, fallback: int | None) -> int | None:
+        for value in (primary, fallback):
+            try:
+                normalized = int(value) if value not in (None, "") else None
+            except (TypeError, ValueError):
+                normalized = None
+            if normalized is not None and normalized > 0:
+                return normalized
+        return None
+
+    @staticmethod
+    def _combo_index_for_id(combo: QComboBox, entity_id: int | None) -> int:
+        if entity_id is None:
+            return -1
+        for index in range(combo.count()):
+            try:
+                if int(combo.itemData(index)) == int(entity_id):
+                    return index
+            except (TypeError, ValueError):
+                continue
+        return -1
+
+    def _on_project_activated(self, index: int) -> None:
+        if not (0 <= int(index) < len(self._projects)):
+            return
+        project = self._projects[int(index)]
+        if self._current_project == project and self._trackers:
+            return
+        self._current_project = project
+        self._current_tracker = None
+        self._selected_item_id = None
+        self._reset_detail()
+        self._load_trackers(project)
+
+    def _load_trackers(self, project: ProjectSummary) -> None:
+        settings = self.settings_provider()
+        project_id = project.project_id
+        self.tracker_combo.setEnabled(False)
+        self.reload_roots_button.setEnabled(False)
+        self.search_button.setEnabled(False)
+        self._set_workspace_status(
+            f"'{project.name}' 프로젝트의 트래커를 불러오는 중입니다.",
+            tone="loading",
+        )
+
+        def loaded(trackers: tuple[TrackerSummary, ...]) -> None:
+            if self._current_project is None or self._current_project.project_id != project_id:
+                return
+            self._trackers = tuple(trackers)
+            self.tracker_combo.blockSignals(True)
+            self.tracker_combo.clear()
+            for tracker in self._trackers:
+                self.tracker_combo.addItem(
+                    self._tracker_combo_text(tracker), tracker.tracker_id
+                )
+            preferred_id = self._preferred_id(
+                str(settings.default_tracker_id or ""),
+                self._current_tracker.tracker_id if self._current_tracker else None,
+            )
+            index = self._combo_index_for_id(self.tracker_combo, preferred_id)
+            if index < 0 and self.tracker_combo.count():
+                index = 0
+            self.tracker_combo.setCurrentIndex(index)
+            self.tracker_combo.blockSignals(False)
+            if index < 0:
+                self._current_tracker = None
+                self._set_available(True)
+                self._set_workspace_status(
+                    f"'{project.name}' 프로젝트에 조회 가능한 트래커가 없습니다.",
+                    tone="warning",
+                )
+                self._reset_workspace("조회 가능한 트래커가 없습니다.")
+                return
+            self._current_tracker = self._trackers[index]
+            self._set_available(True)
+            self._update_search_scope()
+            self._set_workspace_status(
+                f"'{self._current_tracker.name}' 트래커의 최상위 아이템을 조회합니다."
+            )
+            self._load_roots(page=1)
+
+        def failed(exc: Exception) -> None:
+            self._trackers = ()
+            self.tracker_combo.clear()
+            self._current_tracker = None
+            self._set_available(True)
+            self._show_error(exc, prefix="트래커 조회 실패")
+            self._reset_workspace("트래커를 불러오지 못했습니다.")
+
+        self._submit(
+            "trackers",
+            lambda: self.service.load_trackers(
+                settings,
+                project.project_id,
+                project_name=project.name,
+            ),
+            loaded,
+            failed,
+        )
+
+    def _on_tracker_activated(self, index: int) -> None:
+        if not (0 <= int(index) < len(self._trackers)):
+            return
+        tracker = self._trackers[int(index)]
+        if self._current_tracker == tracker:
+            return
+        self._current_tracker = tracker
+        self._selected_item_id = None
+        self._last_search_values = None
+        self.search_table.setRowCount(0)
+        self._reset_detail()
+        self._update_search_scope()
+        self._set_available(True)
+        self._load_roots(page=1)
+
+    def _update_search_scope(self) -> None:
+        if self._current_tracker is None:
+            self.search_scope_label.setText("프로젝트와 트래커를 먼저 선택하세요.")
+            return
+        self.search_scope_label.setText(
+            f"검색 범위: {self._current_tracker.name} ({self._current_tracker.tracker_id}) · "
+            "ID 바로 열기와 달리 이 트래커 밖의 아이템은 검색하지 않습니다."
+        )
+
+    @staticmethod
+    def _tracker_combo_text(tracker: TrackerSummary) -> str:
+        type_name = str(tracker.type_name or "").strip()
+        suffix = ""
+        if type_name and type_name.casefold() not in {
+            "tracker",
+            "trackerreference",
+        }:
+            suffix = f" · {type_name}"
+        return f"{tracker.name}  ·  {tracker.tracker_id}{suffix}"
+
+    def _load_roots(self, *, page: int = 1, force: bool = False) -> None:
+        tracker = self._current_tracker
+        project = self._current_project
+        if tracker is None:
+            self._set_workspace_status("트래커를 먼저 선택하세요.", tone="warning")
+            return
+        normalized_page = max(int(page), 1)
+        cache_key = (tracker.tracker_id, normalized_page)
+        if cache_key in self._root_cache and not force:
+            self._render_roots(self._root_cache[cache_key])
+            return
+        if force:
+            for key in tuple(self._root_cache):
+                if key[0] == tracker.tracker_id:
+                    self._root_cache.pop(key, None)
+            self._child_cache.clear()
+
+        settings = self.settings_provider()
+        tracker_id = tracker.tracker_id
+        self.tree_status_label.setText("최상위 아이템을 불러오는 중입니다.")
+        self.reload_roots_button.setEnabled(False)
+
+        def loaded(result: PageResult[TrackerItemSummary]) -> None:
+            if self._current_tracker is None or self._current_tracker.tracker_id != tracker_id:
+                return
+            self._root_cache[cache_key] = result
+            self.reload_roots_button.setEnabled(True)
+            self._render_roots(result)
+            self._set_workspace_status(
+                f"'{tracker.name}' 트래커의 계층을 조회할 수 있습니다."
+            )
+
+        def failed(exc: Exception) -> None:
+            self.reload_roots_button.setEnabled(True)
+            self.item_tree.clear()
+            self.tree_status_label.setText("최상위 아이템을 불러오지 못했습니다.")
+            self._show_error(exc, prefix="계층 조회 실패")
+
+        self._submit(
+            "roots",
+            lambda: self.service.load_top_level_items(
+                settings,
+                tracker_id,
+                tracker_name=tracker.name,
+                project_id=project.project_id if project else tracker.project_id,
+                project_name=project.name if project else tracker.project_name,
+                page=normalized_page,
+                page_size=DEFAULT_BROWSER_PAGE_SIZE,
+            ),
+            loaded,
+            failed,
+        )
+
+    def _render_roots(self, result: PageResult[TrackerItemSummary]) -> None:
+        self.item_tree.blockSignals(True)
+        self.item_tree.clear()
+        for summary in result.items:
+            self.item_tree.addTopLevelItem(self._tree_item(summary))
+        self.item_tree.blockSignals(False)
+        self._root_page = result.page
+        visible_end = min(result.page * result.page_size, result.total)
+        visible_start = 0 if not result.items else ((result.page - 1) * result.page_size) + 1
+        if result.items:
+            self.tree_status_label.setText(
+                f"최상위 아이템 {result.total}개 중 {visible_start}–{visible_end}개"
+            )
+        else:
+            self.tree_status_label.setText("최상위 아이템이 없습니다.")
+        self.root_page_label.setText(f"{result.page} 페이지")
+        pagination_available = result.server_honored_pagination
+        self.root_previous_button.setEnabled(pagination_available and result.has_previous)
+        self.root_next_button.setEnabled(pagination_available and result.has_next)
+        if not pagination_available and result.total > len(result.items):
+            self.tree_status_label.setText(
+                f"{self.tree_status_label.text()} · 서버가 페이지 요청을 적용하지 않았습니다."
+            )
+
+    def _tree_item(self, summary: TrackerItemSummary) -> QTreeWidgetItem:
+        item = QTreeWidgetItem(
+            [
+                str(summary.item_id),
+                summary.name,
+                summary.status or "-",
+                ", ".join(summary.assignees) or "-",
+            ]
+        )
+        item.setData(0, ITEM_SUMMARY_ROLE, summary)
+        item.setData(0, CHILDREN_LOADED_ROLE, not summary.has_children)
+        if summary.has_children:
+            item.addChild(self._placeholder_item("펼치면 직접 하위 아이템을 불러옵니다."))
+        return item
+
+    @staticmethod
+    def _placeholder_item(text: str) -> QTreeWidgetItem:
+        placeholder = QTreeWidgetItem(["", text, "", ""])
+        placeholder.setData(0, PLACEHOLDER_ROLE, True)
+        placeholder.setDisabled(True)
+        return placeholder
+
+    def _on_tree_item_expanded(self, item: QTreeWidgetItem) -> None:
+        summary = item.data(0, ITEM_SUMMARY_ROLE)
+        if not isinstance(summary, TrackerItemSummary):
+            return
+        if bool(item.data(0, CHILDREN_LOADED_ROLE)):
+            return
+        cached = self._child_cache.get(summary.item_id)
+        if cached is not None:
+            self._replace_tree_children(item, cached)
+            return
+
+        tracker = self._current_tracker
+        project = self._current_project
+        if tracker is None:
+            return
+        tracker_id = tracker.tracker_id
+        settings = self.settings_provider()
+        item.takeChildren()
+        item.addChild(self._placeholder_item("하위 아이템을 불러오는 중입니다."))
+
+        def loaded(result: PageResult[TrackerItemSummary]) -> None:
+            if self._current_tracker is None or self._current_tracker.tracker_id != tracker_id:
+                return
+            self._child_cache[summary.item_id] = tuple(result.items)
+            self._replace_tree_children(item, result.items)
+            self._set_workspace_status(
+                f"#{summary.item_id}의 직접 하위 아이템 {len(result.items)}개를 불러왔습니다."
+            )
+
+        def failed(exc: Exception) -> None:
+            item.takeChildren()
+            item.addChild(self._placeholder_item("하위 조회 실패 · 접었다가 다시 펼쳐 재시도"))
+            item.setData(0, CHILDREN_LOADED_ROLE, False)
+            self._show_error(exc, prefix=f"#{summary.item_id} 하위 조회 실패")
+
+        self._submit(
+            f"children:{summary.item_id}",
+            lambda: self.service.load_child_items(
+                settings,
+                summary.item_id,
+                tracker_id=tracker_id,
+                tracker_name=tracker.name,
+                project_id=project.project_id if project else tracker.project_id,
+                project_name=project.name if project else tracker.project_name,
+                page=1,
+                page_size=DEFAULT_BROWSER_PAGE_SIZE,
+            ),
+            loaded,
+            failed,
+        )
+
+    def _replace_tree_children(
+        self,
+        parent_item: QTreeWidgetItem,
+        children: tuple[TrackerItemSummary, ...] | list[TrackerItemSummary],
+    ) -> None:
+        parent_item.takeChildren()
+        for summary in children:
+            parent_item.addChild(self._tree_item(summary))
+        parent_item.setData(0, CHILDREN_LOADED_ROLE, True)
+
+    def _on_tree_selection_changed(self) -> None:
+        selected = self.item_tree.selectedItems()
+        if not selected:
+            return
+        summary = selected[0].data(0, ITEM_SUMMARY_ROLE)
+        if isinstance(summary, TrackerItemSummary):
+            self._load_detail(summary.item_id)
+
+    def _on_search_selection_changed(self) -> None:
+        selected = self.search_table.selectedItems()
+        if not selected:
+            return
+        summary = self.search_table.item(selected[0].row(), 0).data(ITEM_SUMMARY_ROLE)
+        if isinstance(summary, TrackerItemSummary):
+            self._load_detail(summary.item_id)
+
+    def _load_detail(self, item_id: int) -> None:
+        normalized_id = int(item_id)
+        self._selected_item_id = normalized_id
+        settings = self.settings_provider()
+        self.detail_title.setText("아이템 상세를 불러오는 중입니다.")
+        self.detail_id_badge.setText(f"#{normalized_id}")
+        self.detail_id_badge.show()
+
+        def loaded(detail: TrackerItemDetail) -> None:
+            if self._selected_item_id != normalized_id:
+                return
+            self._render_detail(detail)
+
+        def failed(exc: Exception) -> None:
+            if self._selected_item_id != normalized_id:
+                return
+            self.detail_title.setText("아이템 상세")
+            self.detail_breadcrumb.setText(f"#{normalized_id} 상세를 불러오지 못했습니다.")
+            self._show_error(exc, prefix="상세 조회 실패")
+
+        self._submit(
+            "detail",
+            lambda: self.service.load_detail(settings, normalized_id),
+            loaded,
+            failed,
+        )
+
+    def _run_search(self, *, page: int = 1, reuse: bool = False) -> None:
+        tracker = self._current_tracker
+        if tracker is None:
+            self._set_workspace_status("검색할 트래커를 먼저 선택하세요.", tone="warning")
+            return
+        if reuse and self._last_search_values is not None:
+            text, status, assignee = self._last_search_values
+        else:
+            text = self.search_text_input.text().strip()
+            status = self.search_status_input.text().strip()
+            assignee = self.search_assignee_input.text().strip()
+            self._last_search_values = (text, status, assignee)
+        if not any((text, status, assignee)):
+            self._set_workspace_status(
+                "트래커 검색에는 ID/요약, 상태, 담당자 중 하나 이상을 입력하세요.",
+                tone="warning",
+            )
+            return
+
+        normalized_page = max(int(page), 1)
+        query = TrackerQuery(
+            tracker_id=tracker.tracker_id,
+            text=text,
+            status=status,
+            assignee=assignee,
+            page=normalized_page,
+            page_size=DEFAULT_SEARCH_PAGE_SIZE,
+            sort="item.id ASC",
+        )
+        tracker_id = tracker.tracker_id
+        settings = self.settings_provider()
+        self.search_button.setEnabled(False)
+        self.search_scope_label.setText(
+            f"{tracker.name} ({tracker_id}) 안에서 검색하는 중입니다."
+        )
+
+        def loaded(result: PageResult[TrackerItemSummary]) -> None:
+            if self._current_tracker is None or self._current_tracker.tracker_id != tracker_id:
+                return
+            self.search_button.setEnabled(True)
+            self._render_search_results(result)
+            self._set_workspace_status(
+                f"현재 트래커에서 검색 결과 {result.total}개를 찾았습니다."
+            )
+
+        def failed(exc: Exception) -> None:
+            self.search_button.setEnabled(True)
+            self._update_search_scope()
+            self._show_error(exc, prefix="트래커 검색 실패")
+
+        self._submit("search", lambda: self.service.search(settings, query), loaded, failed)
+
+    def _render_search_results(self, result: PageResult[TrackerItemSummary]) -> None:
+        self.search_table.blockSignals(True)
+        self.search_table.setRowCount(len(result.items))
+        for row, summary in enumerate(result.items):
+            values = (
+                str(summary.item_id),
+                summary.name,
+                summary.status or "-",
+                ", ".join(summary.assignees) or "-",
+            )
+            for column, value in enumerate(values):
+                cell = QTableWidgetItem(value)
+                if column == 0:
+                    cell.setData(ITEM_SUMMARY_ROLE, summary)
+                self.search_table.setItem(row, column, cell)
+        self.search_table.blockSignals(False)
+        self._search_page = result.page
+        visible_end = min(result.page * result.page_size, result.total)
+        visible_start = 0 if not result.items else ((result.page - 1) * result.page_size) + 1
+        self.search_scope_label.setText(
+            f"검색 범위: {self._current_tracker.name} ({self._current_tracker.tracker_id}) · "
+            f"{result.total}개 중 {visible_start}–{visible_end}개"
+        )
+        self.search_page_label.setText(f"{result.page} 페이지")
+        pagination_available = result.server_honored_pagination
+        self.search_previous_button.setEnabled(pagination_available and result.has_previous)
+        self.search_next_button.setEnabled(pagination_available and result.has_next)
+
+    def _open_direct_item(self) -> None:
+        raw_id = self.direct_id_input.text().strip()
+        try:
+            item_id = int(raw_id)
+        except (TypeError, ValueError):
+            item_id = 0
+        if item_id <= 0:
+            self._set_workspace_status("ID 바로 열기에는 양의 정수 아이템 ID가 필요합니다.", tone="warning")
+            return
+        settings = self.settings_provider()
+        self.direct_open_button.setEnabled(False)
+        self._set_workspace_status(
+            f"#{item_id}의 프로젝트, 트래커와 계층 경로를 확인하는 중입니다.",
+            tone="loading",
+        )
+
+        def resolve() -> _DirectItemResult:
+            context = self.service.resolve_item_context(settings, item_id)
+            path = self.service.load_ancestor_path(settings, item_id)
+            return _DirectItemResult(context=context, ancestor_path=path)
+
+        def loaded(result: _DirectItemResult) -> None:
+            self.direct_open_button.setEnabled(True)
+            self._apply_direct_item_result(result)
+
+        def failed(exc: Exception) -> None:
+            self.direct_open_button.setEnabled(True)
+            self._show_error(exc, prefix="ID 바로 열기 실패")
+
+        self._submit("direct", resolve, loaded, failed)
+
+    def _apply_direct_item_result(self, result: _DirectItemResult) -> None:
+        context = result.context
+        project = self._project_for_context(context)
+        tracker = self._tracker_for_context(context, project)
+        if project is not None:
+            self._ensure_project_option(project)
+        self._ensure_tracker_option(tracker)
+        self._current_project = project
+        self._current_tracker = tracker
+        self.project_combo.setCurrentIndex(
+            -1
+            if project is None
+            else self._combo_index_for_id(self.project_combo, project.project_id)
+        )
+        self.tracker_combo.setCurrentIndex(
+            self._combo_index_for_id(self.tracker_combo, tracker.tracker_id)
+        )
+        self._update_search_scope()
+        self._set_available(True)
+        self.browser_tabs.setCurrentIndex(0)
+        self._render_ancestor_path(result.ancestor_path)
+        self._selected_item_id = context.item.item_id
+        self._render_detail(context.item)
+        self._set_workspace_status(
+            f"#{context.item.item_id}을(를) 직접 열고 소속 트래커와 조상 경로를 표시했습니다."
+        )
+
+    @staticmethod
+    def _project_for_context(context: TrackerItemContext) -> ProjectSummary | None:
+        project_id = context.project_id or context.item.summary.project_id
+        if project_id is None:
+            return None
+        return ProjectSummary(
+            project_id=int(project_id),
+            name=context.project_name or context.item.summary.project_name or "프로젝트 정보 없음",
+        )
+
+    @staticmethod
+    def _tracker_for_context(
+        context: TrackerItemContext,
+        project: ProjectSummary | None,
+    ) -> TrackerSummary:
+        return TrackerSummary(
+            tracker_id=context.tracker_id,
+            name=context.tracker_name or context.item.summary.tracker_name or str(context.tracker_id),
+            project_id=project.project_id if project else context.project_id,
+            project_name=project.name if project else context.project_name,
+        )
+
+    def _ensure_project_option(self, project: ProjectSummary) -> None:
+        projects = list(self._projects)
+        for index, existing in enumerate(projects):
+            if existing.project_id == project.project_id:
+                projects[index] = project
+                break
+        else:
+            projects.append(project)
+        self._projects = tuple(projects)
+        self.project_combo.blockSignals(True)
+        self.project_combo.clear()
+        for value in self._projects:
+            self.project_combo.addItem(f"{value.name}  ·  {value.project_id}", value.project_id)
+        self.project_combo.blockSignals(False)
+
+    def _ensure_tracker_option(self, tracker: TrackerSummary) -> None:
+        trackers = [
+            existing
+            for existing in self._trackers
+            if existing.project_id in (None, tracker.project_id)
+        ]
+        for index, existing in enumerate(trackers):
+            if existing.tracker_id == tracker.tracker_id:
+                trackers[index] = tracker
+                break
+        else:
+            trackers.append(tracker)
+        self._trackers = tuple(trackers)
+        self.tracker_combo.blockSignals(True)
+        self.tracker_combo.clear()
+        for value in self._trackers:
+            self.tracker_combo.addItem(self._tracker_combo_text(value), value.tracker_id)
+        self.tracker_combo.blockSignals(False)
+
+    def _render_ancestor_path(self, path: tuple[TrackerItemSummary, ...]) -> None:
+        self.item_tree.blockSignals(True)
+        self.item_tree.clear()
+        parent_item: QTreeWidgetItem | None = None
+        target_item: QTreeWidgetItem | None = None
+        for summary in path:
+            tree_item = self._tree_item(summary)
+            tree_item.takeChildren()
+            tree_item.setData(0, CHILDREN_LOADED_ROLE, True)
+            if parent_item is None:
+                self.item_tree.addTopLevelItem(tree_item)
+            else:
+                parent_item.addChild(tree_item)
+                parent_item.setExpanded(True)
+            parent_item = tree_item
+            target_item = tree_item
+        if target_item is not None:
+            target_item.setSelected(True)
+            self.item_tree.scrollToItem(target_item)
+        self.item_tree.blockSignals(False)
+        self.tree_status_label.setText(
+            f"ID 직접 접근 경로 · {len(path)}단계 · 전체 형제 노드는 '최상위 다시 불러오기'로 조회"
+        )
+        self.root_previous_button.setEnabled(False)
+        self.root_next_button.setEnabled(False)
+        self.root_page_label.setText("ID 경로")
+
+    def _render_detail(self, detail: TrackerItemDetail) -> None:
+        summary = detail.summary
+        self._selected_item_id = detail.item_id
+        self.detail_title.setText(summary.name)
+        self.detail_id_badge.setText(f"#{detail.item_id}")
+        self.detail_id_badge.show()
+        breadcrumb_parts = [
+            summary.project_name or "프로젝트 정보 없음",
+            summary.tracker_name or "트래커 정보 없음",
+        ]
+        if detail.parent is not None:
+            breadcrumb_parts.append(f"상위 #{detail.parent.item_id}")
+        self.detail_breadcrumb.setText("  ›  ".join(breadcrumb_parts))
+        warnings = "\n".join(detail.warnings)
+        self.detail_warning.setText(warnings)
+        self.detail_warning.setVisible(bool(warnings))
+        self.detail_description.setPlainText(detail.description)
+        self.detail_raw_json.setPlainText(
+            json.dumps(detail.raw_payload, ensure_ascii=False, indent=2, default=str)
+        )
+
+        rows: list[tuple[str, str, str]] = [
+            ("ID", str(detail.item_id), "builtin"),
+            ("프로젝트", summary.project_name or "-", "reference"),
+            ("트래커", summary.tracker_name or "-", "reference"),
+            ("상태", summary.status or "-", "reference"),
+            ("담당자", ", ".join(summary.assignees) or "-", "reference"),
+            ("버전", str(detail.version) if detail.version is not None else "-", "builtin"),
+            ("수정 시각", summary.modified_at or "-", "builtin"),
+            (
+                "상위 아이템",
+                (
+                    f"#{detail.parent.item_id} {detail.parent.name}"
+                    if detail.parent is not None
+                    else "-"
+                ),
+                "reference",
+            ),
+            ("직접 하위", str(len(detail.children)), "reference"),
+        ]
+        rows.extend(
+            (field.name, field.display_value or "-", field.type_name)
+            for field in detail.custom_fields
+        )
+        self.detail_fields_table.setRowCount(len(rows))
+        for row, values in enumerate(rows):
+            for column, value in enumerate(values):
+                self.detail_fields_table.setItem(row, column, QTableWidgetItem(value))
+
+    def _reset_detail(self) -> None:
+        self.detail_title.setText("아이템 상세")
+        self.detail_id_badge.hide()
+        self.detail_breadcrumb.setText("계층 또는 검색 결과에서 아이템을 선택하세요.")
+        self.detail_warning.clear()
+        self.detail_warning.hide()
+        self.detail_description.clear()
+        self.detail_fields_table.setRowCount(0)
+        self.detail_raw_json.clear()
+
+    def shutdown(self) -> None:
+        """창 종료 뒤 완료되는 요청이 화면 상태를 갱신하지 않도록 무효화한다."""
+        self._invalidate_requests()
+        for task in tuple(self._tasks):
+            try:
+                task.completed.disconnect()
+                task.failed.disconnect()
+            except Exception:
+                pass
+
+
+__all__ = [
+    "CHILDREN_LOADED_ROLE",
+    "DEFAULT_BROWSER_PAGE_SIZE",
+    "DEFAULT_SEARCH_PAGE_SIZE",
+    "ITEM_SUMMARY_ROLE",
+    "PLACEHOLDER_ROLE",
+    "TrackerWorkspacePage",
+]
