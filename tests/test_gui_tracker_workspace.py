@@ -269,6 +269,23 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.assertGreaterEqual(self.page.detail_fields_table.rowCount(), 10)
         self.assertIn('"Risk Level"', self.page.detail_raw_json.toPlainText())
 
+    def test_detail_id_button_copies_numeric_id_only(self) -> None:
+        self.page.activate()
+        root = self.page.item_tree.topLevelItem(0)
+        self.page.item_tree.setCurrentItem(root)
+        self._app.processEvents()
+        clipboard = self._app.clipboard()
+        clipboard.clear()
+
+        self.page.detail_id_badge.click()
+        self._app.processEvents()
+
+        self.assertEqual(self.page.detail_id_badge.text(), "#9001001")
+        self.assertEqual(clipboard.text(), "9001001")
+        self.assertNotIn("#", clipboard.text())
+        self.assertIn("9001001", self.page.workspace_status_label.text())
+        self.assertIn("복사", self.page.workspace_status_label.text())
+
     def test_wiki_rendering_requires_explicit_format_or_field_type(self) -> None:
         detail = TrackerItemDetail.from_raw(
             {

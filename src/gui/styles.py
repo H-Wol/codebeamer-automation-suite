@@ -47,7 +47,8 @@ QLabel#application_route_description {
 }
 
 QLabel#application_mode_badge,
-QLabel#application_phase_badge {
+QLabel#application_phase_badge,
+QPushButton#tracker_id_copy_button {
     color: #0E4A84;
     background: #EAF4FB;
     border: 1px solid #CBE4F3;
@@ -55,6 +56,19 @@ QLabel#application_phase_badge {
     padding: 4px 9px;
     font-size: 10px;
     font-weight: 700;
+}
+
+QPushButton#tracker_id_copy_button {
+    min-height: 18px;
+}
+
+QPushButton#tracker_id_copy_button:hover {
+    background: #DCEFFD;
+    border-color: #9CCBE5;
+}
+
+QPushButton#tracker_id_copy_button:pressed {
+    background: #CBE4F3;
 }
 
 QLabel#application_mode_badge[mode="test"] {
@@ -800,7 +814,8 @@ QFrame#application_content {
 
 QLabel#application_title,
 QLabel#application_mode_badge,
-QLabel#application_phase_badge {
+QLabel#application_phase_badge,
+QPushButton#tracker_id_copy_button {
     color: #0B6E70;
 }
 
@@ -811,9 +826,19 @@ QLabel#application_navigation_title {
 }
 
 QLabel#application_mode_badge,
-QLabel#application_phase_badge {
+QLabel#application_phase_badge,
+QPushButton#tracker_id_copy_button {
     background: #E5F7F6;
     border: 1px solid #BFE6E2;
+}
+
+QPushButton#tracker_id_copy_button:hover {
+    background: #D9F0EF;
+    border-color: #9FD7D2;
+}
+
+QPushButton#tracker_id_copy_button:pressed {
+    background: #CBE9E6;
 }
 
 QLabel#application_mode_badge[mode="test"] {

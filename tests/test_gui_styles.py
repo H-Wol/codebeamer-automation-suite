@@ -29,6 +29,7 @@ class GuiStylesTest(unittest.TestCase):
         self.assertIn("QPushButton#settings_category_button:checked", stylesheet)
         self.assertIn("QFrame#tracker_workspace_panel", stylesheet)
         self.assertIn("QTreeWidget#tracker_item_tree", stylesheet)
+        self.assertIn("QPushButton#tracker_id_copy_button", stylesheet)
         self.assertIn("QLabel#tracker_editor_status", stylesheet)
         self.assertIn("QDialog#tracker_delete_dialog", stylesheet)
         self.assertIn("QDialog#tracker_item_create_dialog", stylesheet)

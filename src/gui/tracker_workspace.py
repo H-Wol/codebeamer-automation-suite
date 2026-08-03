@@ -9,6 +9,7 @@ from typing import Callable
 try:
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QAbstractItemView
+    from PySide6.QtWidgets import QApplication
     from PySide6.QtWidgets import QComboBox
     from PySide6.QtWidgets import QFrame
     from PySide6.QtWidgets import QHBoxLayout
@@ -255,8 +256,12 @@ class TrackerWorkspacePage(QWidget):
         self.detail_refresh_button.clicked.connect(self._reload_current_detail)
         self.detail_refresh_button.setEnabled(False)
         detail_heading.addWidget(self.detail_refresh_button)
-        self.detail_id_badge = QLabel("")
-        self.detail_id_badge.setObjectName("application_phase_badge")
+        self.detail_id_badge = QPushButton("", detail_panel)
+        self.detail_id_badge.setObjectName("tracker_id_copy_button")
+        self.detail_id_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.detail_id_badge.setToolTip("클릭하면 아이템 ID 숫자만 복사합니다.")
+        self.detail_id_badge.setAccessibleName("아이템 ID 복사")
+        self.detail_id_badge.clicked.connect(self._copy_selected_item_id)
         self.detail_id_badge.hide()
         detail_heading.addWidget(self.detail_id_badge)
         detail_layout.addLayout(detail_heading)
@@ -1042,14 +1047,21 @@ class TrackerWorkspacePage(QWidget):
         if isinstance(summary, TrackerItemSummary):
             self._load_detail(summary.item_id)
 
+    def _show_detail_id_badge(self, item_id: int) -> None:
+        normalized_id = int(item_id)
+        self.detail_id_badge.setText(f"#{normalized_id}")
+        self.detail_id_badge.setToolTip(
+            f"클릭하면 아이템 ID {normalized_id} 숫자만 복사합니다."
+        )
+        self.detail_id_badge.show()
+
     def _load_detail(self, item_id: int) -> None:
         normalized_id = int(item_id)
         self._selected_item_id = normalized_id
         settings = self.settings_provider()
         self.detail_title.setText("아이템 상세를 불러오는 중입니다.")
         self.detail_refresh_button.setEnabled(False)
-        self.detail_id_badge.setText(f"#{normalized_id}")
-        self.detail_id_badge.show()
+        self._show_detail_id_badge(normalized_id)
 
         def loaded(detail: TrackerItemDetail) -> None:
             if self._selected_item_id != normalized_id:
@@ -1069,6 +1081,17 @@ class TrackerWorkspacePage(QWidget):
             lambda: self.service.load_detail(settings, normalized_id),
             loaded,
             failed,
+        )
+
+    def _copy_selected_item_id(self) -> None:
+        item_id = self._selected_item_id
+        if item_id is None:
+            return
+        clipboard_text = str(int(item_id))
+        QApplication.clipboard().setText(clipboard_text)
+        self.detail_id_badge.setToolTip(f"ID {clipboard_text} 복사 완료")
+        self._set_workspace_status(
+            f"아이템 ID {clipboard_text}가 클립보드에 복사되었습니다."
         )
 
     def _reload_current_detail(self) -> None:
@@ -1577,8 +1600,7 @@ class TrackerWorkspacePage(QWidget):
         self._selected_item_id = detail.item_id
         self.detail_title.setText(summary.name)
         self.detail_refresh_button.setEnabled(True)
-        self.detail_id_badge.setText(f"#{detail.item_id}")
-        self.detail_id_badge.show()
+        self._show_detail_id_badge(detail.item_id)
         breadcrumb_parts = [
             summary.project_name or "프로젝트 정보 없음",
             summary.tracker_name or "트래커 정보 없음",
