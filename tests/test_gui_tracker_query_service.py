@@ -203,6 +203,92 @@ class TrackerQueryServiceTest(unittest.TestCase):
         self.assertEqual(children.items[0].parent_id, 1001)
         self.assertEqual(children.items[0].tracker_id, 20)
 
+    def test_tracker_schema_accepts_v3_field_array_response(self) -> None:
+        class ArraySchemaClient(QueryFakeClient):
+            def get_tracker_schema(self, tracker_id: int):
+                self.__class__.calls.append(("schema", tracker_id))
+                return [
+                    {
+                        "id": 3,
+                        "name": "Summary",
+                        "type": "TextField",
+                        "valueModel": "TextFieldValue",
+                        "trackerItemField": "name",
+                    }
+                ]
+
+        ArraySchemaClient.reset()
+        service = TrackerQueryService(client_factory=ArraySchemaClient)
+
+        schema = service.load_tracker_schema(self.settings, 20)
+
+        self.assertEqual(schema["id"], 20)
+        self.assertEqual(schema["fields"][0]["name"], "Summary")
+        self.assertIn(("schema", 20), ArraySchemaClient.calls)
+
+    def test_hierarchy_all_loaders_collect_every_server_page(self) -> None:
+        class PagedHierarchyClient(QueryFakeClient):
+            roots = [
+                {"id": item_id, "name": f"Root {item_id}"}
+                for item_id in range(1001, 1006)
+            ]
+            children = [
+                {"id": item_id, "name": f"Child {item_id}"}
+                for item_id in range(2001, 2005)
+            ]
+
+            @staticmethod
+            def _page(items, page: int, page_size: int):
+                start = (page - 1) * page_size
+                return {
+                    "page": page,
+                    "pageSize": page_size,
+                    "total": len(items),
+                    "itemRefs": items[start : start + page_size],
+                }
+
+            def get_tracker_children_page(
+                self,
+                tracker_id: int,
+                *,
+                page: int,
+                page_size: int,
+            ):
+                self.__class__.calls.append(("roots", tracker_id, page, page_size))
+                return self._page(self.roots, page, page_size)
+
+            def get_item_children_page(
+                self,
+                item_id: int,
+                *,
+                page: int,
+                page_size: int,
+            ):
+                self.__class__.calls.append(("children", item_id, page, page_size))
+                return self._page(self.children, page, page_size)
+
+        PagedHierarchyClient.reset()
+        service = TrackerQueryService(client_factory=PagedHierarchyClient)
+
+        roots = service.load_all_top_level_items(self.settings, 20, page_size=2)
+        children = service.load_all_child_items(
+            self.settings,
+            1001,
+            tracker_id=20,
+            page_size=2,
+        )
+
+        self.assertEqual([item.item_id for item in roots], [1001, 1002, 1003, 1004, 1005])
+        self.assertEqual([item.item_id for item in children], [2001, 2002, 2003, 2004])
+        self.assertEqual(
+            [call[2] for call in PagedHierarchyClient.calls if call[0] == "roots"],
+            [1, 2, 3],
+        )
+        self.assertEqual(
+            [call[2] for call in PagedHierarchyClient.calls if call[0] == "children"],
+            [1, 2],
+        )
+
     def test_search_passes_only_scoped_cbql_and_preserves_it_as_metadata(self) -> None:
         result = self.service.search(
             self.settings,

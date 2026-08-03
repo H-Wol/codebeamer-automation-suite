@@ -217,7 +217,7 @@ class CodebeamerClient:
             ),
         )
 
-    def get_tracker_schema(self, tracker_id: int) -> dict:
+    def get_tracker_schema(self, tracker_id: int) -> dict | list[dict]:
         """트래커 스키마를 가져와 필드 구조를 분석할 수 있게 한다."""
         return self._run_rate_limited_request(
             "get_tracker_schema",

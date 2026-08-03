@@ -136,6 +136,74 @@ class TrackerQueryService:
             "itemRefs": normalized,
         }
 
+    def _load_all_item_summaries(
+        self,
+        client: Any,
+        *,
+        operation: str,
+        page_method: str,
+        list_method: str,
+        entity_id: int,
+        page_size: int,
+        normalize: Callable[[dict[str, Any]], TrackerItemSummary],
+    ) -> tuple[TrackerItemSummary, ...]:
+        normalized_page_size = min(max(int(page_size), 1), 500)
+
+        def collect() -> tuple[TrackerItemSummary, ...]:
+            collected: list[TrackerItemSummary] = []
+            seen_ids: set[int] = set()
+            page = 1
+            while True:
+                payload = self._page_payload(
+                    client,
+                    page_method=page_method,
+                    list_method=list_method,
+                    entity_id=int(entity_id),
+                    page=page,
+                    page_size=normalized_page_size,
+                )
+                raw_items = self._extract_list(payload, "itemRefs", "items")
+                added = 0
+                for raw_item in raw_items:
+                    summary = normalize(raw_item)
+                    if summary.item_id in seen_ids:
+                        continue
+                    seen_ids.add(summary.item_id)
+                    collected.append(summary)
+                    added += 1
+
+                raw_total = payload.get("total")
+                try:
+                    total = int(raw_total) if raw_total is not None else None
+                except (TypeError, ValueError):
+                    total = None
+
+                if total is not None and len(collected) >= max(total, 0):
+                    break
+                if not raw_items:
+                    if total is not None and len(collected) < total:
+                        raise TrackerQueryServiceError(
+                            TrackerQueryErrorKind.SERVER,
+                            "서버가 계층의 전체 아이템 목록을 반환하지 못했습니다.",
+                            operation=operation,
+                        )
+                    break
+                if added == 0:
+                    if total is not None and len(collected) < total:
+                        raise TrackerQueryServiceError(
+                            TrackerQueryErrorKind.SERVER,
+                            "서버가 계층 조회의 다음 페이지를 적용하지 않았습니다.",
+                            operation=operation,
+                        )
+                    break
+                if total is None and len(raw_items) < normalized_page_size:
+                    break
+                page += 1
+
+            return tuple(collected)
+
+        return self._run(operation, collect)
+
     def load_projects(self, settings) -> tuple[ProjectSummary, ...]:
         client = self._client(settings, "load_projects")
         payload = self._run("load_projects", client.get_projects)
@@ -167,18 +235,30 @@ class TrackerQueryService:
         )
 
     def load_tracker_schema(self, settings, tracker_id: int) -> dict[str, Any]:
+        normalized_tracker_id = int(tracker_id)
         client = self._client(settings, "load_tracker_schema")
         payload = self._run(
             "load_tracker_schema",
-            lambda: client.get_tracker_schema(int(tracker_id)),
+            lambda: client.get_tracker_schema(normalized_tracker_id),
         )
-        if not isinstance(payload, dict):
-            raise TrackerQueryServiceError(
-                TrackerQueryErrorKind.SERVER,
-                "트래커 schema 응답 형식을 해석할 수 없습니다.",
-                operation="load_tracker_schema",
-            )
-        return dict(payload)
+        if isinstance(payload, list):
+            return {
+                "id": normalized_tracker_id,
+                "fields": [dict(field) for field in payload if isinstance(field, dict)],
+            }
+        if isinstance(payload, dict):
+            normalized = dict(payload)
+            if not isinstance(normalized.get("fields"), list):
+                fields = self._extract_list(normalized, "items", "references")
+                if fields:
+                    normalized["fields"] = fields
+            normalized.setdefault("id", normalized_tracker_id)
+            return normalized
+        raise TrackerQueryServiceError(
+            TrackerQueryErrorKind.SERVER,
+            "트래커 schema 응답 형식을 해석할 수 없습니다.",
+            operation="load_tracker_schema",
+        )
 
     def load_top_level_items(
         self,
@@ -218,6 +298,34 @@ class TrackerQueryService:
             raw_page=payload,
             requested_page=page,
             requested_page_size=page_size,
+        )
+
+    def load_all_top_level_items(
+        self,
+        settings,
+        tracker_id: int,
+        *,
+        tracker_name: str = "",
+        project_id: int | None = None,
+        project_name: str = "",
+        page_size: int = 500,
+    ) -> tuple[TrackerItemSummary, ...]:
+        normalized_tracker_id = int(tracker_id)
+        client = self._client(settings, "load_all_top_level_items")
+        return self._load_all_item_summaries(
+            client,
+            operation="load_all_top_level_items",
+            page_method="get_tracker_children_page",
+            list_method="get_tracker_children",
+            entity_id=normalized_tracker_id,
+            page_size=page_size,
+            normalize=lambda item: TrackerItemSummary.from_raw(
+                item,
+                tracker_id=normalized_tracker_id,
+                tracker_name=tracker_name,
+                project_id=project_id,
+                project_name=project_name,
+            ),
         )
 
     def load_child_items(
@@ -263,6 +371,41 @@ class TrackerQueryService:
             raw_page=payload,
             requested_page=page,
             requested_page_size=page_size,
+        )
+
+    def load_all_child_items(
+        self,
+        settings,
+        item_id: int,
+        *,
+        tracker_id: int | None = None,
+        tracker_name: str = "",
+        project_id: int | None = None,
+        project_name: str = "",
+        page_size: int = 500,
+    ) -> tuple[TrackerItemSummary, ...]:
+        normalized_item_id = int(item_id)
+        client = self._client(settings, "load_all_child_items")
+
+        def normalize(raw_item: dict[str, Any]) -> TrackerItemSummary:
+            normalized = dict(raw_item)
+            normalized.setdefault("parent", {"id": normalized_item_id})
+            return TrackerItemSummary.from_raw(
+                normalized,
+                tracker_id=tracker_id,
+                tracker_name=tracker_name,
+                project_id=project_id,
+                project_name=project_name,
+            )
+
+        return self._load_all_item_summaries(
+            client,
+            operation="load_all_child_items",
+            page_method="get_item_children_page",
+            list_method="get_item_children",
+            entity_id=normalized_item_id,
+            page_size=page_size,
+            normalize=normalize,
         )
 
     def search(self, settings, query: TrackerQuery) -> PageResult[TrackerItemSummary]:

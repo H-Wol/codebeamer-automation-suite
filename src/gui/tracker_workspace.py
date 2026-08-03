@@ -56,7 +56,7 @@ from .worker import BackgroundTask
 ITEM_SUMMARY_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 PLACEHOLDER_ROLE = int(Qt.ItemDataRole.UserRole) + 2
 CHILDREN_LOADED_ROLE = int(Qt.ItemDataRole.UserRole) + 3
-DEFAULT_BROWSER_PAGE_SIZE = 100
+HIERARCHY_FETCH_PAGE_SIZE = 500
 DEFAULT_SEARCH_PAGE_SIZE = 50
 
 
@@ -107,11 +107,10 @@ class TrackerWorkspacePage(QWidget):
         self._trackers: tuple[TrackerSummary, ...] = ()
         self._current_project: ProjectSummary | None = None
         self._current_tracker: TrackerSummary | None = None
-        self._root_cache: dict[tuple[int, int], PageResult[TrackerItemSummary]] = {}
+        self._root_cache: dict[int, tuple[TrackerItemSummary, ...]] = {}
         self._child_cache: dict[int, tuple[TrackerItemSummary, ...]] = {}
         self._request_tokens: dict[str, int] = {}
         self._tasks: set[Any] = set()
-        self._root_page = 1
         self._search_page = 1
         self._last_search_values: tuple[str, str, str] | None = None
         self._selected_item_id: int | None = None
@@ -297,7 +296,7 @@ class TrackerWorkspacePage(QWidget):
         toolbar.addWidget(self.tree_status_label, 1)
         self.reload_roots_button = QPushButton("최상위 다시 불러오기", tab)
         self.reload_roots_button.clicked.connect(
-            lambda: self._load_roots(page=1, force=True)
+            lambda: self._load_roots(force=True)
         )
         toolbar.addWidget(self.reload_roots_button)
         layout.addLayout(toolbar)
@@ -317,23 +316,6 @@ class TrackerWorkspacePage(QWidget):
         self.item_tree.itemExpanded.connect(self._on_tree_item_expanded)
         self.item_tree.itemSelectionChanged.connect(self._on_tree_selection_changed)
         layout.addWidget(self.item_tree, 1)
-
-        page_row = QHBoxLayout()
-        self.root_previous_button = QPushButton("이전", tab)
-        self.root_previous_button.clicked.connect(
-            lambda: self._load_roots(page=max(self._root_page - 1, 1))
-        )
-        self.root_page_label = QLabel("1 페이지")
-        self.root_page_label.setObjectName("tracker_page_label")
-        self.root_next_button = QPushButton("다음", tab)
-        self.root_next_button.clicked.connect(
-            lambda: self._load_roots(page=self._root_page + 1)
-        )
-        page_row.addStretch(1)
-        page_row.addWidget(self.root_previous_button)
-        page_row.addWidget(self.root_page_label)
-        page_row.addWidget(self.root_next_button)
-        layout.addLayout(page_row)
         return tab
 
     def _build_search_tab(self) -> QWidget:
@@ -529,7 +511,6 @@ class TrackerWorkspacePage(QWidget):
         self.tracker_combo.clear()
         self.search_table.setRowCount(0)
         self._last_search_values = None
-        self._root_page = 1
         self._search_page = 1
         self._selected_item_id = None
         self._current_detail = None
@@ -539,9 +520,6 @@ class TrackerWorkspacePage(QWidget):
     def _reset_workspace(self, message: str) -> None:
         self.item_tree.clear()
         self.tree_status_label.setText(message)
-        self.root_page_label.setText("1 페이지")
-        self.root_previous_button.setEnabled(False)
-        self.root_next_button.setEnabled(False)
         self.search_scope_label.setText("프로젝트와 트래커를 먼저 선택하세요.")
         self.search_previous_button.setEnabled(False)
         self.search_next_button.setEnabled(False)
@@ -827,7 +805,7 @@ class TrackerWorkspacePage(QWidget):
             self._set_workspace_status(
                 f"'{self._current_tracker.name}' 트래커의 최상위 아이템을 조회합니다."
             )
-            self._load_roots(page=1)
+            self._load_roots()
 
         def failed(exc: Exception) -> None:
             self._trackers = ()
@@ -861,7 +839,7 @@ class TrackerWorkspacePage(QWidget):
         self._reset_detail()
         self._update_search_scope()
         self._set_available(True)
-        self._load_roots(page=1)
+        self._load_roots()
 
     def _update_search_scope(self) -> None:
         if self._current_tracker is None:
@@ -883,21 +861,18 @@ class TrackerWorkspacePage(QWidget):
             suffix = f" · {type_name}"
         return f"{tracker.name}  ·  {tracker.tracker_id}{suffix}"
 
-    def _load_roots(self, *, page: int = 1, force: bool = False) -> None:
+    def _load_roots(self, *, force: bool = False) -> None:
         tracker = self._current_tracker
         project = self._current_project
         if tracker is None:
             self._set_workspace_status("트래커를 먼저 선택하세요.", tone="warning")
             return
-        normalized_page = max(int(page), 1)
-        cache_key = (tracker.tracker_id, normalized_page)
+        cache_key = tracker.tracker_id
         if cache_key in self._root_cache and not force:
             self._render_roots(self._root_cache[cache_key])
             return
         if force:
-            for key in tuple(self._root_cache):
-                if key[0] == tracker.tracker_id:
-                    self._root_cache.pop(key, None)
+            self._root_cache.pop(tracker.tracker_id, None)
             self._child_cache.clear()
 
         settings = self.settings_provider()
@@ -905,12 +880,12 @@ class TrackerWorkspacePage(QWidget):
         self.tree_status_label.setText("최상위 아이템을 불러오는 중입니다.")
         self.reload_roots_button.setEnabled(False)
 
-        def loaded(result: PageResult[TrackerItemSummary]) -> None:
+        def loaded(items: tuple[TrackerItemSummary, ...]) -> None:
             if self._current_tracker is None or self._current_tracker.tracker_id != tracker_id:
                 return
-            self._root_cache[cache_key] = result
+            self._root_cache[cache_key] = items
             self.reload_roots_button.setEnabled(True)
-            self._render_roots(result)
+            self._render_roots(items)
             self._set_workspace_status(
                 f"'{tracker.name}' 트래커의 계층을 조회할 수 있습니다."
             )
@@ -923,42 +898,28 @@ class TrackerWorkspacePage(QWidget):
 
         self._submit(
             "roots",
-            lambda: self.service.load_top_level_items(
+            lambda: self.service.load_all_top_level_items(
                 settings,
                 tracker_id,
                 tracker_name=tracker.name,
                 project_id=project.project_id if project else tracker.project_id,
                 project_name=project.name if project else tracker.project_name,
-                page=normalized_page,
-                page_size=DEFAULT_BROWSER_PAGE_SIZE,
+                page_size=HIERARCHY_FETCH_PAGE_SIZE,
             ),
             loaded,
             failed,
         )
 
-    def _render_roots(self, result: PageResult[TrackerItemSummary]) -> None:
+    def _render_roots(self, items: tuple[TrackerItemSummary, ...]) -> None:
         self.item_tree.blockSignals(True)
         self.item_tree.clear()
-        for summary in result.items:
+        for summary in items:
             self.item_tree.addTopLevelItem(self._tree_item(summary))
         self.item_tree.blockSignals(False)
-        self._root_page = result.page
-        visible_end = min(result.page * result.page_size, result.total)
-        visible_start = 0 if not result.items else ((result.page - 1) * result.page_size) + 1
-        if result.items:
-            self.tree_status_label.setText(
-                f"최상위 아이템 {result.total}개 중 {visible_start}–{visible_end}개"
-            )
+        if items:
+            self.tree_status_label.setText(f"최상위 아이템 {len(items)}개 · 전체 표시")
         else:
             self.tree_status_label.setText("최상위 아이템이 없습니다.")
-        self.root_page_label.setText(f"{result.page} 페이지")
-        pagination_available = result.server_honored_pagination
-        self.root_previous_button.setEnabled(pagination_available and result.has_previous)
-        self.root_next_button.setEnabled(pagination_available and result.has_next)
-        if not pagination_available and result.total > len(result.items):
-            self.tree_status_label.setText(
-                f"{self.tree_status_label.text()} · 서버가 페이지 요청을 적용하지 않았습니다."
-            )
 
     def _tree_item(self, summary: TrackerItemSummary) -> QTreeWidgetItem:
         item = QTreeWidgetItem(
@@ -1006,13 +967,13 @@ class TrackerWorkspacePage(QWidget):
         item.takeChildren()
         item.addChild(self._placeholder_item("하위 아이템을 불러오는 중입니다."))
 
-        def loaded(result: PageResult[TrackerItemSummary]) -> None:
+        def loaded(children: tuple[TrackerItemSummary, ...]) -> None:
             if self._current_tracker is None or self._current_tracker.tracker_id != tracker_id:
                 return
-            self._child_cache[summary.item_id] = tuple(result.items)
-            self._replace_tree_children(item, result.items)
+            self._child_cache[summary.item_id] = children
+            self._replace_tree_children(item, children)
             self._set_workspace_status(
-                f"#{summary.item_id}의 직접 하위 아이템 {len(result.items)}개를 불러왔습니다."
+                f"#{summary.item_id}의 직접 하위 아이템 {len(children)}개를 모두 불러왔습니다."
             )
 
         def failed(exc: Exception) -> None:
@@ -1023,15 +984,14 @@ class TrackerWorkspacePage(QWidget):
 
         self._submit(
             f"children:{summary.item_id}",
-            lambda: self.service.load_child_items(
+            lambda: self.service.load_all_child_items(
                 settings,
                 summary.item_id,
                 tracker_id=tracker_id,
                 tracker_name=tracker.name,
                 project_id=project.project_id if project else tracker.project_id,
                 project_name=project.name if project else tracker.project_name,
-                page=1,
-                page_size=DEFAULT_BROWSER_PAGE_SIZE,
+                page_size=HIERARCHY_FETCH_PAGE_SIZE,
             ),
             loaded,
             failed,
@@ -1575,9 +1535,6 @@ class TrackerWorkspacePage(QWidget):
         self.tree_status_label.setText(
             f"ID 직접 접근 경로 · {len(path)}단계 · 전체 형제 노드는 '최상위 다시 불러오기'로 조회"
         )
-        self.root_previous_button.setEnabled(False)
-        self.root_next_button.setEnabled(False)
-        self.root_page_label.setText("ID 경로")
 
     def _render_detail(self, detail: TrackerItemDetail) -> None:
         summary = detail.summary
@@ -1894,9 +1851,7 @@ class TrackerWorkspacePage(QWidget):
         )
 
     def _invalidate_tracker_cache(self, tracker_id: int) -> None:
-        for key in tuple(self._root_cache):
-            if key[0] == int(tracker_id):
-                self._root_cache.pop(key, None)
+        self._root_cache.pop(int(tracker_id), None)
         self._child_cache.clear()
 
     def _refresh_visible_item(self, detail: TrackerItemDetail) -> None:
@@ -1983,8 +1938,8 @@ class TrackerWorkspacePage(QWidget):
 
 __all__ = [
     "CHILDREN_LOADED_ROLE",
-    "DEFAULT_BROWSER_PAGE_SIZE",
     "DEFAULT_SEARCH_PAGE_SIZE",
+    "HIERARCHY_FETCH_PAGE_SIZE",
     "ITEM_SUMMARY_ROLE",
     "PLACEHOLDER_ROLE",
     "TrackerWorkspacePage",

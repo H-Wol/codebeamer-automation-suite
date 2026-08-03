@@ -8,12 +8,13 @@
 현재 구현된 범위:
 
 - 프로젝트와 트래커 목록 정규화
-- 트래커 최상위 아이템과 아이템의 직접 하위 목록 조회
+- 트래커 최상위 아이템과 아이템의 직접 하위 목록 전체 수집
 - 간편, 조건 조합, CbQL 검색을 하나의 `TrackerQuery`로 표현
 - 선택 tracker ID를 모든 검색 CbQL에 강제로 결합
 - 아이템 상세, builtin/custom field, 부모·자식 요약과 원본 JSON 정규화
 - ID 직접 접근용 프로젝트·트래커 컨텍스트와 parent 조상 경로 조회
-- 서버 pagination 응답과 사용자 요청값의 분리 보존
+- 계층 pagination 전체 수집과 검색 pagination 응답·사용자 요청값의 분리 보존
+- 배열 또는 객체로 반환되는 tracker schema 응답 정규화
 - 인증, 권한, 없음, 요청 제한, 잘못된 조건, 네트워크, 서버 오류 분류
 - credential 계열 키의 원본 JSON 마스킹
 - 두 tracker를 포함한 익명 테스트 모드 snapshot
@@ -34,9 +35,14 @@
 | schema | `GET /v3/trackers/{trackerId}/schema` | `CodebeamerClient.get_tracker_schema()` |
 
 PTC 문서의 목록 응답은 `page`, `pageSize`, `total`을 포함하지만, 서버 버전과 endpoint에 따라
-요청한 페이지가 실제로 적용되지 않고 전체 결과가 반환될 수 있습니다. `PageResult`는 서버 응답값과
-`requested_page`, `requested_page_size`를 함께 저장하고 `server_honored_pagination`을 별도로 제공합니다.
-화면은 요청값만 보고 pagination이 지원된다고 가정하면 안 됩니다.
+요청한 페이지가 실제로 적용되지 않고 전체 결과가 반환될 수 있습니다. 계층 조회는 최대 500개씩 요청하고
+`total`에 도달할 때까지 중복 ID를 제외하며 모든 서버 페이지를 합칩니다. 화면에는 페이지 구분 없이 하나의
+스크롤 트리로 전달합니다. 검색의 `PageResult`는 서버 응답값과 `requested_page`, `requested_page_size`를
+함께 저장하고 `server_honored_pagination`을 별도로 제공합니다.
+
+`GET /v3/trackers/{trackerId}/schema`는 Codebeamer 버전에 따라 필드 정의 배열 또는 필드 컨테이너 객체를
+반환할 수 있습니다. 조회 서비스는 배열을 `{"id": trackerId, "fields": [...]}`로 정규화해 생성·수정
+서비스가 동일한 계약을 사용하도록 합니다.
 
 참고:
 
@@ -97,8 +103,8 @@ Qt widget은 서버 원본 dict를 직접 탐색하지 않고 위 모델만 사�
 ## 작업공간 화면 연결
 
 - `src/gui/tracker_workspace.py`의 `TrackerWorkspacePage`가 화면 계약을 담당합니다.
-- 최상위 목록은 tracker와 page별로, 직접 하위는 parent item ID별로 화면 세션에서 캐시합니다.
-- 노드를 처음 펼칠 때만 `load_child_items()`를 호출합니다.
+- 최상위 전체 목록은 tracker별로, 직접 하위 전체 목록은 parent item ID별로 화면 세션에서 캐시합니다.
+- 노드를 처음 펼칠 때만 `load_all_child_items()`를 호출합니다.
 - 계층 또는 검색 결과 행 선택은 `load_detail()`을 별도 백그라운드 요청으로 실행합니다.
 - tracker 검색은 선택 tracker ID로 `TrackerQuery`를 만들며 빈 검색 조건은 화면에서 차단합니다.
 - ID 바로 열기는 `resolve_item_context()` 후 `load_ancestor_path()`를 호출해 선택 컨텍스트와 경로를 함께 전환합니다.

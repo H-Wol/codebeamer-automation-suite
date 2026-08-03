@@ -26,9 +26,9 @@ class CountingTrackerQueryService(TrackerQueryService):
         super().__init__()
         self.child_load_count = 0
 
-    def load_child_items(self, *args, **kwargs):
+    def load_all_child_items(self, *args, **kwargs):
         self.child_load_count += 1
-        return super().load_child_items(*args, **kwargs)
+        return super().load_all_child_items(*args, **kwargs)
 
 
 EDITOR_SCHEMA = {
@@ -217,6 +217,7 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.assertEqual(self.page.tracker_combo.currentData(), 24680001)
         self.assertEqual(self.page.item_tree.topLevelItemCount(), 2)
         self.assertEqual(self.page.item_tree.topLevelItem(0).text(0), "9001001")
+        self.assertIn("전체 표시", self.page.tree_status_label.text())
         self.assertIn("Offline Requirements", self.page.search_scope_label.text())
         self.assertTrue(self.page.search_button.isEnabled())
         self.assertFalse(self.page.create_item_button.isEnabled())
