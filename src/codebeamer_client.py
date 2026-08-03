@@ -1,15 +1,27 @@
 from __future__ import annotations
 
 import base64
+from contextvars import ContextVar
 import time
 from typing import Any
 
 import requests
 
+from .api_monitor import API_MONITOR
+from .api_monitor import API_OUTCOME_FAILED
+from .api_monitor import API_OUTCOME_RETRY
+from .api_monitor import API_OUTCOME_SUCCESS
+from .api_monitor import normalize_api_path
 from .models import ITEM_SEARCH_RESULT_KEYS
 from .models import OPTION_CONTAINER_KEYS
 from .models import USER_SEARCH_RESULT_KEYS
 from .models import UserInfo
+
+
+_API_REQUEST_CONTEXT: ContextVar[tuple[str, int, int] | None] = ContextVar(
+    "codebeamer_api_request_context",
+    default=None,
+)
 
 
 class CodebeamerClient:
@@ -23,6 +35,7 @@ class CodebeamerClient:
         rate_limit_retry_delay_seconds: float = 1.0,
         rate_limit_max_retries: int = 5,
         sleep_fn=time.sleep,
+        api_monitor=API_MONITOR,
     ):
         """Codebeamer 서버에 요청할 때 필요한 접속 정보를 보관한다."""
         self.base_url = base_url.rstrip("/")
@@ -32,6 +45,7 @@ class CodebeamerClient:
         self.rate_limit_retry_delay_seconds = rate_limit_retry_delay_seconds
         self.rate_limit_max_retries = rate_limit_max_retries
         self._sleep_fn = sleep_fn
+        self.api_monitor = api_monitor
 
     def _session(self) -> requests.Session:
         """인증 헤더가 포함된 새 HTTP 세션을 만든다."""
@@ -46,40 +60,107 @@ class CodebeamerClient:
 
     def _get(self, path: str, params: dict | None = None) -> Any:
         """GET 요청을 보내고 JSON 응답을 돌려준다."""
-        url = f"{self.base_url}{path}"
-        with self._session() as s:
-            resp = s.get(url, params=params)
-            resp.raise_for_status()
-            return resp.json()
+        return self._request_json("GET", path, params=params)
 
     def _post(self, path: str, json_body: dict | None = None, params: dict | None = None) -> Any:
         """POST 요청을 보내고 JSON 응답을 돌려준다."""
-        url = f"{self.base_url}{path}"
-        with self._session() as s:
-            resp = s.post(url, json=json_body, params=params)
-            resp.raise_for_status()
-            return resp.json()
+        return self._request_json("POST", path, json_body=json_body, params=params)
 
     def _put(self, path: str, json_body: dict | None = None, params: dict | None = None) -> Any:
         """PUT 요청을 보내고 JSON 응답을 돌려준다."""
-        url = f"{self.base_url}{path}"
-        with self._session() as s:
-            resp = s.put(url, json=json_body, params=params)
-            resp.raise_for_status()
-            return resp.json()
+        return self._request_json("PUT", path, json_body=json_body, params=params)
 
     def _delete(self, path: str, params: dict | None = None) -> Any:
         """DELETE 요청을 보내고 본문이 없으면 빈 객체를 돌려준다."""
-        url = f"{self.base_url}{path}"
-        with self._session() as s:
-            resp = s.delete(url, params=params)
-            resp.raise_for_status()
-            if not resp.content:
-                return {}
-            try:
-                return resp.json()
-            except ValueError:
-                return {}
+        return self._request_json("DELETE", path, params=params, empty_ok=True)
+
+    @staticmethod
+    def _response_status_code(response: object | None, exc: Exception | None = None) -> int | None:
+        candidate = response
+        if candidate is None and exc is not None:
+            candidate = getattr(exc, "response", None)
+        value = getattr(candidate, "status_code", None)
+        try:
+            return None if value is None else int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _monitor_error_kind(exc: Exception, status_code: int | None) -> str:
+        if isinstance(exc, requests.Timeout):
+            return "Timeout"
+        if isinstance(exc, requests.ConnectionError):
+            return "Connection"
+        if status_code == 429:
+            return "RateLimit"
+        if isinstance(exc, requests.HTTPError) or status_code is not None:
+            return "HTTP"
+        if isinstance(exc, ValueError):
+            return "Parse"
+        return "Unknown"
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict | None = None,
+        params: dict | None = None,
+        empty_ok: bool = False,
+    ) -> Any:
+        """Send one HTTP attempt and record metadata without payload or credentials."""
+
+        normalized_method = str(method or "").upper()
+        retry_context = _API_REQUEST_CONTEXT.get()
+        if retry_context is None:
+            request_kind = f"{normalized_method} {normalize_api_path(path)}"
+            attempt = 1
+            max_attempts = 1
+        else:
+            request_kind, attempt, max_attempts = retry_context
+
+        monitor_handle = self.api_monitor.start_request(
+            request_kind=request_kind,
+            method=normalized_method,
+            path=path,
+            attempt=attempt,
+            max_attempts=max_attempts,
+        )
+        response = None
+        status_code = None
+        outcome = API_OUTCOME_SUCCESS
+        error_kind = None
+        try:
+            url = f"{self.base_url}{path}"
+            with self._session() as session:
+                request_method = getattr(session, normalized_method.lower())
+                request_kwargs: dict[str, Any] = {"params": params}
+                if normalized_method in {"POST", "PUT"}:
+                    request_kwargs["json"] = json_body
+                response = request_method(url, **request_kwargs)
+                status_code = self._response_status_code(response)
+                response.raise_for_status()
+                if empty_ok and not response.content:
+                    return {}
+                try:
+                    return response.json()
+                except ValueError:
+                    if empty_ok:
+                        return {}
+                    raise
+        except Exception as exc:
+            status_code = self._response_status_code(response, exc)
+            is_retry = self._is_rate_limited(exc) and attempt < max_attempts
+            outcome = API_OUTCOME_RETRY if is_retry else API_OUTCOME_FAILED
+            error_kind = self._monitor_error_kind(exc, status_code)
+            raise
+        finally:
+            self.api_monitor.finish_request(
+                monitor_handle,
+                status_code=status_code,
+                outcome=outcome,
+                error_kind=error_kind,
+            )
 
     @staticmethod
     def _extract_user_payloads(data: Any) -> list[dict[str, Any]]:
@@ -451,6 +532,7 @@ class CodebeamerClient:
         last_exc: Exception | None = None
 
         for attempt in range(1, attempts + 1):
+            context_token = _API_REQUEST_CONTEXT.set((request_name, attempt, attempts))
             try:
                 return request_func()
             except Exception as exc:
@@ -468,6 +550,8 @@ class CodebeamerClient:
                         attempts,
                     )
                 self._sleep_fn(delay_seconds)
+            finally:
+                _API_REQUEST_CONTEXT.reset(context_token)
 
         if last_exc is not None:
             raise last_exc

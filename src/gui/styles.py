@@ -270,8 +270,49 @@ QLabel#tracker_current_status {
 
 QDialog#tracker_delete_dialog,
 QDialog#tracker_item_create_dialog,
-QDialog#activity_history_clear_dialog {
+QDialog#activity_history_clear_dialog,
+QDialog#api_monitor_window {
     background: #F4F7FB;
+}
+
+QFrame#api_monitor_stat_card,
+QFrame#api_monitor_filters {
+    background: #F8FBFD;
+    border: 1px solid #D8E1EA;
+    border-radius: 8px;
+}
+
+QLabel#api_monitor_stat_label {
+    color: #6B7B8D;
+    font-size: 10px;
+}
+
+QLabel#api_monitor_stat_value {
+    color: #13263A;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+QLabel#api_monitor_collection_state {
+    color: #0E4A84;
+    background: #EAF4FB;
+    border: 1px solid #CBE4F3;
+    border-radius: 10px;
+    padding: 4px 9px;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+QLabel#api_monitor_collection_state[state="disabled"] {
+    color: #6B7B8D;
+    background: #EEF3F8;
+    border-color: #D8E1EA;
+}
+
+QLabel#api_monitor_collection_state[state="test"] {
+    color: #8A4B08;
+    background: #FFF3DC;
+    border-color: #F1D49A;
 }
 
 QTreeWidget#tracker_item_tree {
@@ -901,8 +942,29 @@ QLabel#tracker_current_status {
 
 QDialog#tracker_delete_dialog,
 QDialog#tracker_item_create_dialog,
-QDialog#activity_history_clear_dialog {
+QDialog#activity_history_clear_dialog,
+QDialog#api_monitor_window {
     background: #F2FBFC;
+}
+
+QFrame#api_monitor_stat_card,
+QFrame#api_monitor_filters {
+    background: #F7FCFC;
+    border: 1px solid #D3E7E9;
+}
+
+QLabel#api_monitor_stat_label {
+    color: #60797E;
+}
+
+QLabel#api_monitor_stat_value {
+    color: #17383B;
+}
+
+QLabel#api_monitor_collection_state {
+    color: #0B6E70;
+    background: #E5F7F6;
+    border-color: #BFE6E2;
 }
 
 QTreeWidget#tracker_item_tree {

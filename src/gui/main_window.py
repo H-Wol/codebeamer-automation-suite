@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from PySide6.QtCore import QTimer
+
+from src.api_monitor import API_MONITOR
+
 from .activity_history import ActivityHistoryStore
 from .activity_history import ActivityRecord
 from .activity_history import default_activity_history_path
 from .activity_history_page import ActivityHistoryPage
+from .api_monitor_window import ApiMonitorWindow
 from .batch_window import BatchUploadWindow
 from .settings_center import SettingsCenterPage
 from .settings_store import GuiSettings
@@ -57,12 +62,17 @@ class MainWindow(QMainWindow):
         self.settings_store = settings_store
         settings_store.ensure_app_settings()
         initial_settings = settings_store.load()
+        API_MONITOR.reset(
+            enabled=bool(initial_settings.api_monitor_enabled),
+            slow_threshold_ms=int(initial_settings.api_monitor_slow_threshold_ms),
+        )
         self._last_normal_window_width = max(int(initial_settings.window_width), 860)
         self._last_normal_window_height = max(int(initial_settings.window_height), 620)
         self.current_route = ""
         self.navigation_collapsed = bool(initial_settings.navigation_collapsed)
         self.route_widgets: dict[str, object] = {}
         self.nav_buttons: dict[str, object] = {}
+        self.api_monitor_window: ApiMonitorWindow | None = None
 
         self._build_application_shell(initial_settings)
         self.setWindowTitle("Codebeamer Automation Suite")
@@ -74,6 +84,8 @@ class MainWindow(QMainWindow):
             self.showFullScreen()
         elif bool(getattr(initial_settings, "window_is_maximized", False)):
             self.showMaximized()
+        if bool(initial_settings.api_monitor_enabled):
+            QTimer.singleShot(0, self._show_api_monitor)
 
     def _build_application_shell(self, initial_settings: GuiSettings) -> None:
         QWidget = self.qt["QWidget"]
@@ -202,6 +214,7 @@ class MainWindow(QMainWindow):
             connection_tester=(
                 self.batch_window.codebeamer_service.test_connection_and_load_projects
             ),
+            api_monitor_requested=self._show_api_monitor,
             parent=content,
         )
 
@@ -376,11 +389,32 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"왼쪽 메뉴를 {state_text}.")
 
     def _on_global_settings_applied(self, settings: GuiSettings) -> None:
+        was_monitor_enabled = API_MONITOR.enabled
         applied = self.batch_window.apply_global_settings(settings)
+        API_MONITOR.configure(
+            enabled=bool(applied.api_monitor_enabled),
+            slow_threshold_ms=int(applied.api_monitor_slow_threshold_ms),
+        )
         self._update_mode_badge(applied)
         self.batch_window._apply_theme(applied.theme_name)
         self.tracker_workspace_page.on_settings_applied(applied)
+        if bool(applied.api_monitor_enabled) and not was_monitor_enabled:
+            self._show_api_monitor()
+        elif self.api_monitor_window is not None:
+            self.api_monitor_window.refresh(force=True)
         self.statusBar().showMessage("전역 설정을 현재 작업에 적용했습니다.")
+
+    def _show_api_monitor(self) -> None:
+        if self.api_monitor_window is None:
+            self.api_monitor_window = ApiMonitorWindow(
+                API_MONITOR,
+                settings_provider=lambda: self.batch_window.session_state.settings,
+                parent=self,
+            )
+        self.api_monitor_window.show()
+        self.api_monitor_window.raise_()
+        self.api_monitor_window.activateWindow()
+        self.api_monitor_window.refresh(force=True)
 
     def _on_batch_settings_changed(self, settings: GuiSettings) -> None:
         self._update_mode_badge(settings)
@@ -430,6 +464,8 @@ class MainWindow(QMainWindow):
             self.settings_store.save_window_preferences(updated_settings)
         except Exception:
             pass
+        if self.api_monitor_window is not None:
+            self.api_monitor_window.close()
         self.tracker_workspace_page.shutdown()
         super().closeEvent(event)
 

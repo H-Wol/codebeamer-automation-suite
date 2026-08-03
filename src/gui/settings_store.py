@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from src.api_monitor import API_MONITOR_DEFAULT_SLOW_THRESHOLD_MS
+from src.api_monitor import API_MONITOR_MAX_SLOW_THRESHOLD_MS
+from src.api_monitor import API_MONITOR_MIN_SLOW_THRESHOLD_MS
 from src.upload_policy import UPLOAD_MODE_CREATE as GUI_UPLOAD_MODE_CREATE
 from src.upload_policy import UPLOAD_MODE_UPDATE as GUI_UPLOAD_MODE_UPDATE
 from src.upload_policy import UPLOAD_MODE_UPSERT as GUI_UPLOAD_MODE_UPSERT
@@ -28,7 +31,7 @@ SETTINGS_FILE_NAME = "gui_settings.json"
 APP_SETTINGS_FILE_NAME = "gui_app_settings.json"
 KEY_FILE_NAME = "gui_settings.key"
 WORKFLOW_PRESET_FILE_NAME = "gui_workflow_preset.json"
-APP_SETTINGS_VERSION = 2
+APP_SETTINGS_VERSION = 3
 
 CREDENTIAL_STORAGE_NONE = "none"
 CREDENTIAL_STORAGE_LOCAL = "local_encrypted"
@@ -65,6 +68,8 @@ class GuiSettings:
     excel_sheet_name: str = "0"
     rate_limit_retry_delay_seconds: float = 1.0
     rate_limit_max_retries: int = 5
+    api_monitor_enabled: bool = False
+    api_monitor_slow_threshold_ms: int = API_MONITOR_DEFAULT_SLOW_THRESHOLD_MS
     output_dir: str = "output"
     last_file_path: str = ""
 
@@ -95,6 +100,8 @@ class AppSettings:
     navigation_collapsed: bool = False
     rate_limit_retry_delay_seconds: float = 1.0
     rate_limit_max_retries: int = 5
+    api_monitor_enabled: bool = False
+    api_monitor_slow_threshold_ms: int = API_MONITOR_DEFAULT_SLOW_THRESHOLD_MS
     output_dir: str = "output"
     offline_mode: bool = False
     offline_schema_path: str = ""
@@ -252,6 +259,11 @@ def effective_gui_settings(
                 app_settings.rate_limit_retry_delay_seconds or 0
             ),
             "rate_limit_max_retries": int(app_settings.rate_limit_max_retries or 0),
+            "api_monitor_enabled": bool(app_settings.api_monitor_enabled),
+            "api_monitor_slow_threshold_ms": int(
+                app_settings.api_monitor_slow_threshold_ms
+                or API_MONITOR_DEFAULT_SLOW_THRESHOLD_MS
+            ),
             "output_dir": str(app_settings.output_dir or "output"),
         }
     )
@@ -376,6 +388,11 @@ class GuiSettingsStore:
             navigation_collapsed=bool(legacy.navigation_collapsed),
             rate_limit_retry_delay_seconds=float(legacy.rate_limit_retry_delay_seconds or 0),
             rate_limit_max_retries=int(legacy.rate_limit_max_retries or 0),
+            api_monitor_enabled=bool(legacy.api_monitor_enabled),
+            api_monitor_slow_threshold_ms=int(
+                legacy.api_monitor_slow_threshold_ms
+                or API_MONITOR_DEFAULT_SLOW_THRESHOLD_MS
+            ),
             output_dir=str(legacy.output_dir or "output"),
             offline_mode=bool(legacy.offline_mode),
             offline_schema_path=str(legacy.offline_schema_path or ""),
@@ -483,6 +500,8 @@ class GuiSettingsStore:
             "navigation_collapsed": value.navigation_collapsed,
             "rate_limit_retry_delay_seconds": value.rate_limit_retry_delay_seconds,
             "rate_limit_max_retries": value.rate_limit_max_retries,
+            "api_monitor_enabled": value.api_monitor_enabled,
+            "api_monitor_slow_threshold_ms": value.api_monitor_slow_threshold_ms,
             "output_dir": value.output_dir,
             "offline_mode": value.offline_mode,
             "offline_schema_path": value.offline_schema_path,
@@ -672,6 +691,17 @@ class GuiSettingsStore:
                 float(settings.rate_limit_retry_delay_seconds or 0), 0.0
             ),
             rate_limit_max_retries=max(int(settings.rate_limit_max_retries or 0), 0),
+            api_monitor_enabled=bool(settings.api_monitor_enabled),
+            api_monitor_slow_threshold_ms=min(
+                max(
+                    int(
+                        settings.api_monitor_slow_threshold_ms
+                        or API_MONITOR_DEFAULT_SLOW_THRESHOLD_MS
+                    ),
+                    API_MONITOR_MIN_SLOW_THRESHOLD_MS,
+                ),
+                API_MONITOR_MAX_SLOW_THRESHOLD_MS,
+            ),
             output_dir=str(settings.output_dir or "").strip() or "output",
             offline_mode=bool(settings.offline_mode),
             offline_schema_path=str(settings.offline_schema_path or "").strip(),
@@ -729,6 +759,8 @@ class GuiSettingsStore:
             "navigation_collapsed": settings.navigation_collapsed,
             "rate_limit_retry_delay_seconds": settings.rate_limit_retry_delay_seconds,
             "rate_limit_max_retries": settings.rate_limit_max_retries,
+            "api_monitor_enabled": settings.api_monitor_enabled,
+            "api_monitor_slow_threshold_ms": settings.api_monitor_slow_threshold_ms,
             "output_dir": settings.output_dir,
             "offline_mode": settings.offline_mode,
             "offline_schema_path": settings.offline_schema_path,
@@ -806,6 +838,11 @@ class GuiSettingsStore:
                 payload.get("rate_limit_retry_delay_seconds") or 0
             ),
             rate_limit_max_retries=int(payload.get("rate_limit_max_retries") or 0),
+            api_monitor_enabled=bool(payload.get("api_monitor_enabled", False)),
+            api_monitor_slow_threshold_ms=int(
+                payload.get("api_monitor_slow_threshold_ms")
+                or API_MONITOR_DEFAULT_SLOW_THRESHOLD_MS
+            ),
             output_dir=str(payload.get("output_dir") or "output"),
             offline_mode=bool(payload.get("offline_mode", False)),
             offline_schema_path=str(payload.get("offline_schema_path") or ""),

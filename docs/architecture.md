@@ -177,6 +177,7 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - 조회 요청의 화면 세션 캐시와 request token 기반 오래된 응답 차단
 - schema 기반 단건 생성, 선택 필드 부분 수정, version 충돌 확인, 단건 상태 전환과 삭제
 - 단건 쓰기와 배치 최종 결과의 제한된 로컬 실행 기록 및 필터 화면
+- 공통 HTTP 계층의 메타데이터 전용 API 모니터와 별도 실시간 통계 창
 - 테스트 모드 UI·서비스 이중 쓰기 차단
 - 다중 Excel 파일 선택과 대표 파일 미리보기 표시
 - 파일명 정규식 기반 상단 데이터 preview/payload 구성
@@ -201,6 +202,7 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - `src/gui/tracker_item_create_dialog.py`
 - `src/gui/activity_history.py`
 - `src/gui/activity_history_page.py`
+- `src/gui/api_monitor_window.py`
 - `src/gui/offline_query.py`
 - `src/gui/worker.py`
 
@@ -223,6 +225,8 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - schema 기반 최상위·하위 단건 생성 UI: `src/gui/tracker_item_create_dialog.py`
 - 실행 기록 모델·민감정보 제한·영속 저장: `src/gui/activity_history.py`
 - 실행 기록 필터·상세·비우기 화면: `src/gui/activity_history_page.py`
+- API 모니터 thread-safe 버퍼·통계: `src/api_monitor.py`
+- API 모니터 별도 실시간 창: `src/gui/api_monitor_window.py`
 - 테스트 모드 CbQL subset 평가: `src/gui/offline_query.py`
 - 업로드 context 모델: `src/gui/upload_context.py`
 - TRACKER configuration 해석: `src/gui/tracker_config.py`
@@ -269,6 +273,12 @@ ID 재입력 확인을 통과해야 하며, 테스트 모드에서는 UI와 서�
 - 프로젝트, 트래커, schema, 아이템 조회
 - 사용자 조회 API 호출
 - 신규 tracker item 생성
+- 공통 HTTP 시도의 status·지연·재시도 문맥을 `src/api_monitor.py`에 기록
+
+모니터 계측은 요청·응답 본문, header, query parameter, host와 원본 예외 문자열을
+전달하지 않습니다. 숫자·UUID·긴 16진수 경로 segment는 `{id}`로 치환하며 최근
+최대 500개 시도만 프로세스 메모리에 유지합니다. 작업 thread는 이벤트만 기록하고
+GUI thread의 timer가 snapshot을 읽으므로 Qt widget을 worker에서 직접 갱신하지 않습니다.
 
 현재 사용자/멤버 API helper:
 - `GET /v3/users/{userId}`

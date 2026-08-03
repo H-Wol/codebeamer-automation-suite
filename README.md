@@ -27,6 +27,7 @@ Excel 기반 계층형 데이터를 Codebeamer Tracker Item으로 변환하고 �
 - 비밀번호의 로컬 암호화 저장을 기본으로 하고 OS 자격증명 저장소 또는 미저장 방식 선택
 - 명시적 검증·저장·적용, credential 제외 설정 가져오기/내보내기와 legacy 설정 migration
 - 전역 설정 페이지에서 테마와 테스트 모드용 offline schema/config/조회 데이터 snapshot 관리
+- `설정 > 개발자`에서 켜는 별도 실시간 API 모니터와 최근 500개 호출의 상태·지연 통계
 - 현재 tracker 범위를 강제하는 CbQL, 계층 전체 수집, 검색 pagination과 상세 정규화 조회 서비스
 - 프로젝트·트래커 선택, 전체 스크롤 확장형 트리, tracker 범위 검색과 ID 바로 열기를 제공하는 작업공간
 - schema 기반 최상위·하위 단건 생성, TableField 행 편집을 포함한 선택 필드 부분 수정, 단건 상태 전환, version 충돌 확인과 ID 재입력 삭제
@@ -73,12 +74,18 @@ GUI를 실행하면 최상위 앱 셸이 열리고 `트래커 작업공간`, `�
 현재 실제 업로드 흐름은 `배치 작업` 안에서 아래 9단계 마법사로 이어집니다.
 
 - 최상위 설정 화면
-  - `연결`, `화면`, `네트워크·저장소`, `테스트 모드`, `데이터 관리` 영역 전환
+  - `연결`, `화면`, `네트워크·저장소`, `테스트 모드`, `개발자`, `데이터 관리` 영역 전환
   - 여러 연결 프로필과 활성 프로필 하나 관리
   - 연결 또는 snapshot 검증 후 명시적으로 저장·적용
   - 로컬 암호화, OS 자격증명 저장소, 미저장 중 비밀번호 저장 방식 선택
   - 전역 설정 가져오기/내보내기에서 credential 제외
   - 테스트 모드의 익명 `조회 데이터 Snapshot` 선택과 검증
+  - 개발자 영역에서 API 모니터 사용 여부와 느린 요청 기준 관리
+- API 모니터
+  - 별도 최대화 가능 창에서 요청 종류, method, 정규화 경로, status code, 소요 시간과 재시도 표시
+  - 최근 최대 500개 HTTP 시도 기준 성공률, 오류, 평균·P50·P95·최대 지연, 최근 1분 요청과 429 통계
+  - 검색·method·status·결과·느린 요청 필터, 화면 일시정지, 자동 스크롤, 선택 행 복사와 기록 지우기
+  - 요청·응답 본문, header, query 값, host, 실제 ID와 원본 오류 문자열은 수집·저장하지 않음
 - 트래커 작업공간
   - 프로젝트·트래커, 최상위 아이템 전체와 직접 하위 아이템 전체 조회
   - 서버 페이지를 백그라운드에서 끝까지 합쳐 하나의 스크롤 트리로 표시
@@ -145,6 +152,7 @@ GUI를 실행하면 최상위 앱 셸이 열리고 `트래커 작업공간`, `�
 - 상세 `수정` 탭에 schema 기반 광범위 필드 편집, 단건 상태 전환과 안전한 삭제를 연결했습니다.
 - `TableField` 중첩 행 구조를 보존하는 전용 편집기와 단건 생성·수정 화면의 확대 작업 흐름을 추가했습니다.
 - `실행 기록`에 단건 쓰기와 배치 작업의 최종 결과를 최근 500건까지 안전하게 보관하고 필터링하는 화면을 연결했습니다.
+- 개발자용 API 모니터를 추가해 모든 공통 HTTP 호출과 429 재시도 시도를 메타데이터만으로 실시간 집계합니다.
 - 저장된 연결 또는 snapshot은 검증 signature가 현재 값과 일치할 때만 앱 시작 시 활성 환경으로 복원합니다.
 - 연결 테스트, 프로젝트/트래커 조회, Excel 미리보기, 매핑 준비, 검증은 `BackgroundTask` 기반으로 실행하고 작업 중 로딩 오버레이와 대기 커서를 표시합니다.
 - 설정, 프로젝트, 파일, 검증 단계는 필수 입력이나 선행 작업이 완료되기 전까지 `다음` 버튼을 비활성화합니다.
@@ -161,6 +169,7 @@ GUI를 실행하면 최상위 앱 셸이 열리고 `트래커 작업공간`, `�
 - `cli_main.py`: 유지보수와 보조 실행용 대화형 CLI
 - `main.py`: 과거 엔트리 포인트, 현재 비권장
 - `src/codebeamer_client.py`: Codebeamer REST API 클라이언트
+- `src/api_monitor.py`: 최근 API 호출 메타데이터의 thread-safe 메모리 버퍼와 통계
 - `src/excel_reader.py`: Excel 파일을 raw DataFrame으로 읽는 입력 계층
 - `src/hierarchy_processor.py`: raw DataFrame을 merged/hierarchy/upload DataFrame으로 후처리
 - `src/excel_processor.py`: 기존 import 호환용 통합 래퍼
@@ -233,6 +242,7 @@ py -3 cli_main.py
 - [Codebeamer 프로젝트 시작 패키지](./docs/codebeamer-project-start-kit.md)
 - [CLI 사용 가이드](./docs/cli-guide.md)
 - [GUI 사용 가이드](./docs/gui-plan.md)
+- [Codebeamer API 모니터](./docs/api-monitor.md)
 - [변경 이력 성격의 v2 문서](./docs/v2-changes.md)
 - [트러블슈팅](./docs/troubleshooting.md)
 

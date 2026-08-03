@@ -276,6 +276,40 @@ class _DeterministicSettingsStore(GuiSettingsStore):
 
 
 class GuiAppSettingsStoreTest(unittest.TestCase):
+    def test_version_two_app_settings_load_with_safe_api_monitor_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = _DeterministicSettingsStore(
+                Path(tmp_dir), credential_store=_FakeCredentialStore()
+            )
+            store.root_dir.mkdir(parents=True, exist_ok=True)
+            store.app_settings_path.write_text(
+                json.dumps({"version": 2, "profiles": []}),
+                encoding="utf-8",
+            )
+
+            loaded = store.load_app_settings()
+
+            self.assertEqual(loaded.version, 3)
+            self.assertFalse(loaded.api_monitor_enabled)
+            self.assertEqual(loaded.api_monitor_slow_threshold_ms, 1000)
+
+    def test_api_monitor_threshold_is_normalized_before_save(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = _DeterministicSettingsStore(
+                Path(tmp_dir), credential_store=_FakeCredentialStore()
+            )
+
+            store.save_app_settings(
+                AppSettings(
+                    api_monitor_enabled=True,
+                    api_monitor_slow_threshold_ms=999_999,
+                )
+            )
+
+            loaded = store.load_app_settings()
+            self.assertTrue(loaded.api_monitor_enabled)
+            self.assertEqual(loaded.api_monitor_slow_threshold_ms, 60_000)
+
     def test_legacy_settings_are_migrated_without_removing_source_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             store = _DeterministicSettingsStore(
@@ -442,6 +476,8 @@ class GuiAppSettingsStoreTest(unittest.TestCase):
                 active_profile_id="primary",
                 navigation_collapsed=True,
                 offline_query_data_path="query-items.json",
+                api_monitor_enabled=True,
+                api_monitor_slow_threshold_ms=2750,
                 profiles=[
                     ConnectionProfile(
                         profile_id="primary",
@@ -470,6 +506,8 @@ class GuiAppSettingsStoreTest(unittest.TestCase):
             )
             self.assertTrue(imported.navigation_collapsed)
             self.assertEqual(imported.offline_query_data_path, "query-items.json")
+            self.assertTrue(imported.api_monitor_enabled)
+            self.assertEqual(imported.api_monitor_slow_threshold_ms, 2750)
 
     def test_test_mode_signature_changes_when_query_snapshot_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -507,6 +545,8 @@ class GuiAppSettingsStoreTest(unittest.TestCase):
             navigation_collapsed=True,
             offline_mode=False,
             output_dir="global-output",
+            api_monitor_enabled=True,
+            api_monitor_slow_threshold_ms=1750,
         )
         batch_settings = GuiSettings(
             upload_mode=GUI_UPLOAD_MODE_UPDATE,
@@ -521,11 +561,13 @@ class GuiAppSettingsStoreTest(unittest.TestCase):
         self.assertEqual(effective.theme_name, "igloo")
         self.assertTrue(effective.navigation_collapsed)
         self.assertEqual(effective.output_dir, "global-output")
+        self.assertTrue(effective.api_monitor_enabled)
+        self.assertEqual(effective.api_monitor_slow_threshold_ms, 1750)
         self.assertEqual(effective.upload_mode, GUI_UPLOAD_MODE_UPDATE)
         self.assertEqual(effective.excel_header_row, 3)
         self.assertEqual(effective.summary_column, "요약")
 
-    def test_version_two_workflow_preset_contains_only_batch_settings(self) -> None:
+    def test_version_three_workflow_preset_contains_only_batch_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             store = _DeterministicSettingsStore(
                 Path(tmp_dir), credential_store=_FakeCredentialStore()
@@ -548,7 +590,7 @@ class GuiAppSettingsStoreTest(unittest.TestCase):
 
             payload = json.loads(store.workflow_preset_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(payload["version"], 2)
+            self.assertEqual(payload["version"], 3)
             self.assertEqual(payload["settings"]["upload_mode"], GUI_UPLOAD_MODE_UPDATE)
             self.assertEqual(payload["settings"]["excel_header_row"], 3)
             self.assertEqual(payload["settings"]["summary_column"], "요약")

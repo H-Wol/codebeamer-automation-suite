@@ -23,6 +23,10 @@ from PySide6.QtWidgets import QStackedWidget
 from PySide6.QtWidgets import QVBoxLayout
 from PySide6.QtWidgets import QWidget
 
+from src.api_monitor import API_MONITOR_DEFAULT_SLOW_THRESHOLD_MS
+from src.api_monitor import API_MONITOR_MAX_SLOW_THRESHOLD_MS
+from src.api_monitor import API_MONITOR_MIN_SLOW_THRESHOLD_MS
+
 from .settings_store import AppSettings
 from .settings_store import ConnectionProfile
 from .settings_store import CREDENTIAL_STORAGE_LOCAL
@@ -43,6 +47,7 @@ SETTINGS_CATEGORY_CONNECTION = "connection"
 SETTINGS_CATEGORY_APPEARANCE = "appearance"
 SETTINGS_CATEGORY_NETWORK_STORAGE = "network_storage"
 SETTINGS_CATEGORY_TEST_MODE = "test_mode"
+SETTINGS_CATEGORY_DEVELOPER = "developer"
 SETTINGS_CATEGORY_DATA = "data"
 
 SETTINGS_CATEGORY_LABELS = {
@@ -50,6 +55,7 @@ SETTINGS_CATEGORY_LABELS = {
     SETTINGS_CATEGORY_APPEARANCE: "화면",
     SETTINGS_CATEGORY_NETWORK_STORAGE: "네트워크·저장소",
     SETTINGS_CATEGORY_TEST_MODE: "테스트 모드",
+    SETTINGS_CATEGORY_DEVELOPER: "개발자",
     SETTINGS_CATEGORY_DATA: "데이터 관리",
 }
 
@@ -63,6 +69,7 @@ class SettingsCenterPage(QWidget):
         *,
         on_applied=None,
         connection_tester=None,
+        api_monitor_requested=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -70,6 +77,7 @@ class SettingsCenterPage(QWidget):
         self.settings_store = settings_store
         self.on_applied = on_applied
         self.connection_tester = connection_tester
+        self.api_monitor_requested = api_monitor_requested
         self.persisted_settings = settings_store.ensure_app_settings()
         self.draft_settings = deepcopy(self.persisted_settings)
         self.current_category = SETTINGS_CATEGORY_CONNECTION
@@ -145,6 +153,7 @@ class SettingsCenterPage(QWidget):
             SETTINGS_CATEGORY_APPEARANCE: self._build_appearance_page(),
             SETTINGS_CATEGORY_NETWORK_STORAGE: self._build_network_storage_page(),
             SETTINGS_CATEGORY_TEST_MODE: self._build_test_mode_page(),
+            SETTINGS_CATEGORY_DEVELOPER: self._build_developer_page(),
             SETTINGS_CATEGORY_DATA: self._build_data_page(),
         }
         for category in SETTINGS_CATEGORY_LABELS:
@@ -447,6 +456,53 @@ class SettingsCenterPage(QWidget):
         self.export_button.clicked.connect(self._choose_export_path)
         return page
 
+    def _build_developer_page(self) -> QWidget:
+        page, layout = self._new_category_page(
+            "개발자",
+            "Codebeamer API 호출의 종류, 상태 코드와 종단 간 응답 시간을 별도 창에서 "
+            "확인합니다. 인증 정보와 요청·응답 본문은 수집하지 않습니다.",
+        )
+        card, card_layout = self._new_card(page)
+        self.api_monitor_checkbox = QCheckBox("API 모니터 사용")
+        self.api_monitor_checkbox.setObjectName("settings_api_monitor_toggle")
+        card_layout.addWidget(self.api_monitor_checkbox)
+
+        form = QFormLayout()
+        self._configure_form(form)
+        self.api_monitor_slow_threshold_spin = QSpinBox()
+        self.api_monitor_slow_threshold_spin.setRange(
+            API_MONITOR_MIN_SLOW_THRESHOLD_MS,
+            API_MONITOR_MAX_SLOW_THRESHOLD_MS,
+        )
+        self.api_monitor_slow_threshold_spin.setSuffix(" ms")
+        form.addRow("느린 요청 기준", self.api_monitor_slow_threshold_spin)
+        card_layout.addLayout(form)
+
+        help_label = QLabel(
+            "최근 최대 500건의 메타데이터만 메모리에 보관합니다. 창을 닫아도 수집은 "
+            "계속되며, 설정을 끄면 새 요청 수집만 중지됩니다. 표시 시간은 네트워크와 "
+            "서버 처리를 포함한 응답 지연 시간입니다."
+        )
+        help_label.setObjectName("section_label")
+        help_label.setWordWrap(True)
+        card_layout.addWidget(help_label)
+
+        action_row = QHBoxLayout()
+        self.api_monitor_open_button = QPushButton("API 모니터 열기")
+        self.api_monitor_open_button.setObjectName("primary_button")
+        action_row.addWidget(self.api_monitor_open_button)
+        action_row.addStretch(1)
+        card_layout.addLayout(action_row)
+        layout.addWidget(card)
+        layout.addStretch(1)
+
+        self.api_monitor_checkbox.toggled.connect(self._developer_changed)
+        self.api_monitor_slow_threshold_spin.valueChanged.connect(
+            self._developer_changed
+        )
+        self.api_monitor_open_button.clicked.connect(self._request_api_monitor)
+        return page
+
     def show_category(self, category: str) -> None:
         if category not in self.category_pages:
             raise ValueError(f"알 수 없는 설정 영역입니다: {category}")
@@ -489,10 +545,20 @@ class SettingsCenterPage(QWidget):
             self.query_data_path_edit.setText(
                 str(self.draft_settings.offline_query_data_path or "")
             )
+            self.api_monitor_checkbox.setChecked(
+                bool(self.draft_settings.api_monitor_enabled)
+            )
+            self.api_monitor_slow_threshold_spin.setValue(
+                int(
+                    self.draft_settings.api_monitor_slow_threshold_ms
+                    or API_MONITOR_DEFAULT_SLOW_THRESHOLD_MS
+                )
+            )
         finally:
             self._updating_controls = False
         self._load_selected_profile_controls()
         self._sync_test_mode_controls()
+        self._sync_developer_controls()
         self.migration_label.setText(
             "기존 gui_settings.json 및 workflow preset을 보존한 상태로 "
             "새 전역 설정 구조를 사용합니다."
@@ -708,6 +774,27 @@ class SettingsCenterPage(QWidget):
         self.draft_settings.test_mode_validated_at = ""
         self._sync_test_mode_controls()
         self._mark_dirty("test_mode")
+
+    def _developer_changed(self, *_args) -> None:
+        if self._updating_controls:
+            return
+        self.draft_settings.api_monitor_enabled = bool(
+            self.api_monitor_checkbox.isChecked()
+        )
+        self.draft_settings.api_monitor_slow_threshold_ms = int(
+            self.api_monitor_slow_threshold_spin.value()
+        )
+        self._sync_developer_controls()
+        self._mark_dirty("developer")
+
+    def _sync_developer_controls(self) -> None:
+        enabled = bool(self.api_monitor_checkbox.isChecked())
+        self.api_monitor_slow_threshold_spin.setEnabled(enabled)
+        self.api_monitor_open_button.setEnabled(enabled)
+
+    def _request_api_monitor(self) -> None:
+        if callable(self.api_monitor_requested):
+            self.api_monitor_requested()
 
     def _sync_test_mode_controls(self) -> None:
         enabled = bool(self.test_mode_checkbox.isChecked())
@@ -1041,6 +1128,18 @@ class SettingsCenterPage(QWidget):
             self.query_data_path_edit.clear()
             self._updating_controls = False
             self._sync_test_mode_controls()
+        elif self.current_category == SETTINGS_CATEGORY_DEVELOPER:
+            self.draft_settings.api_monitor_enabled = False
+            self.draft_settings.api_monitor_slow_threshold_ms = (
+                API_MONITOR_DEFAULT_SLOW_THRESHOLD_MS
+            )
+            self._updating_controls = True
+            self.api_monitor_checkbox.setChecked(False)
+            self.api_monitor_slow_threshold_spin.setValue(
+                API_MONITOR_DEFAULT_SLOW_THRESHOLD_MS
+            )
+            self._updating_controls = False
+            self._sync_developer_controls()
         else:
             return
         self._mark_dirty(self.current_category)
@@ -1130,6 +1229,7 @@ __all__ = [
     "SETTINGS_CATEGORY_APPEARANCE",
     "SETTINGS_CATEGORY_CONNECTION",
     "SETTINGS_CATEGORY_DATA",
+    "SETTINGS_CATEGORY_DEVELOPER",
     "SETTINGS_CATEGORY_LABELS",
     "SETTINGS_CATEGORY_NETWORK_STORAGE",
     "SETTINGS_CATEGORY_TEST_MODE",

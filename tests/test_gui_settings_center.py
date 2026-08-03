@@ -12,6 +12,7 @@ from src.gui.main_window import MainWindow
 from src.gui.main_window import ROUTE_BATCH_UPLOAD
 from src.gui.main_window import ROUTE_SETTINGS
 from src.gui.settings_center import SETTINGS_CATEGORY_LABELS
+from src.gui.settings_center import SETTINGS_CATEGORY_DEVELOPER
 from src.gui.settings_center import SETTINGS_CATEGORY_TEST_MODE
 from src.gui.settings_center import SettingsCenterPage
 from src.gui.settings_store import CREDENTIAL_STORAGE_NONE
@@ -65,7 +66,7 @@ class GuiSettingsCenterTest(unittest.TestCase):
         index = page.credential_storage_combo.findData(CREDENTIAL_STORAGE_NONE)
         page.credential_storage_combo.setCurrentIndex(index)
 
-    def test_settings_center_exposes_five_categories_and_optional_os_storage(self) -> None:
+    def test_settings_center_exposes_six_categories_and_optional_os_storage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             page = SettingsCenterPage(self._store(Path(tmp_dir)))
 
@@ -77,6 +78,33 @@ class GuiSettingsCenterTest(unittest.TestCase):
             os_index = page.credential_storage_combo.findData(CREDENTIAL_STORAGE_OS)
             self.assertGreaterEqual(os_index, 0)
             self.assertFalse(page.credential_storage_combo.model().item(os_index).isEnabled())
+
+    def test_developer_settings_are_saved_applied_and_can_open_monitor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            applied = []
+            opened = []
+            page = SettingsCenterPage(
+                self._store(Path(tmp_dir)),
+                on_applied=applied.append,
+                api_monitor_requested=lambda: opened.append(True),
+            )
+            page.show_category(SETTINGS_CATEGORY_DEVELOPER)
+
+            self.assertFalse(page.api_monitor_open_button.isEnabled())
+            page.api_monitor_checkbox.setChecked(True)
+            page.api_monitor_slow_threshold_spin.setValue(2500)
+            page.api_monitor_open_button.click()
+
+            self.assertEqual(opened, [True])
+            self.assertTrue(page.has_unsaved_changes())
+            self.assertTrue(page.save_changes(), page.status_label.text())
+            self.assertTrue(page.apply_saved_settings(), page.status_label.text())
+            self.assertTrue(applied[0].api_monitor_enabled)
+            self.assertEqual(applied[0].api_monitor_slow_threshold_ms, 2500)
+
+            reloaded = page.settings_store.load_app_settings()
+            self.assertTrue(reloaded.api_monitor_enabled)
+            self.assertEqual(reloaded.api_monitor_slow_threshold_ms, 2500)
 
     def test_online_profile_requires_validation_then_explicit_save_and_apply(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

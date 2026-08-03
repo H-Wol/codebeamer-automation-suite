@@ -7,6 +7,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from src.api_monitor import API_MONITOR
 from src.gui.main_window import _estimate_upload_remaining_seconds
 from src.gui.main_window import _format_clock_text
 from src.gui.main_window import _format_upload_eta_text
@@ -345,6 +346,47 @@ class GuiMainWindowSmokeTest(unittest.TestCase):
 
             window.close()
             self._app.processEvents()
+
+    def test_enabled_api_monitor_opens_at_startup_and_follows_applied_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = GuiSettingsStore(root_dir=Path(temp_dir))
+            store.save_app_settings(
+                AppSettings(
+                    api_monitor_enabled=True,
+                    api_monitor_slow_threshold_ms=1800,
+                )
+            )
+
+            window = MainWindow(store)
+            window.show()
+            self._app.processEvents()
+
+            self.assertTrue(API_MONITOR.enabled)
+            self.assertEqual(API_MONITOR.slow_threshold_ms, 1800)
+            self.assertIsNotNone(window.api_monitor_window)
+            assert window.api_monitor_window is not None
+            self.assertTrue(window.api_monitor_window.isVisible())
+
+            disabled = GuiSettings(
+                **{
+                    **window.batch_window.session_state.settings.__dict__,
+                    "api_monitor_enabled": False,
+                    "api_monitor_slow_threshold_ms": 2400,
+                }
+            )
+            window._on_global_settings_applied(disabled)
+
+            self.assertFalse(API_MONITOR.enabled)
+            self.assertEqual(API_MONITOR.slow_threshold_ms, 2400)
+            self.assertIn(
+                "수집 중지",
+                window.api_monitor_window.collection_state_label.text(),
+            )
+
+            window.close()
+            self._app.processEvents()
+            self.assertFalse(window.api_monitor_window.isVisible())
+            API_MONITOR.reset()
 
 
 if __name__ == "__main__":
