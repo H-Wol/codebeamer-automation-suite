@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import os
 from pathlib import Path
 import unittest
@@ -7,6 +8,7 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from src.gui.settings_store import GuiSettings
+from src.gui.tracker_item_editor import TrackerItemEditorService
 from src.gui.tracker_query_service import TrackerQueryService
 from src.gui.tracker_workspace import ITEM_SUMMARY_ROLE
 from src.gui.tracker_workspace import TrackerWorkspacePage
@@ -23,6 +25,118 @@ class CountingTrackerQueryService(TrackerQueryService):
     def load_child_items(self, *args, **kwargs):
         self.child_load_count += 1
         return super().load_child_items(*args, **kwargs)
+
+
+EDITOR_SCHEMA = {
+    "id": 20,
+    "fields": [
+        {
+            "id": 3,
+            "name": "Summary",
+            "type": "TextField",
+            "valueModel": "TextFieldValue",
+            "trackerItemField": "name",
+            "mandatory": True,
+        },
+        {
+            "id": 7,
+            "name": "Status",
+            "type": "OptionChoiceField",
+            "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+            "trackerItemField": "status",
+            "options": [
+                {"id": 1, "name": "Open", "type": "ChoiceOptionReference"},
+                {"id": 2, "name": "Review", "type": "ChoiceOptionReference"},
+            ],
+        },
+    ],
+}
+
+
+class EditableWorkspaceClient:
+    item = {}
+    calls: list[tuple] = []
+    deleted = False
+
+    def __init__(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.item = {
+            "id": 1001,
+            "name": "Original summary",
+            "description": "Editable detail",
+            "descriptionFormat": "PlainText",
+            "version": 1,
+            "tracker": {"id": 20, "name": "Requirements"},
+            "status": {"id": 1, "name": "Open", "type": "ChoiceOptionReference"},
+            "assignedTo": [],
+            "children": [],
+            "customFields": [],
+        }
+        cls.calls = []
+        cls.deleted = False
+
+    def get_projects(self):
+        return [{"id": 10, "name": "Vehicle"}]
+
+    def get_trackers(self, project_id: int):
+        return [{"id": 20, "name": "Requirements", "projectId": project_id}]
+
+    def get_tracker(self, tracker_id: int):
+        return {
+            "id": tracker_id,
+            "name": "Requirements",
+            "project": {"id": 10, "name": "Vehicle"},
+        }
+
+    def get_tracker_schema(self, tracker_id: int):
+        del tracker_id
+        return deepcopy(EDITOR_SCHEMA)
+
+    def get_tracker_children_page(self, tracker_id: int, *, page: int, page_size: int):
+        del tracker_id
+        if self.__class__.deleted:
+            items = []
+        else:
+            item = self.__class__.item
+            items = [
+                {
+                    "id": item["id"],
+                    "name": item["name"],
+                    "status": deepcopy(item["status"]),
+                    "version": item["version"],
+                    "hasChildren": False,
+                }
+            ]
+        return {
+            "page": page,
+            "pageSize": page_size,
+            "total": len(items),
+            "itemRefs": items,
+        }
+
+    def get_item(self, item_id: int):
+        self.__class__.calls.append(("get", item_id))
+        if self.__class__.deleted:
+            raise KeyError(item_id)
+        return deepcopy(self.__class__.item)
+
+    def update_item_fields(self, item_id: int, field_values: list[dict]):
+        self.__class__.calls.append(("update", item_id, deepcopy(field_values)))
+        for field_value in field_values:
+            if field_value["fieldId"] == 3:
+                self.__class__.item["name"] = field_value["value"]
+            elif field_value["fieldId"] == 7:
+                self.__class__.item["status"] = deepcopy(field_value["values"][0])
+        self.__class__.item["version"] += 1
+        return deepcopy(self.__class__.item)
+
+    def delete_item(self, item_id: int):
+        self.__class__.calls.append(("delete", item_id))
+        self.__class__.deleted = True
+        return {}
 
 
 class TrackerWorkspacePageTest(unittest.TestCase):
@@ -93,9 +207,22 @@ class TrackerWorkspacePageTest(unittest.TestCase):
 
         self.assertEqual(self.page.detail_title.text(), "Vehicle requirements")
         self.assertEqual(self.page.detail_id_badge.text(), "#9001001")
+        self.assertTrue(self.page.detail_refresh_button.isEnabled())
         self.assertIn("Top-level sample requirement", self.page.detail_description.toPlainText())
         self.assertGreaterEqual(self.page.detail_fields_table.rowCount(), 10)
         self.assertIn('"Risk Level"', self.page.detail_raw_json.toPlainText())
+
+    def test_test_mode_editor_loads_schema_but_disables_write_actions(self) -> None:
+        self.page.activate()
+        self.page.item_tree.setCurrentItem(self.page.item_tree.topLevelItem(0))
+        self.page.detail_tabs.setCurrentIndex(self.page.editor_tab_index)
+        self._app.processEvents()
+
+        self.assertGreater(self.page.editor_panel.field_table.rowCount(), 0)
+        self.assertFalse(self.page.editor_panel.save_button.isEnabled())
+        self.assertFalse(self.page.editor_panel.transition_button.isEnabled())
+        self.assertFalse(self.page.editor_panel.delete_button.isEnabled())
+        self.assertIn("테스트 모드", self.page.editor_panel.editor_status.text())
 
     def test_tracker_search_is_scoped_to_selected_tracker(self) -> None:
         self.page.activate()
@@ -178,6 +305,92 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.assertEqual(value.item_id, 9001001)
         self.assertEqual(value.tracker_id, 24680001)
         self.assertFalse(isinstance(value, dict))
+
+
+class TrackerWorkspaceWriteIntegrationTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        cls._app = QApplication.instance() or QApplication([])
+
+    def setUp(self) -> None:
+        EditableWorkspaceClient.reset()
+        self.settings = GuiSettings(
+            base_url="https://example.test/cb",
+            username="sample",
+            password="placeholder",
+        )
+        query_service = TrackerQueryService(client_factory=EditableWorkspaceClient)
+        editor_service = TrackerItemEditorService(
+            client_factory=EditableWorkspaceClient,
+            query_service=query_service,
+        )
+        self.page = TrackerWorkspacePage(
+            settings_provider=lambda: self.settings,
+            service=query_service,
+            editor_service=editor_service,
+            delete_confirmer=lambda detail: detail.item_id == 1001,
+            synchronous=True,
+        )
+        self.page.show()
+        self.page.activate()
+        self.page.item_tree.setCurrentItem(self.page.item_tree.topLevelItem(0))
+        self._app.processEvents()
+        self.page.detail_tabs.setCurrentIndex(self.page.editor_tab_index)
+        self._app.processEvents()
+
+    def tearDown(self) -> None:
+        self.page.close()
+        self._app.processEvents()
+
+    def test_field_update_status_transition_and_delete_refresh_visible_state(self) -> None:
+        from PySide6.QtCore import Qt
+
+        summary_row = self.page.editor_panel.rows[3]
+        self.page.editor_panel.field_table.item(summary_row.row, 0).setCheckState(
+            Qt.CheckState.Checked
+        )
+        summary_row.widget.setText("Changed summary")
+        self.page.editor_panel.save_button.click()
+
+        self.assertEqual(self.page.detail_title.text(), "Changed summary")
+        self.assertEqual(self.page.item_tree.topLevelItem(0).text(1), "Changed summary")
+        update_calls = [call for call in EditableWorkspaceClient.calls if call[0] == "update"]
+        self.assertEqual(update_calls[0][2][0]["fieldId"], 3)
+
+        target_index = self.page.editor_panel.status_combo.findData(2)
+        self.page.editor_panel.status_combo.setCurrentIndex(target_index)
+        self.page.editor_panel.transition_button.click()
+
+        self.assertEqual(self.page.item_tree.topLevelItem(0).text(2), "Review")
+        self.assertEqual(self.page.detail_fields_table.item(3, 1).text(), "Review")
+
+        self.page.editor_panel.delete_button.click()
+
+        self.assertTrue(EditableWorkspaceClient.deleted)
+        self.assertEqual(self.page.item_tree.topLevelItemCount(), 0)
+        self.assertEqual(self.page.detail_title.text(), "아이템 상세")
+        self.assertIn(("delete", 1001), EditableWorkspaceClient.calls)
+
+    def test_version_conflict_keeps_editor_and_visible_item_unchanged(self) -> None:
+        from PySide6.QtCore import Qt
+
+        summary_row = self.page.editor_panel.rows[3]
+        self.page.editor_panel.field_table.item(summary_row.row, 0).setCheckState(
+            Qt.CheckState.Checked
+        )
+        summary_row.widget.setText("Should not save")
+        EditableWorkspaceClient.item["version"] = 9
+
+        self.page.editor_panel.save_button.click()
+
+        self.assertEqual(self.page.detail_title.text(), "Original summary")
+        self.assertEqual(self.page.item_tree.topLevelItem(0).text(1), "Original summary")
+        self.assertIn("다른 사용자가", self.page.workspace_status_label.text())
+        self.assertFalse(
+            any(call[0] == "update" for call in EditableWorkspaceClient.calls)
+        )
 
 
 if __name__ == "__main__":

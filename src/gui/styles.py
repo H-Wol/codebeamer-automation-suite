@@ -196,6 +196,46 @@ QLabel#tracker_detail_section_title {
     font-weight: 700;
 }
 
+QLabel#tracker_editor_status {
+    min-height: 20px;
+    color: #425466;
+    padding: 5px 7px;
+    background: #F4F8FC;
+    border: 1px solid #D8E1EA;
+    border-radius: 8px;
+}
+
+QLabel#tracker_editor_status[tone="loading"] {
+    color: #0E4A84;
+    background: #EAF4FB;
+    border-color: #CBE4F3;
+}
+
+QLabel#tracker_editor_status[tone="warning"] {
+    color: #8A4B08;
+    background: #FFF3DC;
+    border-color: #F1D49A;
+}
+
+QLabel#tracker_editor_status[tone="error"] {
+    color: #A93636;
+    background: #FDEEEE;
+    border-color: #F2C9C9;
+}
+
+QLabel#tracker_current_status {
+    color: #0E4A84;
+    background: #EAF4FB;
+    border: 1px solid #CBE4F3;
+    border-radius: 9px;
+    padding: 3px 7px;
+    font-weight: 700;
+}
+
+QDialog#tracker_delete_dialog {
+    background: #F4F7FB;
+}
+
 QTreeWidget#tracker_item_tree {
     background: #FFFFFF;
     color: #13263A;
@@ -794,6 +834,17 @@ QLabel#tracker_detail_breadcrumb {
 
 QLabel#tracker_workspace_status[tone="loading"] {
     color: #0B6E70;
+}
+
+QLabel#tracker_editor_status[tone="loading"],
+QLabel#tracker_current_status {
+    color: #0B6E70;
+    background: #E5F7F6;
+    border-color: #BFE6E2;
+}
+
+QDialog#tracker_delete_dialog {
+    background: #F2FBFC;
 }
 
 QTreeWidget#tracker_item_tree {

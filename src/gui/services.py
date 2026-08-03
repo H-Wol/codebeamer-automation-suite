@@ -17,6 +17,7 @@ from .upload_context import MappingContext
 from .upload_context import RootItemPreviewContext
 from .upload_context import ValidationContext
 from .tracker_query_service import TrackerQueryService
+from .tracker_item_editor import TrackerItemEditorService
 
 __all__ = [
     "DEFAULT_TRACKER_ITEM_ID_REGEX",
@@ -34,6 +35,7 @@ __all__ = [
     "ROOT_SOURCE_GROUP_VALUE",
     "RootItemPreviewContext",
     "TrackerQueryService",
+    "TrackerItemEditorService",
     "ValidationContext",
     "gui_display_text",
 ]

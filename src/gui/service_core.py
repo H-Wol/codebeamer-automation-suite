@@ -489,6 +489,18 @@ class OfflineGuiClient:
         del item_id, payload
         raise RuntimeError("테스트 모드에서는 업데이트를 실행할 수 없습니다. Dry Run만 사용해야 합니다.")
 
+    def update_item_fields(
+        self,
+        item_id: int,
+        field_values: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        del item_id, field_values
+        raise RuntimeError("테스트 모드에서는 필드 수정을 실행할 수 없습니다.")
+
+    def delete_item(self, item_id: int) -> dict[str, Any]:
+        del item_id
+        raise RuntimeError("테스트 모드에서는 아이템 삭제를 실행할 수 없습니다.")
+
     def get_item(self, item_id: int) -> dict[str, Any]:
         """`get_item` 값을 반환한다."""
         self._require_query_data()

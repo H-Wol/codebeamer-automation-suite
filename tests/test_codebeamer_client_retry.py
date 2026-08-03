@@ -41,6 +41,14 @@ class RetryingClient(CodebeamerClient):
             raise response
         return response
 
+    def _delete(self, path: str, params: dict | None = None):
+        del path, params
+        self.calls += 1
+        response = self._responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
 
 class CodebeamerClientRetryTest(unittest.TestCase):
     def test_create_item_retries_with_configured_delay_multiples(self) -> None:
@@ -114,6 +122,24 @@ class CodebeamerClientRetryTest(unittest.TestCase):
         self.assertEqual(result["items"], [])
         self.assertEqual(client.calls, 2)
         self.assertEqual(slept, [0.5])
+
+    def test_delete_item_reuses_rate_limit_retry_policy(self) -> None:
+        slept: list[float] = []
+        client = RetryingClient(
+            [_RateLimitError(), {}],
+            base_url="https://example.com/cb",
+            username="user",
+            password="pass",
+            rate_limit_retry_delay_seconds=0.75,
+            rate_limit_max_retries=2,
+            sleep_fn=slept.append,
+        )
+
+        result = client.delete_item(456)
+
+        self.assertEqual(result, {})
+        self.assertEqual(client.calls, 2)
+        self.assertEqual(slept, [0.75])
 
 
 if __name__ == "__main__":

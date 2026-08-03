@@ -68,6 +68,19 @@ class CodebeamerClient:
             resp.raise_for_status()
             return resp.json()
 
+    def _delete(self, path: str, params: dict | None = None) -> Any:
+        """DELETE 요청을 보내고 본문이 없으면 빈 객체를 돌려준다."""
+        url = f"{self.base_url}{path}"
+        with self._session() as s:
+            resp = s.delete(url, params=params)
+            resp.raise_for_status()
+            if not resp.content:
+                return {}
+            try:
+                return resp.json()
+            except ValueError:
+                return {}
+
     @staticmethod
     def _extract_user_payloads(data: Any) -> list[dict[str, Any]]:
         """사용자 검색 응답에서 실제 사용자 목록만 골라낸다."""
@@ -413,6 +426,23 @@ class CodebeamerClient:
         return self._run_rate_limited_request(
             "update_item",
             lambda: self._put(f"/v3/items/{int(item_id)}", json_body=payload),
+        )
+
+    def update_item_fields(self, item_id: int, field_values: list[dict]) -> dict:
+        """지정한 필드만 갱신하고 나머지 아이템 상태는 유지한다."""
+        return self._run_rate_limited_request(
+            "update_item_fields",
+            lambda: self._put(
+                f"/v3/items/{int(item_id)}/fields",
+                json_body={"fieldValues": list(field_values)},
+            ),
+        )
+
+    def delete_item(self, item_id: int) -> dict:
+        """트래커 아이템 한 개를 삭제한다."""
+        return self._run_rate_limited_request(
+            "delete_item",
+            lambda: self._delete(f"/v3/items/{int(item_id)}"),
         )
 
     def _run_rate_limited_request(self, request_name: str, request_func) -> Any:

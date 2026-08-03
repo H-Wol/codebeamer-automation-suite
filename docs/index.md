@@ -12,11 +12,12 @@
 6. [필드 지원 추가 가이드](./field-support-guide.md)
 7. [GUI 사용 가이드](./gui-plan.md)
 8. [트래커 조회 서비스 계약](./tracker-query-service.md)
-9. [트러블슈팅](./troubleshooting.md)
-10. [호환 경로 감사](./compatibility.md)
-11. [샘플 데이터 및 자격증명 감사](./security-audit.md)
-12. [GUI 리팩토링 진행 및 검증 기록](./refactoring-progress.md)
-13. [v2 변경 사항](./v2-changes.md)
+9. [트래커 아이템 수정·상태 전환·삭제](./tracker-item-editor.md)
+10. [트러블슈팅](./troubleshooting.md)
+11. [호환 경로 감사](./compatibility.md)
+12. [샘플 데이터 및 자격증명 감사](./security-audit.md)
+13. [GUI 리팩토링 진행 및 검증 기록](./refactoring-progress.md)
+14. [v2 변경 사항](./v2-changes.md)
 
 ## 문서별 역할
 
@@ -42,6 +43,8 @@
   최상위 앱 셸, 배치 작업의 실제 단계별 사용 흐름, 테스트 모드, 다중 파일 업로드, 상단 데이터 설정, 현재 구현 범위를 정리합니다.
 - [트래커 조회 서비스 계약](./tracker-query-service.md)
   tracker 범위 검색, 계층·상세·ID 경로 모델, pagination 차이와 익명 조회 fixture 계약을 정리합니다.
+- [트래커 아이템 수정·상태 전환·삭제](./tracker-item-editor.md)
+  schema 기반 부분 수정, version 충돌 확인, 상태 전환과 삭제 안전장치를 정리합니다.
 
 - [트러블슈팅](./troubleshooting.md)
   자주 발생하는 에러와 대응 방법을 정리합니다.
@@ -78,6 +81,8 @@
   tracker 범위 검색, pagination, 계층·상세·ID 경로의 UI 독립 조회 계약을 담당합니다.
 - `src/gui/tracker_workspace.py`
   프로젝트·트래커 선택, 지연 로딩 확장형 트리, tracker 검색, ID 직접 접근과 상세 표시를 담당합니다.
+- `src/gui/tracker_item_editor.py`, `src/gui/tracker_item_editor_panel.py`
+  선택 필드 부분 수정, 상태 전환, 삭제 계약과 schema 기반 입력 UI를 담당합니다.
 - `src/gui/page_batch_settings.py`
   전역 설정과 분리된 배치 작업 mode 및 Excel 해석 기준을 담당합니다.
 - `cli_main.py`

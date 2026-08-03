@@ -49,6 +49,27 @@ class GuiOfflineSampleDataTest(unittest.TestCase):
         self.assertEqual(filters[0]["domainType"], "TRACKER")
         self.assertEqual(int(filters[0]["domainId"]), 24680001)
 
+    def test_query_snapshot_status_and_custom_fields_exist_in_editor_schema(self) -> None:
+        schema = json.loads((SAMPLE_DIR / "offline_schema.json").read_text(encoding="utf-8"))
+        query_data = json.loads(
+            (SAMPLE_DIR / "offline_tracker_items.json").read_text(encoding="utf-8")
+        )
+        fields_by_name = {
+            str(field.get("name")): field for field in schema.get("fields", [])
+        }
+        status_ids = {
+            int(option["id"]) for option in fields_by_name["Status"]["options"]
+        }
+        snapshot_status_ids = {
+            int(item["status"]["id"])
+            for item in query_data["items"]
+            if isinstance(item.get("status"), dict)
+        }
+
+        self.assertIn("Risk Level", fields_by_name)
+        self.assertEqual(status_ids, {201, 202, 203})
+        self.assertLessEqual(snapshot_status_ids, status_ids)
+
     def test_happy_path_sample_workbooks_load_in_gui_excel_service(self) -> None:
         service = GuiExcelService()
         brake_file = FILES_DIR / "SAMPLE_MODULE_A_TC_001.xlsx"

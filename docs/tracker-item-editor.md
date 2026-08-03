@@ -1,0 +1,94 @@
+# 트래커 아이템 수정·상태 전환·삭제
+
+## 목적
+
+`TrackerWorkspacePage`의 `수정` 탭은 선택한 아이템의 tracker schema를 기준으로 입력 UI를 만들고,
+체크한 필드만 부분 업데이트합니다. 상태 전환과 삭제는 일반 필드 저장과 분리합니다.
+관계, 댓글, 첨부와 이력 편집은 아직 이 범위에 포함하지 않습니다.
+
+## API 계약
+
+| 기능 | V3 endpoint | 구현 위치 |
+| --- | --- | --- |
+| 선택 필드 수정 | `PUT /v3/items/{itemId}/fields` | `CodebeamerClient.update_item_fields()` |
+| 상태 전환 | `PUT /v3/items/{itemId}/fields`의 Status `ChoiceFieldValue` | `TrackerItemEditorService.transition_status()` |
+| 아이템 삭제 | `DELETE /v3/items/{itemId}` | `CodebeamerClient.delete_item()` |
+
+전체 리소스용 `PUT /v3/items/{itemId}`는 요청 본문에 없는 상태를 지울 수 있으므로 작업공간 편집에서는
+사용하지 않습니다. PTC 문서가 안내하는 `fieldValues` 부분 업데이트만 사용합니다.
+
+참고:
+
+- [PTC Modifying Tracker Items](https://support.ptc.com/help/codebeamer/r3.0/en/codebeamer/developers_guide/swagger/dg_modifying_a_tracker_item.html)
+- [PTC Making a Tracker Item Status Transition](https://support.ptc.com/help/codebeamer/r2.2/en/codebeamer/developers_guide/dg_making_tracker_item_status_transition.html)
+- [PTC Deleting a Tracker Item](https://support.ptc.com/help/codebeamer/r2.2/en/codebeamer/developers_guide/dg_deleting_tracker_item.html)
+
+## 편집 흐름
+
+1. 계층 또는 검색 결과에서 아이템을 선택합니다.
+2. 상세 패널의 `수정` 탭을 엽니다.
+3. 화면이 현재 tracker schema를 조회해 필드별 입력 widget을 만듭니다.
+4. 변경할 필드만 `수정` 열에서 체크합니다.
+5. 현재 값과 새 값을 같은 행에서 비교하고 `선택한 필드 저장`을 누릅니다.
+6. 서비스가 저장 직전에 현재 item version을 다시 조회합니다.
+7. version이 같으면 체크한 필드의 `FieldValue`만 전송하고 상세를 다시 불러옵니다.
+8. 새 상세는 트리와 검색 결과에 즉시 반영되고 해당 tracker의 화면 캐시는 무효화됩니다.
+
+다른 사용자의 수정으로 version이 달라졌으면 저장·상태 전환·삭제를 실행하지 않고 최신 상세 재조회를
+요청합니다. 사용자는 상세 상단의 `상세 새로고침`으로 최신 version과 값을 다시 불러올 수 있습니다.
+이 확인은 쓰기 직전 충돌을 줄이지만 서버 lock을 획득하는 원자적 보장은 아닙니다.
+
+## 필드 지원 범위
+
+| schema 종류 | 입력 방식 | 동작 |
+| --- | --- | --- |
+| Text | 한 줄 입력 | `TextFieldValue.value` |
+| Description 계열 Text | 여러 줄 입력 | `TextFieldValue.value` |
+| Bool | `예` / `아니요` | `BoolFieldValue.value` |
+| Integer / Decimal | 숫자 입력 | schema `valueModel.value` |
+| Date / DateTime | ISO 형식 입력 | schema `valueModel.value` |
+| 정적 Choice option | 단일 또는 여러 선택 | `ChoiceFieldValue.values` |
+| referenceType이 명확한 Reference | 한 줄에 참조 ID 하나 | 해당 reference type의 `values` |
+| Status | 별도 상태 전환 선택기 | Status `ChoiceFieldValue.values` |
+
+다음 필드는 잘못된 payload를 만들지 않도록 편집을 막고 사유를 표시합니다.
+
+- `TableField`: 행과 열 구조 전용 편집기가 아직 없음
+- `MemberField`: user, role, group 유형이 섞여 있고 schema에서 단일 reference type을 결정할 수 없는 경우
+- 동적 option이지만 option/reference type을 확인할 수 없는 필드
+- hidden, read-only, server 관리 필드
+
+필수 필드를 비우거나, 단일값 필드에 여러 참조를 입력하거나, schema에 없는 option을 선택하면 서버에
+요청하기 전에 차단합니다.
+
+## 상태 전환
+
+- Status는 일반 필드 일괄 저장에 포함하지 않습니다.
+- schema의 Status options를 표시하고 현재 상태와 다른 값 하나만 선택할 수 있습니다.
+- 실제 workflow guard와 필수 필드 조건은 Codebeamer가 최종 검증합니다.
+- 허용되지 않은 전환이면 서버 오류를 안전한 사용자 메시지로 분류하고 기존 상세를 유지합니다.
+
+배치 create 후 Status transition 후처리는 별도 업로드 파이프라인 과제로 남아 있습니다. 이 화면의
+단건 상태 전환 구현이 배치 후처리까지 지원한다는 의미는 아닙니다.
+
+## 삭제 안전장치
+
+- 온라인 모드에서만 삭제 버튼을 활성화합니다.
+- 확인창에 대상 ID, 이름과 직접 하위 아이템 수를 표시합니다.
+- 사용자가 아이템 ID를 정확히 다시 입력해야 `영구 삭제` 버튼이 활성화됩니다.
+- 저장과 같은 version 재확인을 통과한 뒤 `DELETE`를 호출합니다.
+- 성공하면 현재 트리·검색 결과에서 행을 제거하고 상세 및 tracker 캐시를 비웁니다.
+
+삭제는 복구 기능을 제공하지 않습니다. 관계·연결 데이터 처리 방식은 서버 정책에 따르며, 관계 자체를
+개별 삭제하는 기능은 이번 범위에 포함하지 않습니다.
+
+## 테스트 모드
+
+테스트 모드에서는 schema 기반 입력 구조와 현재값 표시까지 확인할 수 있습니다. 다음 동작은 모두
+비활성화되며 서비스 계층에서도 한 번 더 차단합니다.
+
+- 선택 필드 저장
+- 상태 전환
+- 아이템 삭제
+
+이중 차단으로 UI 상태와 무관하게 offline snapshot이 실제 쓰기 경로로 사용되지 않도록 유지합니다.

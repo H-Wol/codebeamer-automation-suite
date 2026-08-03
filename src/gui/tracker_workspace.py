@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import replace
 import json
 from typing import Any
 from typing import Callable
@@ -28,6 +29,12 @@ except ImportError as exc:  # pragma: no cover - GUI dependency guard
     raise RuntimeError("GUI 실행에는 PySide6 패키지가 필요합니다.") from exc
 
 from .settings_store import GuiSettings
+from .tracker_item_editor import EditableTrackerField
+from .tracker_item_editor import TrackerItemEditorService
+from .tracker_item_editor import TrackerItemFieldChange
+from .tracker_item_editor import TrackerItemWriteError
+from .tracker_item_editor_panel import ConfirmItemDeleteDialog
+from .tracker_item_editor_panel import TrackerItemEditorPanel
 from .tracker_query_models import PageResult
 from .tracker_query_models import ProjectSummary
 from .tracker_query_models import TrackerItemContext
@@ -61,7 +68,9 @@ class TrackerWorkspacePage(QWidget):
         *,
         settings_provider: Callable[[], GuiSettings],
         service: TrackerQueryService | None = None,
+        editor_service: TrackerItemEditorService | None = None,
         open_settings: Callable[[], None] | None = None,
+        delete_confirmer: Callable[[TrackerItemDetail], bool] | None = None,
         task_factory=BackgroundTask,
         synchronous: bool = False,
         parent=None,
@@ -70,7 +79,11 @@ class TrackerWorkspacePage(QWidget):
         self.setObjectName("tracker_workspace_page")
         self.settings_provider = settings_provider
         self.service = service or TrackerQueryService()
+        self.editor_service = editor_service or TrackerItemEditorService(
+            query_service=self.service
+        )
         self.open_settings = open_settings
+        self.delete_confirmer = delete_confirmer
         self.task_factory = task_factory
         self.synchronous = bool(synchronous)
 
@@ -88,6 +101,8 @@ class TrackerWorkspacePage(QWidget):
         self._search_page = 1
         self._last_search_values: tuple[str, str, str] | None = None
         self._selected_item_id: int | None = None
+        self._current_detail: TrackerItemDetail | None = None
+        self._pre_editor_splitter_sizes: list[int] | None = None
 
         self._build_ui()
         self._reset_workspace("프로젝트와 트래커를 불러오면 조회를 시작할 수 있습니다.")
@@ -203,6 +218,11 @@ class TrackerWorkspacePage(QWidget):
         self.detail_title = QLabel("아이템 상세")
         self.detail_title.setObjectName("tracker_detail_title")
         detail_heading.addWidget(self.detail_title, 1)
+        self.detail_refresh_button = QPushButton("상세 새로고침", detail_panel)
+        self.detail_refresh_button.setToolTip("현재 아이템의 최신 version과 필드를 다시 조회합니다.")
+        self.detail_refresh_button.clicked.connect(self._reload_current_detail)
+        self.detail_refresh_button.setEnabled(False)
+        detail_heading.addWidget(self.detail_refresh_button)
         self.detail_id_badge = QLabel("")
         self.detail_id_badge.setObjectName("application_phase_badge")
         self.detail_id_badge.hide()
@@ -224,6 +244,14 @@ class TrackerWorkspacePage(QWidget):
         self.detail_tabs.setObjectName("tracker_detail_tabs")
         self.detail_tabs.addTab(self._build_overview_tab(), "개요")
         self.detail_tabs.addTab(self._build_raw_tab(), "원본 JSON")
+        self.editor_panel = TrackerItemEditorPanel(
+            save_requested=self._save_item_changes,
+            transition_requested=self._transition_item_status,
+            delete_requested=self._delete_current_item,
+            parent=self.detail_tabs,
+        )
+        self.editor_tab_index = self.detail_tabs.addTab(self.editor_panel, "수정")
+        self.detail_tabs.currentChanged.connect(self._on_detail_tab_changed)
         detail_layout.addWidget(self.detail_tabs, 1)
 
         splitter.addWidget(browser_panel)
@@ -481,6 +509,7 @@ class TrackerWorkspacePage(QWidget):
         self._root_page = 1
         self._search_page = 1
         self._selected_item_id = None
+        self._current_detail = None
         self._reset_detail()
         self._reset_workspace("프로젝트와 트래커를 불러오는 중입니다.")
 
@@ -566,7 +595,7 @@ class TrackerWorkspacePage(QWidget):
         return token
 
     def _show_error(self, exc: Exception, *, prefix: str = "") -> None:
-        if isinstance(exc, TrackerQueryServiceError):
+        if isinstance(exc, (TrackerQueryServiceError, TrackerItemWriteError)):
             message = str(exc)
         elif isinstance(exc, ValueError):
             message = str(exc)
@@ -941,6 +970,7 @@ class TrackerWorkspacePage(QWidget):
         self._selected_item_id = normalized_id
         settings = self.settings_provider()
         self.detail_title.setText("아이템 상세를 불러오는 중입니다.")
+        self.detail_refresh_button.setEnabled(False)
         self.detail_id_badge.setText(f"#{normalized_id}")
         self.detail_id_badge.show()
 
@@ -953,6 +983,7 @@ class TrackerWorkspacePage(QWidget):
             if self._selected_item_id != normalized_id:
                 return
             self.detail_title.setText("아이템 상세")
+            self.detail_refresh_button.setEnabled(True)
             self.detail_breadcrumb.setText(f"#{normalized_id} 상세를 불러오지 못했습니다.")
             self._show_error(exc, prefix="상세 조회 실패")
 
@@ -962,6 +993,10 @@ class TrackerWorkspacePage(QWidget):
             loaded,
             failed,
         )
+
+    def _reload_current_detail(self) -> None:
+        if self._selected_item_id is not None:
+            self._load_detail(self._selected_item_id)
 
     def _run_search(self, *, page: int = 1, reuse: bool = False) -> None:
         tracker = self._current_tracker
@@ -1186,8 +1221,11 @@ class TrackerWorkspacePage(QWidget):
 
     def _render_detail(self, detail: TrackerItemDetail) -> None:
         summary = detail.summary
+        previous_editor_detail = self.editor_panel.detail
+        self._current_detail = detail
         self._selected_item_id = detail.item_id
         self.detail_title.setText(summary.name)
+        self.detail_refresh_button.setEnabled(True)
         self.detail_id_badge.setText(f"#{detail.item_id}")
         self.detail_id_badge.show()
         breadcrumb_parts = [
@@ -1232,9 +1270,19 @@ class TrackerWorkspacePage(QWidget):
         for row, values in enumerate(rows):
             for column, value in enumerate(values):
                 self.detail_fields_table.setItem(row, column, QTableWidgetItem(value))
+        if (
+            previous_editor_detail is None
+            or previous_editor_detail.item_id != detail.item_id
+            or previous_editor_detail.version != detail.version
+        ):
+            self.editor_panel.clear()
+        if self.detail_tabs.currentIndex() == self.editor_tab_index:
+            self._load_editor_schema(detail)
 
     def _reset_detail(self) -> None:
+        self._current_detail = None
         self.detail_title.setText("아이템 상세")
+        self.detail_refresh_button.setEnabled(False)
         self.detail_id_badge.hide()
         self.detail_breadcrumb.setText("계층 또는 검색 결과에서 아이템을 선택하세요.")
         self.detail_warning.clear()
@@ -1242,6 +1290,264 @@ class TrackerWorkspacePage(QWidget):
         self.detail_description.clear()
         self.detail_fields_table.setRowCount(0)
         self.detail_raw_json.clear()
+        self.editor_panel.clear()
+
+    def _on_detail_tab_changed(self, index: int) -> None:
+        if int(index) != self.editor_tab_index:
+            if self._pre_editor_splitter_sizes is not None:
+                self.workspace_splitter.setSizes(self._pre_editor_splitter_sizes)
+                self._pre_editor_splitter_sizes = None
+            return
+        if self._pre_editor_splitter_sizes is None:
+            self._pre_editor_splitter_sizes = self.workspace_splitter.sizes()
+        available_width = sum(self.workspace_splitter.sizes())
+        if available_width > 0:
+            browser_width = max(300, int(available_width * 0.38))
+            detail_width = max(300, available_width - browser_width)
+            self.workspace_splitter.setSizes([browser_width, detail_width])
+        if self._current_detail is None:
+            return
+        editor_detail = self.editor_panel.detail
+        if (
+            editor_detail is not None
+            and editor_detail.item_id == self._current_detail.item_id
+            and editor_detail.version == self._current_detail.version
+        ):
+            return
+        self._load_editor_schema(self._current_detail)
+
+    def _load_editor_schema(self, detail: TrackerItemDetail) -> None:
+        item_id = detail.item_id
+        version = detail.version
+        settings = self.settings_provider()
+        self.editor_panel.set_loading("트래커 schema와 편집 가능한 필드를 확인하는 중입니다.")
+
+        def loaded(schema) -> None:
+            current = self._current_detail
+            if current is None or current.item_id != item_id or current.version != version:
+                return
+            self.editor_panel.set_context(
+                current,
+                schema,
+                write_enabled=not bool(settings.offline_mode),
+            )
+
+        def failed(exc: Exception) -> None:
+            current = self._current_detail
+            if current is None or current.item_id != item_id:
+                return
+            self.editor_panel.set_error(str(exc) or "편집 필드를 불러오지 못했습니다.")
+            self._show_error(exc, prefix="편집 schema 조회 실패")
+
+        self._submit(
+            "editor_schema",
+            lambda: self.editor_service.load_schema(settings, detail),
+            loaded,
+            failed,
+        )
+
+    def _save_item_changes(
+        self,
+        changes: tuple[TrackerItemFieldChange, ...],
+    ) -> None:
+        detail = self._current_detail
+        if detail is None:
+            return
+        settings = self.settings_provider()
+        item_id = detail.item_id
+        self.editor_panel.set_busy(True)
+        self.editor_panel.editor_status.setText(
+            f"#{item_id}의 선택한 필드 {len(changes)}개를 저장하는 중입니다."
+        )
+
+        def loaded(updated_detail: TrackerItemDetail) -> None:
+            self._refresh_visible_item(updated_detail)
+            self._render_detail(updated_detail)
+            self._set_workspace_status(
+                f"#{item_id}의 필드 {len(changes)}개를 저장했습니다."
+            )
+
+        def failed(exc: Exception) -> None:
+            self.editor_panel.set_busy(False)
+            self.editor_panel.set_error(str(exc) or "필드 저장에 실패했습니다.")
+            self._show_error(exc, prefix="필드 저장 실패")
+
+        self._submit(
+            "item_write",
+            lambda: self.editor_service.update_fields(
+                settings,
+                item_id=item_id,
+                expected_version=detail.version,
+                changes=changes,
+            ),
+            loaded,
+            failed,
+        )
+
+    def _transition_item_status(
+        self,
+        status_field: EditableTrackerField,
+        option_id: int,
+    ) -> None:
+        detail = self._current_detail
+        if detail is None:
+            return
+        settings = self.settings_provider()
+        item_id = detail.item_id
+        target_option = next(
+            (option for option in status_field.options if option.option_id == int(option_id)),
+            None,
+        )
+        target_name = target_option.name if target_option is not None else str(option_id)
+        self.editor_panel.set_busy(True)
+        self.editor_panel.editor_status.setText(
+            f"#{item_id} 상태를 '{target_name}'(으)로 전환하는 중입니다."
+        )
+
+        def loaded(updated_detail: TrackerItemDetail) -> None:
+            self._refresh_visible_item(updated_detail)
+            self._render_detail(updated_detail)
+            self._set_workspace_status(
+                f"#{item_id} 상태를 '{updated_detail.summary.status or target_name}'(으)로 전환했습니다."
+            )
+
+        def failed(exc: Exception) -> None:
+            self.editor_panel.set_busy(False)
+            self.editor_panel.set_error(str(exc) or "상태 전환에 실패했습니다.")
+            self._show_error(exc, prefix="상태 전환 실패")
+
+        self._submit(
+            "item_write",
+            lambda: self.editor_service.transition_status(
+                settings,
+                item_id=item_id,
+                expected_version=detail.version,
+                status_field=status_field,
+                option_id=int(option_id),
+            ),
+            loaded,
+            failed,
+        )
+
+    def _delete_current_item(self) -> None:
+        detail = self._current_detail
+        if detail is None:
+            return
+        confirmer = self.delete_confirmer
+        confirmed = (
+            bool(confirmer(detail))
+            if confirmer is not None
+            else ConfirmItemDeleteDialog.confirm(detail, self)
+        )
+        if not confirmed:
+            return
+        settings = self.settings_provider()
+        item_id = detail.item_id
+        tracker_id = detail.summary.tracker_id
+        self.editor_panel.set_busy(True)
+        self.editor_panel.editor_status.setText(f"#{item_id}을(를) 삭제하는 중입니다.")
+
+        def loaded(result: Any) -> None:
+            del result
+            self._remove_visible_item(item_id)
+            if tracker_id is not None:
+                self._invalidate_tracker_cache(int(tracker_id))
+            self._selected_item_id = None
+            self._reset_detail()
+            self._set_workspace_status(f"#{item_id}을(를) 삭제했습니다.")
+
+        def failed(exc: Exception) -> None:
+            self.editor_panel.set_busy(False)
+            self.editor_panel.set_error(str(exc) or "아이템 삭제에 실패했습니다.")
+            self._show_error(exc, prefix="아이템 삭제 실패")
+
+        self._submit(
+            "item_write",
+            lambda: self.editor_service.delete_item(
+                settings,
+                item_id=item_id,
+                expected_version=detail.version,
+            ),
+            loaded,
+            failed,
+        )
+
+    def _invalidate_tracker_cache(self, tracker_id: int) -> None:
+        for key in tuple(self._root_cache):
+            if key[0] == int(tracker_id):
+                self._root_cache.pop(key, None)
+        self._child_cache.clear()
+
+    def _refresh_visible_item(self, detail: TrackerItemDetail) -> None:
+        summary = detail.summary
+        if summary.tracker_id is not None:
+            self._invalidate_tracker_cache(summary.tracker_id)
+
+        def update_tree_item(item: QTreeWidgetItem) -> None:
+            existing = item.data(0, ITEM_SUMMARY_ROLE)
+            if isinstance(existing, TrackerItemSummary) and existing.item_id == detail.item_id:
+                updated = replace(
+                    existing,
+                    name=summary.name,
+                    status=summary.status,
+                    assignees=summary.assignees,
+                    modified_at=summary.modified_at,
+                    version=summary.version,
+                )
+                item.setData(0, ITEM_SUMMARY_ROLE, updated)
+                item.setText(1, updated.name)
+                item.setText(2, updated.status or "-")
+                item.setText(3, ", ".join(updated.assignees) or "-")
+            for child_index in range(item.childCount()):
+                update_tree_item(item.child(child_index))
+
+        for top_index in range(self.item_tree.topLevelItemCount()):
+            update_tree_item(self.item_tree.topLevelItem(top_index))
+
+        for row in range(self.search_table.rowCount()):
+            id_item = self.search_table.item(row, 0)
+            existing = id_item.data(ITEM_SUMMARY_ROLE) if id_item is not None else None
+            if not isinstance(existing, TrackerItemSummary) or existing.item_id != detail.item_id:
+                continue
+            updated = replace(
+                existing,
+                name=summary.name,
+                status=summary.status,
+                assignees=summary.assignees,
+                modified_at=summary.modified_at,
+                version=summary.version,
+            )
+            id_item.setData(ITEM_SUMMARY_ROLE, updated)
+            self.search_table.item(row, 1).setText(updated.name)
+            self.search_table.item(row, 2).setText(updated.status or "-")
+            self.search_table.item(row, 3).setText(", ".join(updated.assignees) or "-")
+
+    def _remove_visible_item(self, item_id: int) -> None:
+        def remove_from(parent: QTreeWidgetItem | None) -> bool:
+            count = self.item_tree.topLevelItemCount() if parent is None else parent.childCount()
+            for index in range(count - 1, -1, -1):
+                item = (
+                    self.item_tree.topLevelItem(index)
+                    if parent is None
+                    else parent.child(index)
+                )
+                summary = item.data(0, ITEM_SUMMARY_ROLE)
+                if isinstance(summary, TrackerItemSummary) and summary.item_id == int(item_id):
+                    if parent is None:
+                        self.item_tree.takeTopLevelItem(index)
+                    else:
+                        parent.takeChild(index)
+                    return True
+                if remove_from(item):
+                    return True
+            return False
+
+        remove_from(None)
+        for row in range(self.search_table.rowCount() - 1, -1, -1):
+            id_item = self.search_table.item(row, 0)
+            summary = id_item.data(ITEM_SUMMARY_ROLE) if id_item is not None else None
+            if isinstance(summary, TrackerItemSummary) and summary.item_id == int(item_id):
+                self.search_table.removeRow(row)
 
     def shutdown(self) -> None:
         """창 종료 뒤 완료되는 요청이 화면 상태를 갱신하지 않도록 무효화한다."""
