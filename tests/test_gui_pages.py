@@ -26,6 +26,7 @@ from src.gui.pages import create_upload_page
 from src.gui.pages import create_validation_page
 from src.gui.page_batch_settings import create_batch_settings_page
 from src.gui.settings_store import GuiSettings
+from src.gui.styles import build_gui_stylesheet
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -180,6 +181,53 @@ class GuiPagesUploadPageTest(unittest.TestCase):
             page.tracker_item_table.sizePolicy().verticalPolicy(),
             self._expanding_policy,
         )
+
+    def test_mapping_table_checkbox_is_visible_and_clickable(self) -> None:
+        from PySide6.QtWidgets import QStyle
+        from PySide6.QtWidgets import QStyleOptionButton
+
+        page = create_mapping_page(lambda *_args: None)
+        page.load_context(
+            "create",
+            ["Summary"],
+            pd.DataFrame([
+                {
+                    "field_name": "Summary",
+                    "field_type": "TextField",
+                    "multiple_values": False,
+                    "is_supported": True,
+                }
+            ]),
+            {"Summary": "Summary"},
+            {"Summary": {"create": True, "update": False}},
+            [],
+            {},
+            {},
+            {},
+        )
+        previous_stylesheet = self._app.styleSheet()
+        try:
+            self._app.setStyleSheet(build_gui_stylesheet("kefico"))
+            page.show()
+            self._app.processEvents()
+
+            checkbox = page.mapping_table.cellWidget(0, 0)
+            option = QStyleOptionButton()
+            checkbox.initStyleOption(option)
+            indicator_rect = checkbox.style().subElementRect(
+                QStyle.SubElement.SE_CheckBoxIndicator,
+                option,
+                checkbox,
+            )
+
+            self.assertGreaterEqual(indicator_rect.width(), 15)
+            self.assertGreaterEqual(indicator_rect.height(), 15)
+            self.assertTrue(checkbox.isChecked())
+            checkbox.click()
+            self.assertFalse(checkbox.isChecked())
+        finally:
+            page.close()
+            self._app.setStyleSheet(previous_stylesheet)
 
     def test_root_item_page_is_a_concrete_widget_subclass(self) -> None:
         page = create_root_item_page(lambda *_args: None)

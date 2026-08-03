@@ -5,6 +5,7 @@ from pathlib import Path
 
 _ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 _COMBO_ARROW_PATH = (_ASSETS_DIR / "chevron-down.svg").as_posix()
+_CHECKMARK_PATH = (_ASSETS_DIR / "checkmark.svg").as_posix()
 
 DEFAULT_GUI_THEME = "kefico"
 GUI_THEME_LABELS = {
@@ -758,20 +759,55 @@ QTabBar::tab:!selected:hover {
 }
 
 QTableWidget {
+    color: #13263A;
     gridline-color: #E6EDF4;
     alternate-background-color: #F8FBFD;
     selection-background-color: #DCEFFD;
     selection-color: #13263A;
 }
 
+QTableWidget::item {
+    color: #13263A;
+}
+
+QTableWidget::item:selected {
+    color: #13263A;
+}
+
+QTableWidget:disabled {
+    color: #7E8B99;
+    background: #F5F8FB;
+}
+
+QTableWidget::item:disabled {
+    color: #7E8B99;
+}
+
+QHeaderView {
+    background-color: #EEF4F9;
+}
+
 QHeaderView::section {
-    background: #EEF4F9;
+    background-color: #EEF4F9;
     color: #425466;
     border: none;
     border-right: 1px solid #D8E1EA;
     border-bottom: 1px solid #D8E1EA;
     padding: 4px 5px;
     font-weight: 700;
+}
+
+QHeaderView::section:vertical {
+    background-color: #EEF4F9;
+    color: #425466;
+    border-right: 1px solid #D8E1EA;
+    border-bottom: 1px solid #D8E1EA;
+}
+
+QTableCornerButton::section {
+    background-color: #EEF4F9;
+    border-right: 1px solid #D8E1EA;
+    border-bottom: 1px solid #D8E1EA;
 }
 
 QProgressBar {
@@ -795,6 +831,40 @@ QProgressBar#busy_progress {
 QCheckBox {
     spacing: 6px;
     color: #13263A;
+}
+
+QCheckBox::indicator {
+    width: 15px;
+    height: 15px;
+    border: 1px solid #8FA2B5;
+    border-radius: 4px;
+    background-color: #FFFFFF;
+}
+
+QCheckBox::indicator:hover {
+    border-color: #00A7D6;
+    background-color: #F4FAFD;
+}
+
+QCheckBox::indicator:checked {
+    image: url("{checkmark}");
+    border-color: #0E4A84;
+    background-color: #0E4A84;
+}
+
+QCheckBox::indicator:disabled {
+    border-color: #CBD6E1;
+    background-color: #EEF2F6;
+}
+
+QCheckBox::indicator:checked:disabled {
+    image: url("{checkmark}");
+    border-color: #A9BBCD;
+    background-color: #A9BBCD;
+}
+
+QTableWidget QCheckBox {
+    background: transparent;
 }
 
 QCheckBox:disabled {
@@ -833,6 +903,7 @@ QScrollBar::sub-page:vertical {
 }
 """
 _BASE_GUI_STYLESHEET = _BASE_GUI_STYLESHEET.replace("{combo_arrow}", _COMBO_ARROW_PATH)
+_BASE_GUI_STYLESHEET = _BASE_GUI_STYLESHEET.replace("{checkmark}", _CHECKMARK_PATH)
 
 _IGLOO_THEME_OVERRIDES = """
 QMainWindow {
@@ -1132,14 +1203,49 @@ QTableWidget, QPlainTextEdit, QTextBrowser, QTabWidget::pane {
 }
 
 QTableWidget {
+    color: #153A3F;
     gridline-color: #E4EFF1;
     alternate-background-color: #F7FCFC;
     selection-background-color: #D9F0EF;
 }
 
+QTableWidget::item {
+    color: #153A3F;
+}
+
+QTableWidget::item:selected {
+    color: #153A3F;
+}
+
+QTableWidget:disabled {
+    color: #6E8488;
+    background: #F5FAFA;
+}
+
+QTableWidget::item:disabled {
+    color: #6E8488;
+}
+
+QHeaderView {
+    background-color: #EEF8F9;
+}
+
 QHeaderView::section {
-    background: #EEF8F9;
+    background-color: #EEF8F9;
     color: #486368;
+    border-right: 1px solid #D3E7E9;
+    border-bottom: 1px solid #D3E7E9;
+}
+
+QHeaderView::section:vertical {
+    background-color: #EEF8F9;
+    color: #486368;
+    border-right: 1px solid #D3E7E9;
+    border-bottom: 1px solid #D3E7E9;
+}
+
+QTableCornerButton::section {
+    background-color: #EEF8F9;
     border-right: 1px solid #D3E7E9;
     border-bottom: 1px solid #D3E7E9;
 }
@@ -1151,6 +1257,21 @@ QProgressBar {
 
 QProgressBar::chunk {
     background: #16B3AC;
+}
+
+QCheckBox::indicator:hover {
+    border-color: #16B3AC;
+    background-color: #F1FAFB;
+}
+
+QCheckBox::indicator:checked {
+    border-color: #0B6E70;
+    background-color: #0B6E70;
+}
+
+QCheckBox::indicator:checked:disabled {
+    border-color: #AAC8C8;
+    background-color: #AAC8C8;
 }
 
 QStatusBar {
