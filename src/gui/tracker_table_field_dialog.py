@@ -139,6 +139,7 @@ class TrackerTableFieldDialog(QDialog):
         self.rows = _row_payloads(field.raw_value)
         self.columns = _column_payloads(field.raw_value, self.rows)
         self.setWindowTitle(f"{field.name} · 테이블 보기")
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
         self.setMinimumSize(720, 440)
         self.resize(920, 600)
 
@@ -157,6 +158,17 @@ class TrackerTableFieldDialog(QDialog):
         )
         self.fit_columns_button.clicked.connect(self._fit_columns_to_contents)
         header.addWidget(self.fit_columns_button)
+        self.fit_rows_button = QPushButton("행 높이 맞춤", self)
+        self.fit_rows_button.setToolTip(
+            "내용에 맞게 행 높이를 다시 조정합니다. "
+            "행 번호 경계를 드래그해 직접 조정할 수도 있습니다."
+        )
+        self.fit_rows_button.clicked.connect(self._fit_rows_to_contents)
+        header.addWidget(self.fit_rows_button)
+        self.fullscreen_button = QPushButton("전체 화면", self)
+        self.fullscreen_button.setCheckable(True)
+        self.fullscreen_button.toggled.connect(self._set_fullscreen)
+        header.addWidget(self.fullscreen_button)
         self.source_toggle = QPushButton("Wiki 원문", self)
         self.source_toggle.setObjectName("mode_toggle")
         self.source_toggle.setCheckable(True)
@@ -178,7 +190,11 @@ class TrackerTableFieldDialog(QDialog):
             QAbstractItemView.ScrollMode.ScrollPerPixel
         )
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        self.table.verticalHeader().setVisible(False)
+        row_header = self.table.verticalHeader()
+        row_header.setVisible(True)
+        row_header.setMinimumSectionSize(24)
+        row_header.setDefaultSectionSize(36)
+        row_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         table_header = self.table.horizontalHeader()
         table_header.setMinimumSectionSize(80)
         table_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
@@ -193,6 +209,7 @@ class TrackerTableFieldDialog(QDialog):
         layout.addWidget(buttons)
         self._populate(False)
         self._fit_columns_to_contents()
+        self._fit_rows_to_contents()
 
     def _cell_for_column(
         self,
@@ -208,10 +225,16 @@ class TrackerTableFieldDialog(QDialog):
         return None
 
     def _populate(self, show_source: bool = False) -> None:
+        previous_row_heights = [
+            self.table.rowHeight(index) for index in range(self.table.rowCount())
+        ]
         self.source_toggle.setText("렌더링 보기" if show_source else "Wiki 원문")
         self.table.clear()
         self.table.setRowCount(len(self.rows))
         self.table.setColumnCount(len(self.columns))
+        self.table.setVerticalHeaderLabels(
+            [str(index + 1) for index in range(len(self.rows))]
+        )
         self.table.setHorizontalHeaderLabels(
             [
                 str(column.get("name") or f"열 {index + 1}")
@@ -242,11 +265,8 @@ class TrackerTableFieldDialog(QDialog):
                 label.setText(codebeamer_wiki_to_html(text))
                 item.setText("")
                 self.table.setCellWidget(row_index, column_index, label)
-                self.table.setRowHeight(
-                    row_index,
-                    max(self.table.rowHeight(row_index), 36),
-                )
-        self.table.resizeRowsToContents()
+        for row_index, height in enumerate(previous_row_heights[: len(self.rows)]):
+            self.table.setRowHeight(row_index, height)
 
     def _fit_columns_to_contents(self, _checked: bool = False) -> None:
         column_count = self.table.columnCount()
@@ -269,7 +289,16 @@ class TrackerTableFieldDialog(QDialog):
                     max(preferred_width, content_width),
                 ),
             )
+
+    def _fit_rows_to_contents(self, _checked: bool = False) -> None:
         self.table.resizeRowsToContents()
+
+    def _set_fullscreen(self, enabled: bool) -> None:
+        self.fullscreen_button.setText("창 모드" if enabled else "전체 화면")
+        if enabled:
+            self.showFullScreen()
+            return
+        self.showNormal()
 
 
 __all__ = [

@@ -108,6 +108,34 @@ class TrackerTableFieldDialogTest(unittest.TestCase):
             Qt.ScrollBarPolicy.ScrollBarAsNeeded,
         )
 
+    def test_rows_are_user_resizable_and_height_survives_source_toggle(self) -> None:
+        row_header = self.dialog.table.verticalHeader()
+        resized_height = self.dialog.table.rowHeight(0) + 19
+        self.dialog.table.setRowHeight(0, resized_height)
+        self.dialog.source_toggle.setChecked(True)
+        self._app.processEvents()
+
+        self.assertFalse(row_header.isHidden())
+        self.assertEqual(
+            row_header.sectionResizeMode(0),
+            QHeaderView.ResizeMode.Interactive,
+        )
+        self.assertEqual(self.dialog.table.rowHeight(0), resized_height)
+
+    def test_fullscreen_button_toggles_dialog_window_mode(self) -> None:
+        self.dialog.show()
+        self.dialog.fullscreen_button.setChecked(True)
+        self._app.processEvents()
+
+        self.assertTrue(self.dialog.isFullScreen())
+        self.assertEqual(self.dialog.fullscreen_button.text(), "창 모드")
+
+        self.dialog.fullscreen_button.setChecked(False)
+        self._app.processEvents()
+
+        self.assertFalse(self.dialog.isFullScreen())
+        self.assertEqual(self.dialog.fullscreen_button.text(), "전체 화면")
+
     def test_many_rows_and_columns_enable_both_scroll_directions(self) -> None:
         columns = [
             {"id": 2000 + index, "name": f"Column {index}", "type": "TextField"}
