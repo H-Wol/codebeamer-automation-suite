@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -82,6 +84,39 @@ SCHEMA = {
             "name": "Test Steps",
             "type": "TableField",
             "valueModel": "TableFieldValue",
+            "columns": [
+                {
+                    "id": 1001,
+                    "name": "Action",
+                    "type": "WikiTextField",
+                },
+                {
+                    "id": 1002,
+                    "name": "Expected",
+                    "type": "WikiTextField",
+                    "valueModel": "WikiTextFieldValue",
+                },
+                {
+                    "id": 1003,
+                    "name": "Critical",
+                    "type": "BoolField",
+                    "valueModel": "BoolFieldValue",
+                },
+                {
+                    "id": 1004,
+                    "name": "Internal ID",
+                    "type": "WikiTextField",
+                    "valueModel": "WikiTextFieldValue",
+                    "hidden": True,
+                },
+                {
+                    "id": 1005,
+                    "name": "Linked item",
+                    "type": "ReferenceField",
+                    "referenceType": "TrackerItemReference",
+                    "valueModel": "ChoiceFieldValue<TrackerItemReference>",
+                },
+            ],
         },
         {
             "id": 11,
@@ -132,6 +167,47 @@ def _detail(*, version: int = 4, name: str = "Original") -> TrackerItemDetail:
                     "type": "ChoiceFieldValue",
                     "values": [
                         {"id": 71, "name": "sample_user", "type": "UserReference"}
+                    ],
+                },
+                {
+                    "fieldId": 10,
+                    "name": "Test Steps",
+                    "type": "TableFieldValue",
+                    "values": [
+                        [
+                            {
+                                "fieldId": 1001,
+                                "name": "Action",
+                                "type": "WikiTextFieldValue",
+                                "value": "Run",
+                            },
+                            {
+                                "fieldId": 1002,
+                                "name": "Expected",
+                                "type": "WikiTextFieldValue",
+                                "value": "Pass",
+                            },
+                            {
+                                "fieldId": 1003,
+                                "name": "Critical",
+                                "type": "BoolFieldValue",
+                                "value": False,
+                            },
+                            {
+                                "fieldId": 1004,
+                                "name": "Internal ID",
+                                "type": "WikiTextFieldValue",
+                                "value": "hidden-1",
+                            },
+                            {
+                                "fieldId": 1005,
+                                "name": "Linked item",
+                                "type": "ChoiceFieldValue",
+                                "values": [
+                                    {"id": 9001, "type": "TrackerItemReference"}
+                                ],
+                            },
+                        ]
                     ],
                 },
             ],
@@ -220,8 +296,19 @@ class TrackerItemEditorModelTest(unittest.TestCase):
         self.assertEqual(self.field("Priority").current_display_value, "High")
         self.assertEqual(self.field("Reviewers").reference_type, "UserReference")
         self.assertEqual(self.schema.status_field.name, "Status")
-        self.assertFalse(self.field("Test Steps").editable)
-        self.assertIn("테이블", self.field("Test Steps").unsupported_reason)
+        table_field = self.field("Test Steps")
+        self.assertTrue(table_field.editable)
+        self.assertEqual(table_field.editor_kind, FieldEditorKind.TABLE)
+        self.assertEqual(table_field.current_display_value, "1행 × 4열")
+        self.assertEqual(
+            [column.name for column in table_field.table_columns],
+            ["Action", "Expected", "Critical", "Linked item"],
+        )
+        self.assertFalse(table_field.table_columns[-1].editable)
+        self.assertEqual(
+            table_field.table_columns[0].value_model,
+            "WikiTextFieldValue",
+        )
         self.assertFalse(self.field("Server Value").editable)
         self.assertNotIn("Hidden", {field.name for field in self.schema.fields})
 
@@ -250,6 +337,33 @@ class TrackerItemEditorModelTest(unittest.TestCase):
                 {"id": 72, "type": "UserReference"},
             ],
         )
+
+    def test_table_field_payload_preserves_nested_rows_and_hidden_cells(self) -> None:
+        table_field = self.field("Test Steps")
+        rows = deepcopy(table_field.current_value)
+        rows[0][0]["value"] = "Changed action"
+
+        payload = build_field_value(TrackerItemFieldChange(table_field, rows))
+
+        self.assertEqual(payload["type"], "TableFieldValue")
+        self.assertEqual(payload["values"][0][0]["value"], "Changed action")
+        hidden = next(
+            cell for cell in payload["values"][0] if cell["fieldId"] == 1004
+        )
+        self.assertEqual(hidden["value"], "hidden-1")
+
+    def test_table_field_rejects_flat_or_duplicate_cell_payloads(self) -> None:
+        table_field = self.field("Test Steps")
+
+        with self.assertRaisesRegex(ValueError, "행 구조"):
+            build_field_value(
+                TrackerItemFieldChange(table_field, [{"fieldId": 1001}])
+            )
+
+        duplicate = deepcopy(table_field.current_value)
+        duplicate[0].append(deepcopy(duplicate[0][0]))
+        with self.assertRaisesRegex(ValueError, "중복"):
+            build_field_value(TrackerItemFieldChange(table_field, duplicate))
 
     def test_mandatory_and_single_value_rules_are_validated_before_request(self) -> None:
         with self.assertRaisesRegex(ValueError, "필수값"):
@@ -312,6 +426,23 @@ class TrackerItemEditorServiceTest(unittest.TestCase):
             {field_value["fieldId"] for field_value in update_call[2]},
             {3, 5},
         )
+
+    def test_update_sends_table_field_as_nested_rows(self) -> None:
+        table_field = self.field("Test Steps")
+
+        self.service.update_fields(
+            self.settings,
+            item_id=1001,
+            expected_version=4,
+            changes=(
+                TrackerItemFieldChange(table_field, table_field.current_value),
+            ),
+        )
+
+        table_payload = EditorFakeClient.calls[1][2][0]
+        self.assertEqual(table_payload["type"], "TableFieldValue")
+        self.assertIsInstance(table_payload["values"][0], list)
+        self.assertEqual(table_payload["values"][0][0]["fieldId"], 1001)
 
     def test_version_conflict_stops_before_update(self) -> None:
         EditorFakeClient.current_version = 9
@@ -429,6 +560,43 @@ class TrackerItemEditorPanelTest(unittest.TestCase):
         self.assertEqual(len(self.saved_changes), 1)
         self.assertEqual(self.saved_changes[0].value, "Changed in GUI")
 
+    def test_panel_shows_table_editor_and_hides_uneditable_fields(self) -> None:
+        from src.gui.tracker_item_editor_panel import TrackerTableFieldInput
+
+        self.panel.set_context(self.detail, self.schema, write_enabled=True)
+
+        self.assertNotIn(11, self.panel.rows)
+        table_row = self.panel.rows[10]
+        self.assertIsInstance(table_row.widget, TrackerTableFieldInput)
+        self.assertEqual(table_row.widget.summary_label.text(), "1행 × 4열")
+        self.assertIn("1개", self.panel.editor_helper.text())
+
+    def test_panel_applies_table_dialog_value_to_selected_change(self) -> None:
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QDialog
+
+        self.panel.set_context(self.detail, self.schema, write_enabled=True)
+        table_row = self.panel.rows[10]
+        check_item = self.panel.field_table.item(table_row.row, 0)
+        check_item.setCheckState(Qt.CheckState.Checked)
+        changed_rows = deepcopy(table_row.field.current_value)
+        changed_rows.append(deepcopy(changed_rows[0]))
+
+        with patch(
+            "src.gui.tracker_table_field_editor_dialog."
+            "TrackerTableFieldEditorDialog"
+        ) as dialog_class:
+            dialog = dialog_class.return_value
+            dialog.exec.return_value = QDialog.DialogCode.Accepted
+            dialog.value.return_value = changed_rows
+            table_row.widget.edit_button.click()
+
+        changes = self.panel.selected_changes()
+        self.assertEqual(table_row.widget.summary_label.text(), "2행 × 4열")
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0].field.field_id, 10)
+        self.assertEqual(changes[0].value, changed_rows)
+
     def test_status_transition_is_separate_from_general_field_save(self) -> None:
         self.panel.set_context(self.detail, self.schema, write_enabled=True)
 
@@ -450,6 +618,7 @@ class TrackerItemEditorPanelTest(unittest.TestCase):
         self.assertFalse(self.panel.transition_button.isEnabled())
         self.assertFalse(self.panel.delete_button.isEnabled())
         self.assertIn("테스트 모드", self.panel.editor_status.text())
+        self.assertTrue(self.panel.rows[10].widget.isEnabled())
 
     def test_delete_dialog_requires_exact_item_id(self) -> None:
         dialog = ConfirmItemDeleteDialog(self.detail)

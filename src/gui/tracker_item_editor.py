@@ -13,6 +13,7 @@ from .service_core import _build_gui_client
 from .tracker_query_models import TrackerItemDetail
 from .tracker_query_service import TrackerQueryService
 from src.codebeamer_client import CodebeamerClient
+from src.models.common import CONNECTED_FIELD_TYPE_VALUE_MODEL_MAP
 
 
 class FieldEditorKind(str, Enum):
@@ -25,6 +26,7 @@ class FieldEditorKind(str, Enum):
     DATETIME = "datetime"
     CHOICE = "choice"
     REFERENCE = "reference"
+    TABLE = "table"
     STATUS = "status"
     UNSUPPORTED = "unsupported"
 
@@ -93,6 +95,7 @@ class EditableTrackerField:
     mandatory: bool = False
     editor_kind: FieldEditorKind = FieldEditorKind.UNSUPPORTED
     options: tuple[EditableFieldOption, ...] = field(default_factory=tuple)
+    table_columns: tuple["EditableTrackerField", ...] = field(default_factory=tuple)
     current_value: Any = field(default=None, compare=False)
     unsupported_reason: str = ""
     raw_schema: dict[str, Any] = field(default_factory=dict, compare=False)
@@ -110,6 +113,13 @@ class EditableTrackerField:
 
     @property
     def current_display_value(self) -> str:
+        if self.editor_kind == FieldEditorKind.TABLE:
+            row_count = (
+                len(self.current_value)
+                if isinstance(self.current_value, list)
+                else 0
+            )
+            return f"{row_count}행 × {len(self.table_columns)}열"
         return _display_value(self.current_value)
 
 
@@ -236,7 +246,7 @@ def _editor_kind(
             return FieldEditorKind.UNSUPPORTED, "상태 option을 schema에서 확인할 수 없습니다."
         return FieldEditorKind.STATUS, ""
     if "table" in lowered_type or "tablefieldvalue" in lowered_model:
-        return FieldEditorKind.UNSUPPORTED, "테이블 필드는 행 구조 편집 화면이 필요합니다."
+        return FieldEditorKind.TABLE, ""
     if "bool" in lowered_type or "boolfieldvalue" in lowered_model:
         return FieldEditorKind.BOOLEAN, ""
     if "integer" in lowered_type or "integerfieldvalue" in lowered_model:
@@ -279,6 +289,89 @@ def _editor_kind(
     return FieldEditorKind.UNSUPPORTED, "현재 편집기가 이 필드 형식을 지원하지 않습니다."
 
 
+def _field_options(raw_field: dict[str, Any]) -> tuple[EditableFieldOption, ...]:
+    return tuple(
+        option
+        for option in (
+            EditableFieldOption.from_raw(raw_option)
+            for raw_option in raw_field.get("options", [])
+        )
+        if option is not None
+    )
+
+
+def _schema_value_model(raw_field: dict[str, Any], type_name: str) -> str:
+    explicit = str(raw_field.get("valueModel") or "").strip()
+    if explicit:
+        return explicit
+    return CONNECTED_FIELD_TYPE_VALUE_MODEL_MAP.get(
+        type_name,
+        type_name or "FieldValue",
+    )
+
+
+def _table_column_fields(raw_field: dict[str, Any]) -> tuple[EditableTrackerField, ...]:
+    columns: list[EditableTrackerField] = []
+    raw_columns = raw_field.get("columns")
+    if not isinstance(raw_columns, list):
+        return ()
+    for raw_column in raw_columns:
+        if not isinstance(raw_column, dict) or bool(raw_column.get("hidden", False)):
+            continue
+        field_id = _optional_int(raw_column.get("id") or raw_column.get("fieldId"))
+        if field_id is None or field_id <= 0:
+            continue
+        name = str(raw_column.get("name") or raw_column.get("label") or field_id)
+        label = str(raw_column.get("label") or name)
+        type_name = str(raw_column.get("type") or "")
+        value_model = _schema_value_model(raw_column, type_name)
+        reference_type = str(raw_column.get("referenceType") or "")
+        if not reference_type:
+            model_match = _REFERENCE_MODEL_PATTERN.search(value_model)
+            if model_match is not None:
+                candidate = model_match.group(1).strip()
+                if candidate.casefold() != "choiceoptionreference":
+                    reference_type = candidate
+        options = _field_options(raw_column)
+        editor_kind, unsupported_reason = _editor_kind(
+            name=name,
+            type_name=type_name,
+            value_model=value_model,
+            tracker_item_field="",
+            reference_type=reference_type,
+            options=options,
+        )
+        if "wiki" in type_name.casefold() or "wiki" in value_model.casefold():
+            editor_kind = FieldEditorKind.MULTILINE_TEXT
+            unsupported_reason = ""
+        if editor_kind == FieldEditorKind.TABLE:
+            editor_kind = FieldEditorKind.UNSUPPORTED
+            unsupported_reason = "중첩 TableField 열은 편집하지 않습니다."
+        if editor_kind == FieldEditorKind.REFERENCE:
+            editor_kind = FieldEditorKind.UNSUPPORTED
+            unsupported_reason = "참조 열은 원본값을 보존하며 읽기 전용으로 표시합니다."
+        if bool(raw_column.get("readOnly", False)) or raw_column.get("editable") is False:
+            editor_kind = FieldEditorKind.UNSUPPORTED
+            unsupported_reason = "읽기 전용 열입니다."
+        columns.append(
+            EditableTrackerField(
+                field_id=field_id,
+                name=name,
+                label=label,
+                type_name=type_name,
+                value_model=value_model,
+                reference_type=reference_type,
+                multiple_values=bool(raw_column.get("multipleValues", False)),
+                mandatory=bool(raw_column.get("mandatory", False)),
+                editor_kind=editor_kind,
+                options=options,
+                unsupported_reason=unsupported_reason,
+                raw_schema=deepcopy(raw_column),
+            )
+        )
+    return tuple(columns)
+
+
 def _build_tracker_schema(
     schema: dict[str, Any],
     *,
@@ -296,7 +389,7 @@ def _build_tracker_schema(
         name = str(raw_field.get("name") or raw_field.get("label") or field_id)
         label = str(raw_field.get("label") or name)
         type_name = str(raw_field.get("type") or "")
-        value_model = str(raw_field.get("valueModel") or type_name or "FieldValue")
+        value_model = _schema_value_model(raw_field, type_name)
         tracker_item_field = _inferred_tracker_item_field(
             name,
             str(raw_field.get("trackerItemField") or ""),
@@ -308,14 +401,7 @@ def _build_tracker_schema(
                 candidate = model_match.group(1).strip()
                 if candidate.casefold() != "choiceoptionreference":
                     reference_type = candidate
-        options = tuple(
-            option
-            for option in (
-                EditableFieldOption.from_raw(raw_option)
-                for raw_option in raw_field.get("options", [])
-            )
-            if option is not None
-        )
+        options = _field_options(raw_field)
         editor_kind, unsupported_reason = _editor_kind(
             name=name,
             type_name=type_name,
@@ -341,6 +427,20 @@ def _build_tracker_schema(
             editor_kind = FieldEditorKind.UNSUPPORTED
             unsupported_reason = "서버가 관리하는 읽기 전용 필드입니다."
 
+        table_columns = (
+            _table_column_fields(raw_field)
+            if editor_kind == FieldEditorKind.TABLE
+            else ()
+        )
+        if editor_kind == FieldEditorKind.TABLE and not table_columns:
+            editor_kind = FieldEditorKind.UNSUPPORTED
+            unsupported_reason = "TableField 열 정의를 schema에서 확인할 수 없습니다."
+        elif editor_kind == FieldEditorKind.TABLE and not any(
+            column.editable for column in table_columns
+        ):
+            editor_kind = FieldEditorKind.UNSUPPORTED
+            unsupported_reason = "편집할 수 있는 TableField 열이 없습니다."
+
         normalized = EditableTrackerField(
             field_id=field_id,
             name=name,
@@ -353,6 +453,7 @@ def _build_tracker_schema(
             mandatory=bool(raw_field.get("mandatory", False)),
             editor_kind=editor_kind,
             options=options,
+            table_columns=table_columns,
             current_value=(
                 None
                 if detail is None
@@ -405,15 +506,20 @@ def build_create_tracker_schema(
         tracker_id=normalized_tracker_id,
         detail=None,
     )
-    fields = tuple(
-        replace(field_value, mandatory=True)
-        if field_value.tracker_item_field == "name" and not field_value.mandatory
-        else field_value
-        for field_value in normalized_schema.fields
-    )
+    fields: list[EditableTrackerField] = []
+    for field_value in normalized_schema.fields:
+        if field_value.editor_kind == FieldEditorKind.TABLE:
+            field_value = replace(
+                field_value,
+                editor_kind=FieldEditorKind.UNSUPPORTED,
+                unsupported_reason="TableField는 새 아이템 생성 화면에서 아직 지원하지 않습니다.",
+            )
+        if field_value.tracker_item_field == "name" and not field_value.mandatory:
+            field_value = replace(field_value, mandatory=True)
+        fields.append(field_value)
     return EditableTrackerSchema(
         tracker_id=normalized_schema.tracker_id,
-        fields=fields,
+        fields=tuple(fields),
         status_field=normalized_schema.status_field,
     )
 
@@ -484,6 +590,49 @@ def _reference_ids(raw_value: Any) -> list[int]:
     return normalized
 
 
+def _table_rows(
+    field_value: EditableTrackerField,
+    raw_value: Any,
+) -> list[list[dict[str, Any]]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError(f"'{field_value.label}' 테이블 값은 행 목록이어야 합니다.")
+    rows: list[list[dict[str, Any]]] = []
+    for row_index, raw_row in enumerate(raw_value, start=1):
+        if isinstance(raw_row, dict):
+            raw_row = (
+                raw_row.get("values")
+                if "values" in raw_row
+                else raw_row.get("fieldValues")
+            )
+        if not isinstance(raw_row, list):
+            raise ValueError(f"'{field_value.label}' {row_index}행 구조가 올바르지 않습니다.")
+        normalized_row: list[dict[str, Any]] = []
+        seen_field_ids: set[int] = set()
+        for raw_cell in raw_row:
+            if not isinstance(raw_cell, dict):
+                raise ValueError(
+                    f"'{field_value.label}' {row_index}행의 셀 값이 객체가 아닙니다."
+                )
+            field_id = _optional_int(
+                raw_cell.get("fieldId") or raw_cell.get("id")
+            )
+            type_name = str(raw_cell.get("type") or "").strip()
+            if field_id is None or field_id <= 0 or not type_name:
+                raise ValueError(
+                    f"'{field_value.label}' {row_index}행 셀의 fieldId와 type이 필요합니다."
+                )
+            if field_id in seen_field_ids:
+                raise ValueError(
+                    f"'{field_value.label}' {row_index}행에 같은 열이 중복되어 있습니다."
+                )
+            seen_field_ids.add(field_id)
+            normalized_row.append(deepcopy(raw_cell))
+        rows.append(normalized_row)
+    return rows
+
+
 def build_field_value(change: TrackerItemFieldChange) -> dict[str, Any]:
     field_value = change.field
     if not field_value.editable and not field_value.is_status:
@@ -537,6 +686,9 @@ def build_field_value(change: TrackerItemFieldChange) -> dict[str, Any]:
             {"id": reference_id, "type": reference_type}
             for reference_id in reference_ids
         ]
+    elif kind == FieldEditorKind.TABLE:
+        payload["type"] = _value_model_name(field_value, "TableFieldValue")
+        payload["values"] = _table_rows(field_value, raw_value)
     else:
         raise ValueError(
             field_value.unsupported_reason or f"'{field_value.label}' 형식을 지원하지 않습니다."

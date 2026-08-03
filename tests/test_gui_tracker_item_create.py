@@ -334,6 +334,7 @@ class TrackerItemCreateDialogTest(unittest.TestCase):
 
         self.assertTrue(description_row.widget.isEnabled())
         self.assertNotIn(7, self.dialog.rows)
+        self.assertNotIn(10, self.dialog.rows)
         self.assertTrue(self.dialog.root_radio.isChecked())
         self.dialog.child_radio.setChecked(True)
         self.assertEqual(self.dialog.selected_parent_item_id(), 1001)
@@ -360,6 +361,20 @@ class TrackerItemCreateDialogTest(unittest.TestCase):
 
         self.assertFalse(self.dialog.create_button.isEnabled())
         self.assertIn("Test Steps", self.dialog.validation_label.text())
+        self.assertNotIn(10, self.dialog.rows)
+
+    def test_fullscreen_button_toggles_create_window_mode(self) -> None:
+        self.dialog.fullscreen_button.setChecked(True)
+        self._app.processEvents()
+
+        self.assertTrue(self.dialog.isFullScreen())
+        self.assertEqual(self.dialog.fullscreen_button.text(), "창 모드")
+
+        self.dialog.fullscreen_button.setChecked(False)
+        self._app.processEvents()
+
+        self.assertFalse(self.dialog.isFullScreen())
+        self.assertEqual(self.dialog.fullscreen_button.text(), "전체 화면")
 
 
 if __name__ == "__main__":

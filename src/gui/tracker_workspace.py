@@ -39,6 +39,7 @@ from .tracker_item_editor import EditableTrackerSchema
 from .tracker_item_editor import TrackerItemEditorService
 from .tracker_item_editor import TrackerItemFieldChange
 from .tracker_item_editor import TrackerItemWriteError
+from .tracker_item_editor_dialog import TrackerItemEditorDialog
 from .tracker_item_editor_panel import ConfirmItemDeleteDialog
 from .tracker_item_editor_panel import TrackerItemEditorPanel
 from .tracker_item_create_dialog import TrackerItemCreateDialog
@@ -128,6 +129,7 @@ class TrackerWorkspacePage(QWidget):
         self._description_uses_wiki = False
         self._pre_editor_splitter_sizes: list[int] | None = None
         self._create_busy = False
+        self._editor_dialog: TrackerItemEditorDialog | None = None
 
         self._build_ui()
         self._reset_workspace("프로젝트와 트래커를 불러오면 조회를 시작할 수 있습니다.")
@@ -281,13 +283,37 @@ class TrackerWorkspacePage(QWidget):
         self.detail_tabs.setObjectName("tracker_detail_tabs")
         self.detail_tabs.addTab(self._build_overview_tab(), "개요")
         self.detail_tabs.addTab(self._build_raw_tab(), "원본 JSON")
+
+        self.editor_host = QWidget(self.detail_tabs)
+        self.editor_host.setObjectName("tracker_item_editor_host")
+        self.editor_host_layout = QVBoxLayout(self.editor_host)
+        self.editor_host_layout.setContentsMargins(0, 0, 0, 0)
+        self.editor_host_layout.setSpacing(6)
+        editor_toolbar = QHBoxLayout()
+        editor_toolbar.addStretch(1)
+        self.popout_editor_button = QPushButton(
+            "새 창에서 크게 수정",
+            self.editor_host,
+        )
+        self.popout_editor_button.clicked.connect(self._show_editor_in_window)
+        editor_toolbar.addWidget(self.popout_editor_button)
+        self.editor_host_layout.addLayout(editor_toolbar)
+        self.editor_placeholder = QLabel(
+            "수정 화면이 새 창에 열려 있습니다.",
+            self.editor_host,
+        )
+        self.editor_placeholder.setObjectName("tracker_panel_status")
+        self.editor_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.editor_placeholder.hide()
+        self.editor_host_layout.addWidget(self.editor_placeholder, 1)
         self.editor_panel = TrackerItemEditorPanel(
             save_requested=self._save_item_changes,
             transition_requested=self._transition_item_status,
             delete_requested=self._delete_current_item,
-            parent=self.detail_tabs,
+            parent=self.editor_host,
         )
-        self.editor_tab_index = self.detail_tabs.addTab(self.editor_panel, "수정")
+        self.editor_host_layout.addWidget(self.editor_panel, 1)
+        self.editor_tab_index = self.detail_tabs.addTab(self.editor_host, "수정")
         self.detail_tabs.currentChanged.connect(self._on_detail_tab_changed)
         detail_layout.addWidget(self.detail_tabs, 1)
 
@@ -1598,6 +1624,7 @@ class TrackerWorkspacePage(QWidget):
         previous_editor_detail = self.editor_panel.detail
         self._current_detail = detail
         self._selected_item_id = detail.item_id
+        self._update_detached_editor_title(detail)
         self.detail_title.setText(summary.name)
         self.detail_refresh_button.setEnabled(True)
         self._show_detail_id_badge(detail.item_id)
@@ -1713,6 +1740,67 @@ class TrackerWorkspacePage(QWidget):
         self.detail_fields_table.setRowCount(0)
         self.detail_raw_json.clear()
         self.editor_panel.clear()
+        self._update_detached_editor_title(None)
+
+    def _update_detached_editor_title(
+        self,
+        detail: TrackerItemDetail | None,
+    ) -> None:
+        dialog = self._editor_dialog
+        if dialog is None:
+            return
+        title = (
+            f"#{detail.item_id} {detail.summary.name} · 수정"
+            if detail is not None
+            else "트래커 아이템 수정"
+        )
+        dialog.setWindowTitle(title)
+        dialog.title_label.setText(title)
+
+    def _show_editor_in_window(self) -> None:
+        dialog = self._editor_dialog
+        if dialog is not None:
+            dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+
+        detail = self._current_detail
+        title = (
+            f"#{detail.item_id} {detail.summary.name} · 수정"
+            if detail is not None
+            else "트래커 아이템 수정"
+        )
+        self.editor_host_layout.removeWidget(self.editor_panel)
+        self.editor_placeholder.show()
+        self.popout_editor_button.setText("열린 수정 창 보기")
+        dialog = TrackerItemEditorDialog(
+            self.editor_panel,
+            title=title,
+            parent=self,
+        )
+        self._editor_dialog = dialog
+        dialog.finished.connect(self._restore_editor_panel)
+        dialog.show()
+
+    def _restore_editor_panel(self, *args) -> None:
+        del args
+        dialog = self._editor_dialog
+        if dialog is None:
+            return
+        try:
+            dialog.finished.disconnect(self._restore_editor_panel)
+        except (RuntimeError, TypeError):
+            pass
+        panel = dialog.take_panel()
+        if panel is not None:
+            panel.setParent(self.editor_host)
+            self.editor_host_layout.addWidget(panel, 1)
+            panel.show()
+        self.editor_placeholder.hide()
+        self.popout_editor_button.setText("새 창에서 크게 수정")
+        self._editor_dialog = None
+        dialog.deleteLater()
 
     def _on_detail_tab_changed(self, index: int) -> None:
         if int(index) != self.editor_tab_index:
@@ -2032,6 +2120,8 @@ class TrackerWorkspacePage(QWidget):
 
     def shutdown(self) -> None:
         """창 종료 뒤 완료되는 요청이 화면 상태를 갱신하지 않도록 무효화한다."""
+        if self._editor_dialog is not None:
+            self._editor_dialog.close()
         self._invalidate_requests()
         for task in tuple(self._tasks):
             try:

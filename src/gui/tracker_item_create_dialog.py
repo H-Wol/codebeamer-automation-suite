@@ -66,6 +66,7 @@ class TrackerItemCreateDialog(QDialog):
 
         self.setObjectName("tracker_item_create_dialog")
         self.setWindowTitle("새 트래커 아이템")
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
         self.setModal(True)
         self.resize(760, 620)
         self.setMinimumSize(620, 480)
@@ -74,15 +75,27 @@ class TrackerItemCreateDialog(QDialog):
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(10)
 
+        title_row = QHBoxLayout()
         title = QLabel("새 트래커 아이템", self)
         title.setObjectName("tracker_detail_title")
-        layout.addWidget(title)
+        title_row.addWidget(title, 1)
+        self.fullscreen_button = QPushButton("전체 화면", self)
+        self.fullscreen_button.setCheckable(True)
+        self.fullscreen_button.toggled.connect(self._set_fullscreen)
+        title_row.addWidget(self.fullscreen_button)
+        layout.addLayout(title_row)
         context = QLabel(
             f"생성 위치: {self.tracker_name} ({schema.tracker_id})",
             self,
         )
         context.setObjectName("tracker_detail_breadcrumb")
         layout.addWidget(context)
+
+        self.validation_label = QLabel("", self)
+        self.validation_label.setObjectName("tracker_editor_status")
+        self.validation_label.setWordWrap(True)
+        self.validation_label.hide()
+        layout.addWidget(self.validation_label)
 
         target_title = QLabel("계층 위치", self)
         target_title.setObjectName("tracker_detail_section_title")
@@ -130,12 +143,6 @@ class TrackerItemCreateDialog(QDialog):
         self.field_table.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self.field_table, 1)
 
-        self.validation_label = QLabel("", self)
-        self.validation_label.setObjectName("tracker_editor_status")
-        self.validation_label.setWordWrap(True)
-        self.validation_label.hide()
-        layout.addWidget(self.validation_label)
-
         button_row = QHBoxLayout()
         button_row.addStretch(1)
         cancel_button = QPushButton("취소", self)
@@ -150,15 +157,23 @@ class TrackerItemCreateDialog(QDialog):
         self._populate_fields()
 
     def _populate_fields(self) -> None:
-        visible_fields = [
+        candidates = [
             field_value
             for field_value in self.schema.fields
             if not field_value.is_status
             and field_value.tracker_item_field != "status"
         ]
+        unsupported_required = [
+            field_value.label
+            for field_value in candidates
+            if field_value.mandatory and not field_value.editable
+        ]
+        visible_fields = [
+            field_value for field_value in candidates if field_value.editable
+        ]
+        self.rows.clear()
         self.field_table.blockSignals(True)
         self.field_table.setRowCount(len(visible_fields))
-        unsupported_required: list[str] = []
         for row, field_value in enumerate(visible_fields):
             include_item = QTableWidgetItem("")
             if field_value.mandatory:
@@ -204,16 +219,6 @@ class TrackerItemCreateDialog(QDialog):
                     and field_value.multiple_values
                 ):
                     self.field_table.setRowHeight(row, 82)
-            else:
-                reason = QTableWidgetItem(
-                    field_value.unsupported_reason
-                    or "현재 생성 화면에서 지원하지 않습니다."
-                )
-                reason.setFlags(Qt.ItemFlag.ItemIsEnabled)
-                reason.setToolTip(reason.text())
-                self.field_table.setItem(row, 2, reason)
-                if field_value.mandatory:
-                    unsupported_required.append(field_value.label)
             self.rows[field_value.field_id] = _CreateFieldRow(
                 row=row,
                 field=field_value,
@@ -274,6 +279,13 @@ class TrackerItemCreateDialog(QDialog):
         self.validation_label.style().unpolish(self.validation_label)
         self.validation_label.style().polish(self.validation_label)
         self.validation_label.show()
+
+    def _set_fullscreen(self, enabled: bool) -> None:
+        self.fullscreen_button.setText("창 모드" if enabled else "전체 화면")
+        if enabled:
+            self.showFullScreen()
+            return
+        self.showNormal()
 
     def _validate_and_accept(self) -> None:
         try:

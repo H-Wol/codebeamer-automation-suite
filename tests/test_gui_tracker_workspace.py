@@ -551,6 +551,37 @@ class TrackerWorkspaceWriteIntegrationTest(unittest.TestCase):
         self.assertEqual(self.activities[-1].operation.value, "tracker_update")
         self.assertEqual(self.activities[-1].result.value, "failed")
 
+    def test_editor_moves_to_large_window_without_losing_input_state(self) -> None:
+        from PySide6.QtCore import Qt
+
+        summary_row = self.page.editor_panel.rows[3]
+        check_item = self.page.editor_panel.field_table.item(summary_row.row, 0)
+        check_item.setCheckState(Qt.CheckState.Checked)
+        summary_row.widget.setText("Unsaved detached value")
+
+        self.page.popout_editor_button.click()
+        self._app.processEvents()
+
+        dialog = self.page._editor_dialog
+        self.assertIsNotNone(dialog)
+        self.assertIs(self.page.editor_panel.parent(), dialog)
+        self.assertTrue(self.page.editor_placeholder.isVisible())
+        self.assertEqual(summary_row.widget.text(), "Unsaved detached value")
+        self.assertEqual(check_item.checkState(), Qt.CheckState.Checked)
+
+        dialog.fullscreen_button.setChecked(True)
+        self._app.processEvents()
+        self.assertTrue(dialog.isFullScreen())
+        dialog.fullscreen_button.setChecked(False)
+        dialog.close()
+        self._app.processEvents()
+
+        self.assertIsNone(self.page._editor_dialog)
+        self.assertIs(self.page.editor_panel.parent(), self.page.editor_host)
+        self.assertFalse(self.page.editor_placeholder.isVisible())
+        self.assertEqual(summary_row.widget.text(), "Unsaved detached value")
+        self.assertEqual(check_item.checkState(), Qt.CheckState.Checked)
+
     def test_single_create_adds_selected_child_and_opens_created_detail(self) -> None:
         def create_request(schema, tracker, selected_detail):
             self.assertEqual(tracker.tracker_id, 20)

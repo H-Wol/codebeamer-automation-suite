@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
+from dataclasses import replace
 from typing import Any
 from typing import Callable
 
@@ -35,6 +37,72 @@ from .tracker_query_models import TrackerItemDetail
 
 
 _FIELD_CURRENT_VALUE = object()
+
+
+class TrackerTableFieldInput(QWidget):
+    """TableField 중첩값을 전용 행 편집기로 여는 입력 widget."""
+
+    def __init__(
+        self,
+        field_value: EditableTrackerField,
+        parent: QWidget,
+        *,
+        initial_value: Any = _FIELD_CURRENT_VALUE,
+    ) -> None:
+        super().__init__(parent)
+        self.field_value = field_value
+        current = (
+            field_value.current_value
+            if initial_value is _FIELD_CURRENT_VALUE
+            else initial_value
+        )
+        self._value = deepcopy(current) if isinstance(current, list) else []
+        self._dialog = None
+
+        self.setObjectName("tracker_table_field_input")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self.summary_label = QLabel("", self)
+        self.summary_label.setObjectName("tracker_panel_status")
+        layout.addWidget(self.summary_label, 1)
+        self.edit_button = QPushButton("테이블 수정", self)
+        self.edit_button.clicked.connect(self.open_editor)
+        layout.addWidget(self.edit_button)
+        self._refresh_summary()
+
+    def value(self) -> list[list[dict[str, Any]]]:
+        return deepcopy(self._value)
+
+    def open_editor(self) -> None:
+        from .tracker_table_field_editor_dialog import (
+            TrackerTableFieldEditorDialog,
+        )
+
+        dialog_field = replace(
+            self.field_value,
+            current_value=deepcopy(self._value),
+        )
+        try:
+            dialog = TrackerTableFieldEditorDialog(dialog_field, self)
+        except (TypeError, ValueError) as exc:
+            message = str(exc) or "TableField 행 구조를 해석할 수 없습니다."
+            self.summary_label.setText("편집 불가 · 데이터 형식 확인 필요")
+            self.summary_label.setToolTip(message)
+            self.edit_button.setToolTip(message)
+            return
+        self._dialog = dialog
+        try:
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self._value = dialog.value()
+                self._refresh_summary()
+        finally:
+            self._dialog = None
+
+    def _refresh_summary(self) -> None:
+        self.summary_label.setText(
+            f"{len(self._value)}행 × {len(self.field_value.table_columns)}열"
+        )
 
 
 def tracker_field_boolean_value(value: Any) -> bool:
@@ -78,6 +146,12 @@ def create_tracker_field_input_widget(
     )
     if not field_value.editable:
         return None
+    if kind == FieldEditorKind.TABLE:
+        return TrackerTableFieldInput(
+            field_value,
+            parent,
+            initial_value=initial_value,
+        )
     if kind == FieldEditorKind.MULTILINE_TEXT:
         widget = QPlainTextEdit(parent)
         widget.setPlainText(str(current or ""))
@@ -149,6 +223,8 @@ def tracker_field_input_value(
     field_value: EditableTrackerField,
     widget: QWidget,
 ) -> Any:
+    if isinstance(widget, TrackerTableFieldInput):
+        return widget.value()
     if isinstance(widget, QPlainTextEdit):
         return widget.toPlainText()
     if isinstance(widget, QLineEdit):
@@ -346,7 +422,20 @@ class TrackerItemEditorPanel(QWidget):
         self.status_combo.blockSignals(False)
 
     def _populate_fields(self, schema: EditableTrackerSchema) -> None:
-        visible_fields = [field_value for field_value in schema.fields if not field_value.is_status]
+        candidates = [
+            field_value for field_value in schema.fields if not field_value.is_status
+        ]
+        visible_fields = [
+            field_value for field_value in candidates if field_value.editable
+        ]
+        hidden_count = len(candidates) - len(visible_fields)
+        helper_text = (
+            "수정할 필드만 체크하세요. 현재 값과 새 값을 같은 표에서 "
+            "확인한 뒤 한 번에 저장합니다."
+        )
+        if hidden_count:
+            helper_text += f" 수정할 수 없는 필드 {hidden_count}개는 숨겼습니다."
+        self.editor_helper.setText(helper_text)
         self.rows.clear()
         self.field_table.blockSignals(True)
         self.field_table.setRowCount(len(visible_fields))
@@ -354,7 +443,7 @@ class TrackerItemEditorPanel(QWidget):
             check_item = QTableWidgetItem("")
             check_item.setFlags(
                 Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
-                if field_value.editable and self.write_enabled
+                if self.write_enabled
                 else Qt.ItemFlag.NoItemFlags
             )
             check_item.setCheckState(Qt.CheckState.Unchecked)
@@ -376,7 +465,10 @@ class TrackerItemEditorPanel(QWidget):
 
             editor_widget = self._create_editor_widget(field_value)
             if editor_widget is not None:
-                editor_widget.setEnabled(False)
+                editor_widget.setEnabled(
+                    field_value.editor_kind == FieldEditorKind.TABLE
+                    and not self.write_enabled
+                )
                 self.field_table.setCellWidget(row, 3, editor_widget)
                 if field_value.editor_kind in {
                     FieldEditorKind.MULTILINE_TEXT,
@@ -386,15 +478,11 @@ class TrackerItemEditorPanel(QWidget):
                     or field_value.editor_kind == FieldEditorKind.MULTILINE_TEXT
                 ):
                     self.field_table.setRowHeight(row, 72)
-                elif field_value.editor_kind == FieldEditorKind.CHOICE and field_value.multiple_values:
+                elif (
+                    field_value.editor_kind == FieldEditorKind.CHOICE
+                    and field_value.multiple_values
+                ):
                     self.field_table.setRowHeight(row, 82)
-            else:
-                unsupported_item = QTableWidgetItem(
-                    field_value.unsupported_reason or "현재 편집기에서 지원하지 않습니다."
-                )
-                unsupported_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-                unsupported_item.setToolTip(unsupported_item.text())
-                self.field_table.setItem(row, 3, unsupported_item)
             self.rows[field_value.field_id] = _EditorRow(
                 row=row,
                 field=field_value,
@@ -423,9 +511,17 @@ class TrackerItemEditorPanel(QWidget):
         row_value = next((row for row in self.rows.values() if row.row == item.row()), None)
         if row_value is not None and row_value.widget is not None:
             row_value.widget.setEnabled(
-                self.write_enabled
-                and not self._busy
-                and item.checkState() == Qt.CheckState.Checked
+                not self._busy
+                and (
+                    (
+                        self.write_enabled
+                        and item.checkState() == Qt.CheckState.Checked
+                    )
+                    or (
+                        not self.write_enabled
+                        and row_value.field.editor_kind == FieldEditorKind.TABLE
+                    )
+                )
             )
         self._update_action_state()
 
@@ -466,15 +562,23 @@ class TrackerItemEditorPanel(QWidget):
             check_item = self.field_table.item(row_value.row, 0)
             if check_item is not None:
                 flags = Qt.ItemFlag.NoItemFlags
-                if row_value.field.editable and self.write_enabled and not self._busy:
+                if self.write_enabled and not self._busy:
                     flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
                 check_item.setFlags(flags)
             if row_value.widget is not None:
                 row_value.widget.setEnabled(
                     not self._busy
-                    and self.write_enabled
-                    and check_item is not None
-                    and check_item.checkState() == Qt.CheckState.Checked
+                    and (
+                        (
+                            self.write_enabled
+                            and check_item is not None
+                            and check_item.checkState() == Qt.CheckState.Checked
+                        )
+                        or (
+                            not self.write_enabled
+                            and row_value.field.editor_kind == FieldEditorKind.TABLE
+                        )
+                    )
                 )
         self._update_action_state()
 
@@ -586,6 +690,7 @@ class ConfirmItemDeleteDialog(QDialog):
 __all__ = [
     "ConfirmItemDeleteDialog",
     "TrackerItemEditorPanel",
+    "TrackerTableFieldInput",
     "create_tracker_field_input_widget",
     "tracker_field_input_value",
 ]
