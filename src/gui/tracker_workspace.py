@@ -23,6 +23,7 @@ try:
     from PySide6.QtWidgets import QTableWidgetItem
     from PySide6.QtWidgets import QTreeWidget
     from PySide6.QtWidgets import QTreeWidgetItem
+    from PySide6.QtWidgets import QTextBrowser
     from PySide6.QtWidgets import QVBoxLayout
     from PySide6.QtWidgets import QWidget
 except ImportError as exc:  # pragma: no cover - GUI dependency guard
@@ -43,6 +44,7 @@ from .tracker_item_create_dialog import TrackerItemCreateDialog
 from .tracker_item_create_dialog import TrackerItemCreateRequest
 from .tracker_query_models import PageResult
 from .tracker_query_models import ProjectSummary
+from .tracker_query_models import TrackerFieldValue
 from .tracker_query_models import TrackerItemContext
 from .tracker_query_models import TrackerItemDetail
 from .tracker_query_models import TrackerItemSummary
@@ -50,7 +52,13 @@ from .tracker_query_models import TrackerQuery
 from .tracker_query_models import TrackerQueryServiceError
 from .tracker_query_models import TrackerSummary
 from .tracker_query_service import TrackerQueryService
+from .tracker_table_field_dialog import TrackerTableFieldDialog
+from .tracker_table_field_dialog import is_table_field
+from .tracker_table_field_dialog import table_field_summary
 from .worker import BackgroundTask
+from .wiki_renderer import codebeamer_wiki_to_html
+from .wiki_renderer import is_explicit_wiki_type
+from .wiki_renderer import payload_uses_wiki
 
 
 ITEM_SUMMARY_ROLE = int(Qt.ItemDataRole.UserRole) + 1
@@ -115,6 +123,8 @@ class TrackerWorkspacePage(QWidget):
         self._last_search_values: tuple[str, str, str] | None = None
         self._selected_item_id: int | None = None
         self._current_detail: TrackerItemDetail | None = None
+        self._description_text = ""
+        self._description_uses_wiki = False
         self._pre_editor_splitter_sizes: list[int] | None = None
         self._create_busy = False
 
@@ -398,12 +408,21 @@ class TrackerWorkspacePage(QWidget):
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(6, 8, 6, 6)
         layout.setSpacing(6)
+        description_header = QHBoxLayout()
         description_label = QLabel("설명")
         description_label.setObjectName("tracker_detail_section_title")
-        layout.addWidget(description_label)
-        self.detail_description = QPlainTextEdit(tab)
+        description_header.addWidget(description_label, 1)
+        self.description_source_toggle = QPushButton("Wiki 원문", tab)
+        self.description_source_toggle.setObjectName("mode_toggle")
+        self.description_source_toggle.setCheckable(True)
+        self.description_source_toggle.setVisible(False)
+        self.description_source_toggle.toggled.connect(self._render_description)
+        description_header.addWidget(self.description_source_toggle)
+        layout.addLayout(description_header)
+        self.detail_description = QTextBrowser(tab)
         self.detail_description.setObjectName("tracker_detail_description")
         self.detail_description.setReadOnly(True)
+        self.detail_description.setOpenExternalLinks(False)
         self.detail_description.setPlaceholderText("아이템을 선택하면 설명을 표시합니다.")
         self.detail_description.setMaximumHeight(150)
         layout.addWidget(self.detail_description)
@@ -1536,6 +1555,21 @@ class TrackerWorkspacePage(QWidget):
             f"ID 직접 접근 경로 · {len(path)}단계 · 전체 형제 노드는 '최상위 다시 불러오기'로 조회"
         )
 
+    def _render_description(self, show_source: bool = False) -> None:
+        self.description_source_toggle.setText(
+            "렌더링 보기" if show_source else "Wiki 원문"
+        )
+        if self._description_uses_wiki and not show_source:
+            self.detail_description.setHtml(
+                codebeamer_wiki_to_html(self._description_text)
+            )
+            return
+        self.detail_description.setPlainText(self._description_text)
+
+    def _open_table_field(self, field: TrackerFieldValue) -> None:
+        dialog = TrackerTableFieldDialog(field, self)
+        dialog.exec()
+
     def _render_detail(self, detail: TrackerItemDetail) -> None:
         summary = detail.summary
         previous_editor_detail = self.editor_panel.detail
@@ -1555,7 +1589,13 @@ class TrackerWorkspacePage(QWidget):
         warnings = "\n".join(detail.warnings)
         self.detail_warning.setText(warnings)
         self.detail_warning.setVisible(bool(warnings))
-        self.detail_description.setPlainText(detail.description)
+        self._description_text = detail.description
+        self._description_uses_wiki = is_explicit_wiki_type(detail.description_format)
+        self.description_source_toggle.blockSignals(True)
+        self.description_source_toggle.setChecked(False)
+        self.description_source_toggle.blockSignals(False)
+        self.description_source_toggle.setVisible(self._description_uses_wiki)
+        self._render_description(False)
         self.detail_raw_json.setPlainText(
             json.dumps(detail.raw_payload, ensure_ascii=False, indent=2, default=str)
         )
@@ -1579,14 +1619,51 @@ class TrackerWorkspacePage(QWidget):
             ),
             ("직접 하위", str(len(detail.children)), "reference"),
         ]
-        rows.extend(
-            (field.name, field.display_value or "-", field.type_name)
-            for field in detail.custom_fields
-        )
-        self.detail_fields_table.setRowCount(len(rows))
+        self.detail_fields_table.clearContents()
+        self.detail_fields_table.setRowCount(len(rows) + len(detail.custom_fields))
         for row, values in enumerate(rows):
             for column, value in enumerate(values):
                 self.detail_fields_table.setItem(row, column, QTableWidgetItem(value))
+        field_row_offset = len(rows)
+        for field_index, field in enumerate(detail.custom_fields):
+            row = field_row_offset + field_index
+            self.detail_fields_table.setItem(row, 0, QTableWidgetItem(field.name))
+            self.detail_fields_table.setItem(row, 2, QTableWidgetItem(field.type_name))
+            if is_table_field(field):
+                summary = table_field_summary(field)
+                value_item = QTableWidgetItem(summary)
+                value_item.setToolTip(f"{field.name}의 행·열 데이터를 엽니다.")
+                self.detail_fields_table.setItem(row, 1, value_item)
+                open_button = QPushButton(f"{summary} · 열어보기", self.detail_fields_table)
+                open_button.clicked.connect(
+                    lambda _checked=False, selected=field: self._open_table_field(selected)
+                )
+                self.detail_fields_table.setCellWidget(row, 1, open_button)
+                continue
+            text = field.display_value or "-"
+            value_item = QTableWidgetItem(text)
+            value_item.setToolTip(text)
+            self.detail_fields_table.setItem(row, 1, value_item)
+            if not (
+                is_explicit_wiki_type(field.type_name)
+                or payload_uses_wiki(field.raw_value)
+            ):
+                continue
+            label = QLabel(self.detail_fields_table)
+            label.setObjectName("tracker_wiki_cell")
+            label.setTextFormat(Qt.TextFormat.RichText)
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            label.setWordWrap(True)
+            label.setMargin(6)
+            label.setMinimumHeight(32)
+            label.setText(codebeamer_wiki_to_html(text))
+            value_item.setText("")
+            self.detail_fields_table.setCellWidget(row, 1, label)
+            self.detail_fields_table.setRowHeight(
+                row,
+                max(self.detail_fields_table.rowHeight(row), 36),
+            )
+        self.detail_fields_table.resizeRowsToContents()
         if (
             previous_editor_detail is None
             or previous_editor_detail.item_id != detail.item_id
@@ -1598,6 +1675,12 @@ class TrackerWorkspacePage(QWidget):
 
     def _reset_detail(self) -> None:
         self._current_detail = None
+        self._description_text = ""
+        self._description_uses_wiki = False
+        self.description_source_toggle.blockSignals(True)
+        self.description_source_toggle.setChecked(False)
+        self.description_source_toggle.blockSignals(False)
+        self.description_source_toggle.setVisible(False)
         self.detail_title.setText("아이템 상세")
         self.detail_refresh_button.setEnabled(False)
         self.detail_id_badge.hide()

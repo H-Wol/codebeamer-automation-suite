@@ -11,6 +11,7 @@ from src.gui.settings_store import GuiSettings
 from src.gui.tracker_item_create_dialog import TrackerItemCreateRequest
 from src.gui.tracker_item_editor import TrackerItemEditorService
 from src.gui.tracker_item_editor import TrackerItemFieldChange
+from src.gui.tracker_query_models import TrackerItemDetail
 from src.gui.tracker_query_models import TrackerItemSummary
 from src.gui.tracker_query_service import TrackerQueryService
 from src.gui.tracker_workspace import CHILDREN_LOADED_ROLE
@@ -267,6 +268,83 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.assertIn("Top-level sample requirement", self.page.detail_description.toPlainText())
         self.assertGreaterEqual(self.page.detail_fields_table.rowCount(), 10)
         self.assertIn('"Risk Level"', self.page.detail_raw_json.toPlainText())
+
+    def test_wiki_rendering_requires_explicit_format_or_field_type(self) -> None:
+        detail = TrackerItemDetail.from_raw(
+            {
+                "id": 1200,
+                "name": "Wiki detail",
+                "description": "%%(color:red)__설명__%%",
+                "descriptionFormat": "Wiki",
+                "tracker": {"id": 24680001, "name": "Offline Requirements"},
+                "customFields": [
+                    {
+                        "fieldId": 101,
+                        "name": "Wiki field",
+                        "type": "WikiTextFieldValue",
+                        "value": "%%(color:blue)Wiki 값%%",
+                    },
+                    {
+                        "fieldId": 102,
+                        "name": "Plain field",
+                        "type": "TextFieldValue",
+                        "value": "%%(color:blue)원문 유지%%",
+                    },
+                    {
+                        "fieldId": 103,
+                        "name": "Steps",
+                        "type": "TableFieldValue",
+                        "values": [
+                            [
+                                {
+                                    "fieldId": 104,
+                                    "name": "Action",
+                                    "type": "WikiTextFieldValue",
+                                    "value": "%%red 실행%%",
+                                }
+                            ]
+                        ],
+                    },
+                ],
+            }
+        )
+
+        self.page._render_detail(detail)
+
+        self.assertTrue(self.page.description_source_toggle.isVisible())
+        self.assertEqual(self.page.detail_description.toPlainText(), "설명")
+        self.assertIsNotNone(self.page.detail_fields_table.cellWidget(9, 1))
+        self.assertIsNone(self.page.detail_fields_table.cellWidget(10, 1))
+        self.assertEqual(
+            self.page.detail_fields_table.item(10, 1).text(),
+            "%%(color:blue)원문 유지%%",
+        )
+        self.assertIsNotNone(self.page.detail_fields_table.cellWidget(11, 1))
+
+        self.page.description_source_toggle.setChecked(True)
+        self.assertEqual(
+            self.page.detail_description.toPlainText(),
+            "%%(color:red)__설명__%%",
+        )
+
+    def test_plain_description_keeps_wiki_like_text_unchanged(self) -> None:
+        detail = TrackerItemDetail.from_raw(
+            {
+                "id": 1201,
+                "name": "Plain detail",
+                "description": "%%(color:red)원문%%",
+                "descriptionFormat": "PlainText",
+                "tracker": {"id": 24680001, "name": "Offline Requirements"},
+            }
+        )
+
+        self.page._render_detail(detail)
+
+        self.assertFalse(self.page.description_source_toggle.isVisible())
+        self.assertEqual(
+            self.page.detail_description.toPlainText(),
+            "%%(color:red)원문%%",
+        )
 
     def test_test_mode_editor_loads_schema_but_disables_write_actions(self) -> None:
         self.page.activate()

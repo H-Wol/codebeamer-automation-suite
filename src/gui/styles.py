@@ -542,7 +542,7 @@ QLabel#step_badge[complete="true"] {
     border: 1px solid #B6DAEE;
 }
 
-QPushButton, QToolButton, QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox, QTableWidget, QPlainTextEdit, QTabBar::tab {
+QPushButton, QToolButton, QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox, QTableWidget, QPlainTextEdit, QTextBrowser, QTabBar::tab {
     outline: none;
 }
 
@@ -674,7 +674,7 @@ QPushButton#danger_button:disabled {
     border: 1px solid #E7D7D7;
 }
 
-QTableWidget, QPlainTextEdit, QTabWidget::pane {
+QTableWidget, QPlainTextEdit, QTextBrowser, QTabWidget::pane {
     background: #FFFFFF;
     border: 1px solid #D8E1EA;
     border-radius: 8px;
@@ -1040,7 +1040,7 @@ QPushButton#mode_toggle:checked:hover {
     background: #15918D;
 }
 
-QTableWidget, QPlainTextEdit, QTabWidget::pane {
+QTableWidget, QPlainTextEdit, QTextBrowser, QTabWidget::pane {
     border: 1px solid #D3E7E9;
 }
 

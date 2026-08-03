@@ -12,6 +12,7 @@
 - 간편, 조건 조합, CbQL 검색을 하나의 `TrackerQuery`로 표현
 - 선택 tracker ID를 모든 검색 CbQL에 강제로 결합
 - 아이템 상세, builtin/custom field, 부모·자식 요약과 원본 JSON 정규화
+- 설명 format과 custom/TableField 값 모델을 보존해 화면이 명시적 Wiki 형식만 렌더링할 수 있게 함
 - ID 직접 접근용 프로젝트·트래커 컨텍스트와 parent 조상 경로 조회
 - 계층 pagination 전체 수집과 검색 pagination 응답·사용자 요청값의 분리 보존
 - 배열 또는 객체로 반환되는 tracker schema 응답 정규화
@@ -71,6 +72,7 @@ tracker.id = <현재 tracker ID> AND (<사용자 조건>) ORDER BY <검증된 �
 - `TrackerQuery`, `TrackerQueryCondition`, `TrackerQueryGroup`: 검색 조건
 - `TrackerItemSummary`: 트리와 검색 결과의 최소 표시 데이터
 - `TrackerItemDetail`: builtin/custom field, parent/children, 마스킹된 원본 응답
+- `TrackerFieldValue.raw_value`: Wiki와 TableField의 형식·행·열 판정에 사용하는 필드 원본 구조
 - `TrackerItemContext`: ID 직접 접근으로 확인한 프로젝트·트래커와 상세
 - `PageResult`: 서버와 요청 pagination 메타데이터
 - `TrackerQueryServiceError`: 사용자 대응이 가능한 오류 분류
