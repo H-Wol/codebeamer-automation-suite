@@ -109,10 +109,13 @@ class GuiSettingsCenterTest(unittest.TestCase):
     def test_online_profile_requires_validation_then_explicit_save_and_apply(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             applied = []
+            busy_events = []
             page = SettingsCenterPage(
                 self._store(Path(tmp_dir)),
                 on_applied=applied.append,
                 connection_tester=lambda settings: [{"id": 1, "name": "Project"}],
+                busy_started=lambda message: busy_events.append(("start", message)) or 17,
+                busy_finished=lambda token: busy_events.append(("finish", token)),
             )
             self._configure_online_profile(page)
 
@@ -123,6 +126,13 @@ class GuiSettingsCenterTest(unittest.TestCase):
             self._finish_background_validation(page)
 
             self.assertIn("검증에 성공", page.status_label.text())
+            self.assertEqual(
+                busy_events,
+                [
+                    ("start", "Codebeamer 연결 응답을 기다리는 중입니다."),
+                    ("finish", 17),
+                ],
+            )
             self.assertTrue(page.has_unsaved_changes())
             self.assertTrue(page.save_changes(), page.status_label.text())
             self.assertFalse(page.has_unsaved_changes())

@@ -175,6 +175,7 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - 두 tracker 익명 조회 snapshot과 온라인 조회가 같은 서비스 계약을 사용
 - 프로젝트·트래커 선택, 지연 로딩 트리, tracker 범위 검색, ID 직접 접근과 상세 화면 연결
 - 조회 요청의 화면 세션 캐시와 request token 기반 오래된 응답 차단
+- API·백그라운드 작업의 중첩 수를 추적하고 전체 입력을 차단하는 전역 spinner 오버레이
 - schema 기반 단건 생성, 선택 필드 부분 수정, version 충돌 확인, 단건 상태 전환과 삭제
 - 단건 쓰기와 배치 최종 결과의 제한된 로컬 실행 기록 및 필터 화면
 - 공통 HTTP 계층의 메타데이터 전용 API 모니터와 별도 실시간 통계 창
@@ -216,6 +217,7 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - 검증·업로드·결과 화면: `src/gui/page_execution_run.py`
 - 페이지 호환 façade: `src/gui/page_setup.py`, `src/gui/page_execution.py`
 - 최상위 앱 셸, 접이식 탐색 메뉴와 route 전환: `src/gui/main_window.py`
+- 참조 카운트형 로딩 오버레이와 회전 spinner: `src/gui/loading_overlay.py`
 - 기존 배치 마법사 조합: `src/gui/batch_window.py`, `src/gui/window_support.py`, `src/gui/window_shell.py`, `src/gui/window_workflow.py`, `src/gui/window_upload.py`
 - GUI 서비스 분리: `src/gui/service_core.py`, `src/gui/upload_service.py`
 - 트래커 조회 모델·서비스: `src/gui/tracker_query_models.py`, `src/gui/tracker_query_service.py`

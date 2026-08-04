@@ -70,6 +70,8 @@ class SettingsCenterPage(QWidget):
         on_applied=None,
         connection_tester=None,
         api_monitor_requested=None,
+        busy_started=None,
+        busy_finished=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -78,6 +80,8 @@ class SettingsCenterPage(QWidget):
         self.on_applied = on_applied
         self.connection_tester = connection_tester
         self.api_monitor_requested = api_monitor_requested
+        self.busy_started = busy_started
+        self.busy_finished = busy_finished
         self.persisted_settings = settings_store.ensure_app_settings()
         self.draft_settings = deepcopy(self.persisted_settings)
         self.current_category = SETTINGS_CATEGORY_CONNECTION
@@ -89,6 +93,7 @@ class SettingsCenterPage(QWidget):
         self._dirty = False
         self._updating_controls = False
         self._validation_task = None
+        self._validation_busy_token = None
         self._build_ui()
         self._load_draft_into_controls()
 
@@ -931,7 +936,21 @@ class SettingsCenterPage(QWidget):
         task.completed.connect(self._validation_completed)
         task.failed.connect(self._validation_failed)
         self._refresh_validation_controls()
-        task.start()
+        if callable(self.busy_started):
+            message = (
+                "테스트 Snapshot을 검증하는 중입니다."
+                if settings.offline_mode
+                else "Codebeamer 연결 응답을 기다리는 중입니다."
+            )
+            try:
+                self._validation_busy_token = self.busy_started(message)
+            except Exception:
+                self._validation_busy_token = None
+        try:
+            task.start()
+        except Exception as exc:
+            self.status_label.setText(f"검증 실패: {self._safe_message(exc)}")
+            self._finish_validation_task()
 
     def _validation_completed(self, result) -> None:
         try:
@@ -966,6 +985,13 @@ class SettingsCenterPage(QWidget):
     def _finish_validation_task(self) -> None:
         task = self._validation_task
         self._validation_task = None
+        busy_token = self._validation_busy_token
+        self._validation_busy_token = None
+        if busy_token is not None and callable(self.busy_finished):
+            try:
+                self.busy_finished(busy_token)
+            except Exception:
+                pass
         if task is not None:
             task.deleteLater()
         self._refresh_validation_controls()

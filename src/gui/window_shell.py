@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from .loading_overlay import LoadingOverlay
 from .page_batch_settings import create_batch_settings_page
 from .pages import create_file_selection_page
 from .pages import create_mapping_page
@@ -21,8 +22,6 @@ class WindowShellMixin:
         QVBoxLayout = self.qt["QVBoxLayout"]
         QHBoxLayout = self.qt["QHBoxLayout"]
         QLabel = self.qt["QLabel"]
-        QProgressBar = self.qt["QProgressBar"]
-        Qt = self.qt["Qt"]
         QFrame = self.qt["QFrame"]
         QPushButton = self.qt["QPushButton"]
 
@@ -93,33 +92,11 @@ class WindowShellMixin:
         root_layout.addWidget(header_card)
         root_layout.addWidget(self.stack_card, 1)
 
-        self.busy_overlay = QWidget(root)
-        self.busy_overlay.setObjectName("busy_overlay")
-        self.busy_overlay.hide()
-        overlay_layout = QVBoxLayout(self.busy_overlay)
-        overlay_layout.setContentsMargins(0, 0, 0, 0)
-        overlay_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        busy_card = QFrame(self.busy_overlay)
-        busy_card.setObjectName("busy_card")
-        busy_card_layout = QVBoxLayout(busy_card)
-        busy_card_layout.setContentsMargins(18, 16, 18, 14)
-        busy_card_layout.setSpacing(8)
-
-        busy_title = QLabel("작업 중")
-        busy_title.setObjectName("busy_title")
-        self.busy_message_label = QLabel("잠시만 기다려 주세요.")
-        self.busy_message_label.setObjectName("busy_message")
-        self.busy_message_label.setWordWrap(True)
-        self.busy_progress = QProgressBar()
-        self.busy_progress.setObjectName("busy_progress")
-        self.busy_progress.setRange(0, 0)
-        self.busy_progress.setTextVisible(False)
-
-        busy_card_layout.addWidget(busy_title)
-        busy_card_layout.addWidget(self.busy_message_label)
-        busy_card_layout.addWidget(self.busy_progress)
-        overlay_layout.addWidget(busy_card)
+        self.busy_overlay = LoadingOverlay(root)
+        self.busy_message_label = self.busy_overlay.message_label
+        self.busy_spinner = self.busy_overlay.spinner
+        self._local_busy_token = None
+        self._external_busy_token = None
 
         self.setCentralWidget(root)
         self._update_busy_overlay_geometry()
@@ -202,8 +179,7 @@ class WindowShellMixin:
 
     def _update_busy_overlay_geometry(self) -> None:
         if hasattr(self, "busy_overlay") and hasattr(self, "root_widget"):
-            self.busy_overlay.setGeometry(self.root_widget.rect())
-            self.busy_overlay.raise_()
+            self.busy_overlay.sync_geometry()
 
     def resizeEvent(self, event) -> None:
         """Qt 리사이즈 이벤트를 처리한다."""
@@ -255,19 +231,27 @@ class WindowShellMixin:
     def _set_busy(self, busy: bool, message: str = "") -> None:
         """`set_busy` 값을 설정한다."""
         QApplication = self.qt["QApplication"]
-        Qt = self.qt["Qt"]
 
-        if busy:
-            self.busy_message_label.setText(message or "잠시만 기다려 주세요.")
-            self._update_busy_overlay_geometry()
-            self.busy_overlay.show()
-            self.busy_overlay.raise_()
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        external_start = getattr(self, "_busy_started_callback", None)
+        external_finish = getattr(self, "_busy_finished_callback", None)
+        if bool(getattr(self, "_embedded", False)) and callable(external_start):
+            if busy and self._external_busy_token is None:
+                self._external_busy_token = external_start(message)
+            elif not busy and self._external_busy_token is not None:
+                if callable(external_finish):
+                    external_finish(self._external_busy_token)
+                self._external_busy_token = None
             QApplication.processEvents()
             return
 
-        self.busy_overlay.hide()
-        QApplication.restoreOverrideCursor()
+        if busy:
+            if self._local_busy_token is None:
+                self._local_busy_token = self.busy_overlay.start(message)
+            QApplication.processEvents()
+            return
+
+        self.busy_overlay.finish(self._local_busy_token)
+        self._local_busy_token = None
         QApplication.processEvents()
 
     def _run_with_busy(self, message: str, func, *args, **kwargs):

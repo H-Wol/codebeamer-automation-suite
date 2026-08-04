@@ -224,6 +224,39 @@ class GuiMainWindowSmokeTest(unittest.TestCase):
             window.close()
             self._app.processEvents()
 
+    def test_global_loading_overlay_uses_reference_counted_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            window = MainWindow(GuiSettingsStore(root_dir=Path(temp_dir)))
+            window.show()
+            self._app.processEvents()
+
+            first = window._begin_busy("프로젝트를 불러오는 중입니다.")
+            second = window._begin_busy("트래커를 불러오는 중입니다.")
+            self._app.processEvents()
+
+            self.assertTrue(window.loading_overlay.isVisible())
+            self.assertEqual(window.loading_overlay.active_count, 2)
+            self.assertEqual(
+                window.loading_overlay.message_label.text(),
+                "트래커를 불러오는 중입니다.",
+            )
+            self.assertEqual(
+                window.loading_overlay.geometry(),
+                window.centralWidget().rect(),
+            )
+
+            window._end_busy(first)
+            self.assertTrue(window.loading_overlay.isVisible())
+            self.assertEqual(window.loading_overlay.active_count, 1)
+
+            window._end_busy(second)
+            self._app.processEvents()
+            self.assertFalse(window.loading_overlay.isVisible())
+            self.assertEqual(window.loading_overlay.active_count, 0)
+
+            window.close()
+            self._app.processEvents()
+
     def test_application_navigation_can_collapse_and_restore_on_restart(self) -> None:
         from PySide6.QtCore import QPoint
 

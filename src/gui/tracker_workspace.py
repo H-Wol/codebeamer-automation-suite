@@ -69,6 +69,19 @@ CHILDREN_LOADED_ROLE = int(Qt.ItemDataRole.UserRole) + 3
 HIERARCHY_FETCH_PAGE_SIZE = 500
 DEFAULT_SEARCH_PAGE_SIZE = 50
 
+REQUEST_BUSY_MESSAGES = {
+    "projects": "프로젝트 목록을 불러오는 중입니다.",
+    "trackers": "트래커 목록을 불러오는 중입니다.",
+    "roots": "최상위 아이템을 불러오는 중입니다.",
+    "detail": "아이템 상세 정보를 불러오는 중입니다.",
+    "create_schema": "새 아이템 생성 필드를 확인하는 중입니다.",
+    "item_create": "새 트래커 아이템을 생성하는 중입니다.",
+    "search": "현재 트래커에서 아이템을 검색하는 중입니다.",
+    "direct": "아이템 ID의 위치와 계층을 확인하는 중입니다.",
+    "editor_schema": "수정 가능한 필드를 확인하는 중입니다.",
+    "item_write": "트래커 아이템 변경 사항을 반영하는 중입니다.",
+}
+
 
 @dataclass(frozen=True)
 class _DirectItemResult:
@@ -93,6 +106,8 @@ class TrackerWorkspacePage(QWidget):
         ]
         | None = None,
         activity_recorder: Callable[[ActivityRecord], None] | None = None,
+        busy_started: Callable[[str], object] | None = None,
+        busy_finished: Callable[[object], None] | None = None,
         task_factory=BackgroundTask,
         synchronous: bool = False,
         parent=None,
@@ -108,6 +123,8 @@ class TrackerWorkspacePage(QWidget):
         self.delete_confirmer = delete_confirmer
         self.create_request_provider = create_request_provider
         self.activity_recorder = activity_recorder
+        self.busy_started = busy_started
+        self.busy_finished = busy_finished
         self.task_factory = task_factory
         self.synchronous = bool(synchronous)
 
@@ -683,6 +700,7 @@ class TrackerWorkspacePage(QWidget):
         on_failure: Callable[[Exception], None] | None = None,
     ) -> int:
         token = self._next_token(key)
+        busy_token = self._start_request_busy(key)
 
         def success(result: Any) -> None:
             if self._is_current_token(key, token):
@@ -701,6 +719,8 @@ class TrackerWorkspacePage(QWidget):
                 success(operation())
             except Exception as exc:
                 failure(exc)
+            finally:
+                self._finish_request_busy(busy_token)
             return token
 
         task = self.task_factory(operation)
@@ -710,11 +730,40 @@ class TrackerWorkspacePage(QWidget):
 
         def cleanup() -> None:
             self._tasks.discard(task)
+            self._finish_request_busy(busy_token)
             task.deleteLater()
 
         task.finished.connect(cleanup)
-        task.start()
+        try:
+            task.start()
+        except Exception:
+            self._tasks.discard(task)
+            self._finish_request_busy(busy_token)
+            task.deleteLater()
+            raise
         return token
+
+    def _start_request_busy(self, key: str) -> object | None:
+        if not callable(self.busy_started):
+            return None
+        message = REQUEST_BUSY_MESSAGES.get(key)
+        if message is None and key.startswith("children:"):
+            item_id = key.partition(":")[2]
+            message = f"#{item_id}의 하위 아이템을 불러오는 중입니다."
+        if message is None:
+            message = "Codebeamer 응답을 기다리는 중입니다."
+        try:
+            return self.busy_started(message)
+        except Exception:
+            return None
+
+    def _finish_request_busy(self, token: object | None) -> None:
+        if token is None or not callable(self.busy_finished):
+            return
+        try:
+            self.busy_finished(token)
+        except Exception:
+            pass
 
     def _show_error(self, exc: Exception, *, prefix: str = "") -> None:
         if isinstance(exc, (TrackerQueryServiceError, TrackerItemWriteError)):
@@ -2137,5 +2186,6 @@ __all__ = [
     "HIERARCHY_FETCH_PAGE_SIZE",
     "ITEM_SUMMARY_ROLE",
     "PLACEHOLDER_ROLE",
+    "REQUEST_BUSY_MESSAGES",
     "TrackerWorkspacePage",
 ]

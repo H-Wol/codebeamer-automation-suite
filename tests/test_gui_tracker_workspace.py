@@ -449,6 +449,34 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.assertFalse(self.page._is_current_token("detail", first))
         self.assertTrue(self.page._is_current_token("detail", second))
 
+    def test_api_requests_report_balanced_global_busy_tokens(self) -> None:
+        events: list[tuple[str, object]] = []
+
+        def started(message: str) -> int:
+            token = len([event for event in events if event[0] == "start"]) + 1
+            events.append(("start", message))
+            return token
+
+        page = TrackerWorkspacePage(
+            settings_provider=lambda: self.settings,
+            service=CountingTrackerQueryService(),
+            busy_started=started,
+            busy_finished=lambda token: events.append(("finish", token)),
+            synchronous=True,
+        )
+        try:
+            page.activate()
+
+            starts = [value for kind, value in events if kind == "start"]
+            finishes = [value for kind, value in events if kind == "finish"]
+            self.assertEqual(len(starts), 3)
+            self.assertEqual(finishes, [3, 2, 1])
+            self.assertIn("프로젝트", starts[0])
+            self.assertIn("트래커", starts[1])
+            self.assertIn("최상위 아이템", starts[2])
+        finally:
+            page.close()
+
     def test_tree_items_store_normalized_models_not_server_dicts(self) -> None:
         self.page.activate()
         value = self.page.item_tree.topLevelItem(0).data(0, ITEM_SUMMARY_ROLE)

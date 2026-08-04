@@ -12,6 +12,7 @@ from .activity_history import default_activity_history_path
 from .activity_history_page import ActivityHistoryPage
 from .api_monitor_window import ApiMonitorWindow
 from .batch_window import BatchUploadWindow
+from .loading_overlay import LoadingOverlay
 from .settings_center import SettingsCenterPage
 from .settings_store import GuiSettings
 from .settings_store import GuiSettingsStore
@@ -73,6 +74,7 @@ class MainWindow(QMainWindow):
         self.route_widgets: dict[str, object] = {}
         self.nav_buttons: dict[str, object] = {}
         self.api_monitor_window: ApiMonitorWindow | None = None
+        self._busy_tokens: set[int] = set()
 
         self._build_application_shell(initial_settings)
         self.setWindowTitle("Codebeamer Automation Suite")
@@ -191,6 +193,8 @@ class MainWindow(QMainWindow):
             settings_provider=self.settings_store.load,
             open_settings=self._open_global_settings,
             activity_recorder=self._record_activity,
+            busy_started=self._begin_busy,
+            busy_finished=self._end_busy,
             parent=content,
         )
 
@@ -206,6 +210,8 @@ class MainWindow(QMainWindow):
             settings_changed_callback=self._on_batch_settings_changed,
             global_settings_requested_callback=self._open_global_settings,
             activity_recorder=self._record_activity,
+            busy_started_callback=self._begin_busy,
+            busy_finished_callback=self._end_busy,
         )
         batch_layout.addWidget(self.batch_window)
         self.settings_center_page = SettingsCenterPage(
@@ -215,6 +221,8 @@ class MainWindow(QMainWindow):
                 self.batch_window.codebeamer_service.test_connection_and_load_projects
             ),
             api_monitor_requested=self._show_api_monitor,
+            busy_started=self._begin_busy,
+            busy_finished=self._end_busy,
             parent=content,
         )
 
@@ -232,7 +240,22 @@ class MainWindow(QMainWindow):
 
         root_layout.addWidget(header)
         root_layout.addLayout(body_layout, 1)
+        self.loading_overlay = LoadingOverlay(root)
         self.setCentralWidget(root)
+        self.loading_overlay.sync_geometry()
+
+    def _begin_busy(self, message: str = "") -> int:
+        token = self.loading_overlay.start(message)
+        self._busy_tokens.add(token)
+        return token
+
+    def _end_busy(self, token: object) -> None:
+        try:
+            normalized_token = int(token)
+        except (TypeError, ValueError):
+            return
+        self._busy_tokens.discard(normalized_token)
+        self.loading_overlay.finish(normalized_token)
 
     def _create_placeholder_page(
         self,
@@ -445,6 +468,8 @@ class MainWindow(QMainWindow):
         if not self.isFullScreen() and not self.isMaximized():
             self._last_normal_window_width = max(int(self.width()), self.minimumWidth())
             self._last_normal_window_height = max(int(self.height()), self.minimumHeight())
+        if hasattr(self, "loading_overlay"):
+            self.loading_overlay.sync_geometry()
 
     def closeEvent(self, event) -> None:
         if self.settings_center_page.has_unsaved_changes() and not self.settings_center_page.request_leave():
@@ -467,6 +492,8 @@ class MainWindow(QMainWindow):
         if self.api_monitor_window is not None:
             self.api_monitor_window.close()
         self.tracker_workspace_page.shutdown()
+        self._busy_tokens.clear()
+        self.loading_overlay.clear()
         super().closeEvent(event)
 
 

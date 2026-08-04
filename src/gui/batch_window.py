@@ -33,6 +33,8 @@ class BatchUploadWindow(WindowShellMixin, WindowWorkflowMixin, WindowUploadMixin
         settings_changed_callback: Callable[[GuiSettings], None] | None = None,
         global_settings_requested_callback: Callable[[], None] | None = None,
         activity_recorder: Callable[[ActivityRecord], None] | None = None,
+        busy_started_callback: Callable[[str], object] | None = None,
+        busy_finished_callback: Callable[[object], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.qt = _QT
@@ -42,6 +44,8 @@ class BatchUploadWindow(WindowShellMixin, WindowWorkflowMixin, WindowUploadMixin
         self._settings_changed_callback = settings_changed_callback
         self._global_settings_requested_callback = global_settings_requested_callback
         self._activity_recorder = activity_recorder
+        self._busy_started_callback = busy_started_callback
+        self._busy_finished_callback = busy_finished_callback
         if self._embedded:
             self.setWindowFlags(self.qt["Qt"].WindowType.Widget)
 
