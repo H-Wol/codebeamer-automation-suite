@@ -70,8 +70,7 @@
 - `referenceType`, `options`, `multipleValues`, `valueModel` 로 보조 판정
 - `UserChoiceField`, `UserReference` 는 사용자 이름 우선 lookup 대상으로 분류
 - `MemberField` 는 `USER/ROLE/GROUP` mixed member lookup 대상으로 분류
-- `TrackerItemChoiceField` 는 tracker configuration 에 source tracker 정보가 있으면 query lookup 가능 대상으로 분류
-- source tracker를 안전하게 결정할 수 없는 `TrackerItemChoiceField` 는 regex ID 추출 경로만 허용
+- `TrackerItemChoiceField` 는 configuration 정보와 무관하게 regex ID 추출 경로로 분류
 - `Status` 는 transition 기반 후처리가 필요하므로 TODO 로 분리
 - 정적 option이 없는 일반 reference field는 `LOOKUP_REQUIRED` 또는 `FIELD_UNSUPPORTED` 로 조기 노출
 
@@ -354,8 +353,8 @@ flowchart TD
 12. 정적 option은 reference dict로 해석합니다.
 13. 사용자 선택 필드는 사용자 이름으로 조회하고 필요시 숫자 입력에 한해 ID fallback 을 사용합니다.
 14. `MemberField` 는 `USER/ROLE/GROUP` 후보를 이름으로 찾아 mixed reference 로 변환합니다.
-15. `TrackerItemChoiceField` 는 configuration 에 source tracker 정보가 있으면 query lookup 후보를 모아 사전 조회하고, 아니면 regex로 `TrackerItemReference` 를 만듭니다.
-16. user/member/tracker item lookup 결과는 cache에 저장해 다음 행과 다음 파일에서 재사용합니다.
+15. `TrackerItemChoiceField` 는 regex로 ID를 추출해 `TrackerItemReference` 를 만듭니다. 이름·summary query lookup은 비활성화되어 있습니다.
+16. user/member lookup 결과는 cache에 저장해 다음 행과 다음 파일에서 재사용합니다.
 17. wizard가 row별 payload를 먼저 계산해 `payload_df` cache에 저장합니다.
 18. preview는 `payload_df`를 재사용하고 upload는 같은 payload로 parent-first 업로드를 수행합니다.
 19. 상단 데이터가 켜져 있으면 파일별 root parent item을 먼저 업로드한 뒤 child row의 parent를 연결합니다.
@@ -409,9 +408,8 @@ flowchart TD
 
 tracker item 선택 필드 처리:
 - `TrackerItemChoiceField` 는 tracker configuration 의 `fields` 목록에서 `referenceId == schema.field_id` 를 우선 매칭합니다.
-- matched configuration 이 `choiceOptionSetting`, `choiceConfigOptionsSetting`, `choiceConfigOptionsSetApi` 중 하나에 tracker `referenceFilters` 를 제공하면 query lookup 을 지원합니다.
-- query lookup 은 전체 파일에서 필요한 이름/summary 값을 중복 제거한 뒤 source tracker 기준으로 사전 조회합니다.
-- source tracker를 확인할 수 없거나 offline snapshot 만 사용하는 경우에는 regex ID 추출 경로만 사용합니다.
+- 이름·summary query lookup은 대량 검증의 API 호출을 줄이기 위해 비활성화되어 있습니다.
+- configuration의 source tracker 정보와 무관하게 regex ID 추출 경로를 사용합니다.
 - builtin `subjects` 는 현재 direct parse만 사용합니다.
 - 단일 값 또는 list 모두 허용
 - 각 값에서 `[:id]` 패턴을 먼저, 없으면 `[]` 안 첫 번째 integer를 추출

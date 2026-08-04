@@ -75,17 +75,16 @@
 - 일부 파일에서만 값이 비면 정규식과 source 선택을 함께 다시 확인
 - 루트 parent item 생성이 필요 없으면 해당 옵션을 끄고 진행
 
-## `TrackerItemChoiceField` 가 query 모드로 활성화되지 않음
+## `TrackerItemChoiceField` 가 ID로 해석되지 않음
 
 가능한 원인:
-- tracker configuration snapshot 또는 live configuration 에 source tracker 정보가 없음
-- configuration 의 `fields` 목록과 schema field id 가 매칭되지 않음
-- 해당 필드가 tracker 기반이 아닌 다른 구조라 query 를 지원하지 않음
+- 입력값에 대괄호 안 ID 또는 숫자만의 값이 없음
+- 사용자 지정 ID 추출 정규식이 입력 형식과 맞지 않음
 
 대응:
-- configuration 응답의 `fields` 목록에서 `referenceId == schema.field_id` 인지 먼저 확인
-- matched field 아래 `choiceOptionSetting` 또는 `choiceConfigOptionsSetting` 의 `referenceFilters` 를 확인
-- source tracker를 찾지 못하면 현재는 regex ID 추출 방식만 사용
+- Tracker Item 설정의 예시 미리보기에서 추출 결과를 먼저 확인
+- 기본 형식인 `[REQ:123]` 또는 숫자 값으로 입력하거나, 입력 형식에 맞는 정규식을 지정
+- 이름·summary query lookup은 대량 검증의 API 호출을 줄이기 위해 현재 사용할 수 없음
 
 ## 다중 파일인데 검증 이슈가 한 파일 기준으로만 보임
 

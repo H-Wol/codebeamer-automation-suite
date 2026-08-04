@@ -5,7 +5,6 @@ import unittest
 import pandas as pd
 
 from src.mapping_service import MappingService
-from src.models import TrackerItemQueryMatchStrategy
 from src.models import TrackerItemResolutionMode
 from src.wizard import CodebeamerUploadWizard
 
@@ -17,23 +16,7 @@ class FakeTrackerItemClient:
     def search_tracker_items_by_name(self, *, tracker_id: int, name: str, **kwargs):
         del kwargs
         self.search_calls.append((tracker_id, name))
-        lookup = {
-            "REQ-100": [{"id": 101, "name": "REQ-100", "type": "TrackerItemReference"}],
-            "REQ-200": [{"id": 202, "name": "REQ-200", "type": "TrackerItemReference"}],
-        }
-        return lookup.get(name, [])
-
-
-class FakeTrackerItemFirstMatchClient(FakeTrackerItemClient):
-    def search_tracker_items_by_name(self, *, tracker_id: int, name: str, **kwargs):
-        del kwargs
-        self.search_calls.append((tracker_id, name))
-        if name == "REQ-100":
-            return [
-                {"id": 101, "name": "REQ-100 candidate A", "type": "TrackerItemReference"},
-                {"id": 102, "name": "REQ-100", "type": "TrackerItemReference"},
-            ]
-        return super().search_tracker_items_by_name(tracker_id=tracker_id, name=name)
+        return [{"id": 999, "name": name, "type": "TrackerItemReference"}]
 
 
 class WizardTrackerItemLookupTest(unittest.TestCase):
@@ -55,212 +38,13 @@ class WizardTrackerItemLookupTest(unittest.TestCase):
             }
         ])
         self.wizard.state.schema_df["tracker_item_source_tracker_ids"] = [[13526611]]
+
+    def test_legacy_query_setting_is_forced_to_id_extraction_without_api_call(self) -> None:
         self.wizard.state.upload_df = pd.DataFrame([
-            {"_row_id": 1, "related_items": ["REQ-100", "REQ-200"]},
-            {"_row_id": 2, "related_items": ["REQ-100"]},
-        ])
-
-    def test_process_option_mapping_deduplicates_tracker_item_query_values(self) -> None:
-        self.wizard.process_option_mapping(
-            {"related_items": "연관 요구사항"},
-            selected_tracker_item_settings={
-                "연관 요구사항": {
-                    "mode": TrackerItemResolutionMode.QUERY.value,
-                    "source_tracker_ids": [13526611],
-                }
-            },
-        )
-
-        self.assertEqual(
-            self.client.search_calls,
-            [(13526611, "REQ-100"), (13526611, "REQ-200")],
-        )
-
-        converted = self.wizard.state.converted_upload_df
-        self.assertIsNotNone(converted)
-        first_values = converted.iloc[0]["related_items__resolved"]
-        second_values = converted.iloc[1]["related_items__resolved"]
-        self.assertEqual([value["id"] for value in first_values], [101, 202])
-        self.assertEqual([value["id"] for value in second_values], [101])
-
-    def test_process_option_mapping_splits_multiline_query_values_for_multiple_tracker_items(self) -> None:
-        self.wizard.state.upload_df = pd.DataFrame([
-            {"_row_id": 1, "related_items": "REQ-100\nREQ-200"},
+            {"_row_id": 1, "related_items": ["[REQ:100]", "[REQ:200]"]},
         ])
 
         self.wizard.process_option_mapping(
-            {"related_items": "연관 요구사항"},
-            selected_tracker_item_settings={
-                "연관 요구사항": {
-                    "mode": TrackerItemResolutionMode.QUERY.value,
-                    "source_tracker_ids": [13526611],
-                }
-            },
-        )
-
-        self.assertEqual(
-            self.client.search_calls,
-            [(13526611, "REQ-100"), (13526611, "REQ-200")],
-        )
-
-        converted = self.wizard.state.converted_upload_df
-        self.assertIsNotNone(converted)
-        resolved_values = converted.iloc[0]["related_items__resolved"]
-        self.assertEqual([value["id"] for value in resolved_values], [101, 202])
-
-    def test_process_option_mapping_uses_first_tracker_item_query_match(self) -> None:
-        self.client = FakeTrackerItemFirstMatchClient()
-        self.wizard = CodebeamerUploadWizard(
-            client=self.client,
-            processor=None,
-            mapper=self.mapper,
-        )
-        self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
-            {
-                "id": 15,
-                "name": "연관 요구사항",
-                "type": "TrackerItemChoiceField",
-                "multipleValues": False,
-                "valueModel": "ChoiceFieldValue<TrackerItemReference>",
-            }
-        ])
-        self.wizard.state.schema_df["tracker_item_source_tracker_ids"] = [[13526611]]
-        self.wizard.state.upload_df = pd.DataFrame([
-            {"_row_id": 1, "related_item": "REQ-100"},
-        ])
-
-        _, option_check_df = self.wizard.process_option_mapping(
-            {"related_item": "연관 요구사항"},
-            selected_tracker_item_settings={
-                "연관 요구사항": {
-                    "mode": TrackerItemResolutionMode.QUERY.value,
-                    "query_match_strategy": TrackerItemQueryMatchStrategy.FIRST.value,
-                    "source_tracker_ids": [13526611],
-                }
-            },
-        )
-
-        self.assertNotIn("TRACKER_ITEM_LOOKUP_AMBIGUOUS", option_check_df["status"].tolist())
-        converted = self.wizard.state.converted_upload_df
-        self.assertIsNotNone(converted)
-        self.assertEqual(converted.iloc[0]["related_item__resolved"]["id"], 101)
-
-    def test_process_option_mapping_uses_last_tracker_item_query_match(self) -> None:
-        self.client = FakeTrackerItemFirstMatchClient()
-        self.wizard = CodebeamerUploadWizard(
-            client=self.client,
-            processor=None,
-            mapper=self.mapper,
-        )
-        self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
-            {
-                "id": 15,
-                "name": "연관 요구사항",
-                "type": "TrackerItemChoiceField",
-                "multipleValues": False,
-                "valueModel": "ChoiceFieldValue<TrackerItemReference>",
-            }
-        ])
-        self.wizard.state.schema_df["tracker_item_source_tracker_ids"] = [[13526611]]
-        self.wizard.state.upload_df = pd.DataFrame([
-            {"_row_id": 1, "related_item": "REQ-100"},
-        ])
-
-        _, option_check_df = self.wizard.process_option_mapping(
-            {"related_item": "연관 요구사항"},
-            selected_tracker_item_settings={
-                "연관 요구사항": {
-                    "mode": TrackerItemResolutionMode.QUERY.value,
-                    "query_match_strategy": TrackerItemQueryMatchStrategy.LAST.value,
-                    "source_tracker_ids": [13526611],
-                }
-            },
-        )
-
-        self.assertNotIn("TRACKER_ITEM_LOOKUP_AMBIGUOUS", option_check_df["status"].tolist())
-        converted = self.wizard.state.converted_upload_df
-        self.assertIsNotNone(converted)
-        self.assertEqual(converted.iloc[0]["related_item__resolved"]["id"], 102)
-
-    def test_process_option_mapping_uses_best_tracker_item_query_match(self) -> None:
-        self.client = FakeTrackerItemFirstMatchClient()
-        self.wizard = CodebeamerUploadWizard(
-            client=self.client,
-            processor=None,
-            mapper=self.mapper,
-        )
-        self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
-            {
-                "id": 15,
-                "name": "연관 요구사항",
-                "type": "TrackerItemChoiceField",
-                "multipleValues": False,
-                "valueModel": "ChoiceFieldValue<TrackerItemReference>",
-            }
-        ])
-        self.wizard.state.schema_df["tracker_item_source_tracker_ids"] = [[13526611]]
-        self.wizard.state.upload_df = pd.DataFrame([
-            {"_row_id": 1, "related_item": "REQ-100"},
-        ])
-
-        _, option_check_df = self.wizard.process_option_mapping(
-            {"related_item": "연관 요구사항"},
-            selected_tracker_item_settings={
-                "연관 요구사항": {
-                    "mode": TrackerItemResolutionMode.QUERY.value,
-                    "query_match_strategy": TrackerItemQueryMatchStrategy.BEST.value,
-                    "source_tracker_ids": [13526611],
-                }
-            },
-        )
-
-        self.assertNotIn("TRACKER_ITEM_LOOKUP_AMBIGUOUS", option_check_df["status"].tolist())
-        converted = self.wizard.state.converted_upload_df
-        self.assertIsNotNone(converted)
-        self.assertEqual(converted.iloc[0]["related_item__resolved"]["id"], 102)
-
-    def test_process_option_mapping_marks_ambiguous_when_strategy_is_error(self) -> None:
-        self.client = FakeTrackerItemFirstMatchClient()
-        self.wizard = CodebeamerUploadWizard(
-            client=self.client,
-            processor=None,
-            mapper=self.mapper,
-        )
-        self.wizard.state.schema_df = self.mapper.flatten_schema_fields([
-            {
-                "id": 15,
-                "name": "연관 요구사항",
-                "type": "TrackerItemChoiceField",
-                "multipleValues": False,
-                "valueModel": "ChoiceFieldValue<TrackerItemReference>",
-            }
-        ])
-        self.wizard.state.schema_df["tracker_item_source_tracker_ids"] = [[13526611]]
-        self.wizard.state.upload_df = pd.DataFrame([
-            {"_row_id": 1, "related_item": "REQ-100"},
-        ])
-
-        _, option_check_df = self.wizard.process_option_mapping(
-            {"related_item": "연관 요구사항"},
-            selected_tracker_item_settings={
-                "연관 요구사항": {
-                    "mode": TrackerItemResolutionMode.QUERY.value,
-                    "query_match_strategy": TrackerItemQueryMatchStrategy.ERROR.value,
-                    "source_tracker_ids": [13526611],
-                }
-            },
-        )
-
-        self.assertIn("TRACKER_ITEM_LOOKUP_AMBIGUOUS", option_check_df["status"].tolist())
-        converted = self.wizard.state.converted_upload_df
-        self.assertIsNotNone(converted)
-        self.assertIsNone(converted.iloc[0]["related_item__resolved"])
-
-    def test_process_option_mapping_ignores_manual_query_ids_without_tracker_config(self) -> None:
-        self.wizard.state.schema_df["tracker_item_source_tracker_ids"] = [[]]
-        self.client.search_calls = []
-
-        _, option_check_df = self.wizard.process_option_mapping(
             {"related_items": "연관 요구사항"},
             selected_tracker_item_settings={
                 "연관 요구사항": {
@@ -271,37 +55,49 @@ class WizardTrackerItemLookupTest(unittest.TestCase):
         )
 
         self.assertEqual(self.client.search_calls, [])
-        self.assertIn("DIRECT_PARSE_FAILED", option_check_df["status"].tolist())
-        self.assertNotIn("TRACKER_ITEM_LOOKUP_NOT_FOUND", option_check_df["status"].tolist())
-        self.assertNotIn("TRACKER_ITEM_LOOKUP_AMBIGUOUS", option_check_df["status"].tolist())
+        converted = self.wizard.state.converted_upload_df
+        self.assertIsNotNone(converted)
+        values = converted.iloc[0]["related_items__resolved"]
+        self.assertEqual([value["id"] for value in values], [100, 200])
 
-    def test_process_option_mapping_skips_create_only_tracker_item_query_for_upsert_update_rows(self) -> None:
-        self.wizard.state.upload_mode = "upsert"
+    def test_custom_regex_is_used_even_when_legacy_query_mode_is_saved(self) -> None:
         self.wizard.state.upload_df = pd.DataFrame([
-            {"_row_id": 1, "related_items": ["REQ-100"]},
-            {"_row_id": 2, "id": 77, "related_items": ["REQ-200"]},
+            {"_row_id": 1, "related_items": ["item=100", "item=200"]},
         ])
 
-        _, option_check_df = self.wizard.process_option_mapping(
+        self.wizard.process_option_mapping(
             {"related_items": "연관 요구사항"},
-            selected_mapping_modes={
-                "related_items": {"create": True, "update": False},
-            },
             selected_tracker_item_settings={
                 "연관 요구사항": {
                     "mode": TrackerItemResolutionMode.QUERY.value,
-                    "source_tracker_ids": [13526611],
+                    "regex_pattern": r"item=(\d+)",
                 }
             },
         )
 
-        self.assertEqual(self.client.search_calls, [(13526611, "REQ-100")])
-        self.assertEqual(option_check_df["_row_id"].dropna().tolist(), [])
+        self.assertEqual(self.client.search_calls, [])
         converted = self.wizard.state.converted_upload_df
         self.assertIsNotNone(converted)
-        self.assertEqual([value["id"] for value in converted.iloc[0]["related_items__resolved"]], [101])
-        self.assertIsNone(converted.iloc[1]["related_items__resolved"])
-        self.assertEqual(converted.iloc[1]["related_items"], ["REQ-200"])
+        self.assertEqual(
+            [value["id"] for value in converted.iloc[0]["related_items__resolved"]],
+            [100, 200],
+        )
+
+    def test_non_id_value_fails_validation_without_query_fallback(self) -> None:
+        self.wizard.state.upload_df = pd.DataFrame([
+            {"_row_id": 1, "related_items": ["요구사항 이름만 입력"]},
+        ])
+
+        _, option_check_df = self.wizard.process_option_mapping(
+            {"related_items": "연관 요구사항"},
+            selected_tracker_item_settings={
+                "연관 요구사항": {"mode": TrackerItemResolutionMode.QUERY.value}
+            },
+        )
+
+        self.assertEqual(self.client.search_calls, [])
+        self.assertIn("DIRECT_PARSE_FAILED", option_check_df["status"].tolist())
+        self.assertNotIn("TRACKER_ITEM_LOOKUP_NOT_FOUND", option_check_df["status"].tolist())
 
 
 if __name__ == "__main__":

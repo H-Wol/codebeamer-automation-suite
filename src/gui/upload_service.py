@@ -12,7 +12,6 @@ from src.hierarchy_processor import HierarchyProcessor
 from src.mapping_service import MappingService
 from src.models import OptionMapKind
 from src.models import PayloadStatus
-from src.models import TrackerItemResolutionMode
 from src.upload_pipeline import load_tracker_schema_df
 from src.upload_pipeline import prepare_upload_dataframe
 from src.upload_pipeline import run_validation_pipeline
@@ -723,20 +722,6 @@ class GuiUploadPipelineService:
         return self.root_items.build_root_item_payload_spec(
             mapping_context,
             file_path,
-        )
-
-    @staticmethod
-    def _tracker_item_query_mapping(mapping_context: MappingContext) -> dict[str, str]:
-        return BatchUploadService._tracker_item_query_mapping(mapping_context)
-
-    def _prime_tracker_item_lookup_cache_for_batch(
-        self,
-        settings,
-        mapping_context: MappingContext,
-    ) -> None:
-        self.batch_upload._prime_tracker_item_lookup_cache_for_batch(
-            settings,
-            mapping_context,
         )
 
     @staticmethod

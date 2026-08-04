@@ -20,8 +20,6 @@ from src.mapping_service import MappingService
 from src.models import OptionMapKind
 from src.models import OptionCheckStatus
 from src.models import PayloadStatus
-from src.models import TrackerItemQueryMatchStrategy
-from src.models import TrackerItemResolutionMode
 from src.upload_pipeline import load_tracker_schema_df
 from src.upload_pipeline import prepare_upload_dataframe
 from src.upload_pipeline import run_validation_pipeline

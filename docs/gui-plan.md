@@ -274,13 +274,9 @@ GUI는 최상위 앱 셸에서 작업 영역을 전환하고, `배치 작업`에
 
 `TrackerItemChoiceField` 처리:
 
-- regex 모드
-  - 입력값에서 ID를 직접 추출합니다.
-  - 예시 텍스트를 바로 보여줍니다.
-- query 모드
-  - tracker configuration 에서 source tracker를 찾은 경우에만 활성화됩니다.
-  - 필요한 이름/summary 값은 선택 파일 전체에서 중복 제거 후 사전 조회합니다.
-  - 다건 결과 처리 전략은 `가장 비슷한 값`, `첫 번째 결과`, `마지막 결과`, `오류로 처리` 중에서 선택합니다.
+- 입력값에서 ID를 직접 추출합니다.
+- 예시 텍스트를 바로 보여줍니다.
+- 이름·summary query lookup은 대량 검증의 API 호출을 줄이기 위해 비활성화되어 있습니다.
 
 ### 7. 검증 화면
 
@@ -369,7 +365,7 @@ GUI는 최상위 앱 셸에서 작업 영역을 전환하고, `배치 작업`에
 - 통합 `실행 기록`은 최종 결과 요약만 보관하며, 배치 행별 실시간 로그와 원본 오류 응답은 `배치 작업`에서 확인합니다.
 - 현재 실행 환경에 사용 가능한 `keyring` backend가 없으면 OS 자격증명 저장 방식은 비활성화됩니다.
 - 배치 create 후 `Status` transition 후처리는 아직 구현하지 않았습니다. 작업공간의 단건 상태 전환은 지원합니다.
-- tracker configuration 에 source tracker 정보가 없는 `TrackerItemChoiceField` 는 query 모드를 지원하지 않습니다.
+- `TrackerItemChoiceField` 의 이름·summary query lookup은 대량 검증의 API 호출을 줄이기 위해 비활성화되어 있습니다.
 - offline snapshot 에 사용자 / 그룹 데이터가 없으면 관련 lookup 은 실패하도록 유지합니다. 작업공간 조회는 별도 `조회 데이터 Snapshot`이 있어야 활성화할 수 있습니다.
 - 결과 화면의 상세 상호작용은 아직 최소 구성입니다.
 
@@ -377,6 +373,6 @@ GUI는 최상위 앱 셸에서 작업 영역을 전환하고, `배치 작업`에
 
 1. offline sample 두 파일을 함께 선택해 다중 파일 preview / validation / Dry Run 흐름을 확인합니다.
 2. 상단 데이터 옵션을 켜고 파일명 정규식 미리보기가 예상대로 나오는지 확인합니다.
-3. tracker item regex 모드와 query 모드를 각각 검증합니다.
+3. tracker item ID 추출 정규식과 미리보기가 예상대로 동작하는지 검증합니다.
 4. 기본값이 비어 있는 행에서 올바르게 fallback 되는지 확인합니다.
 5. 실패 응답 JSON 과 항목별 진행 기록이 업로드 화면에 남는지 확인합니다.

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from src.models import TrackerItemQueryMatchStrategy
 from src.models import TrackerItemResolutionMode
 from src.upload_policy import DEFAULT_TRACKER_ITEM_ID_REGEX
 from src.upload_policy import UPLOAD_MODE_CREATE as GUI_UPLOAD_MODE_CREATE
@@ -97,17 +96,17 @@ def _initialize_mapping_page(page, on_validate_requested, on_error=None):
     tracker_tab_layout.addWidget(tracker_item_label)
 
     tracker_item_help_label = QLabel(
-        "TrackerItemChoiceField 는 정규식으로 ID를 추출하거나, configuration 기반 source tracker에서 이름으로 미리 조회할 수 있습니다."
+        "TrackerItemChoiceField 는 입력값에서 ID를 추출해 사용합니다. 이름이나 summary 조회는 현재 사용할 수 없습니다."
     )
     tracker_item_help_label.setWordWrap(True)
     _configure_constrained_panel(tracker_item_help_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     tracker_tab_layout.addWidget(tracker_item_help_label)
 
-    tracker_item_table = QTableWidget(0, 7)
-    tracker_item_table.setHorizontalHeaderLabels(["Excel 컬럼", "Codebeamer 필드", "방식", "다건 결과", "정규식", "예시", "조회 소스"])
+    tracker_item_table = QTableWidget(0, 5)
+    tracker_item_table.setHorizontalHeaderLabels(["Excel 컬럼", "Codebeamer 필드", "처리 방식", "ID 추출 정규식", "예시"])
     tracker_item_table.setAlternatingRowColors(True)
     _configure_data_table(tracker_item_table, minimum_height=SECONDARY_TABLE_MIN_HEIGHT)
-    _configure_table_columns(tracker_item_table, [220, 220, 140, 160, 260, 320, 200])
+    _configure_table_columns(tracker_item_table, [220, 220, 180, 300, 360])
     page.tracker_item_table = tracker_item_table
     tracker_tab_layout.addWidget(tracker_item_table, 1)
     mapping_tabs.addTab(tracker_tab, "Tracker Item")
@@ -150,42 +149,13 @@ def _initialize_mapping_page(page, on_validate_requested, on_error=None):
             schema_row = page._schema_rows_by_name.get(schema_field, {})
             if str(schema_row.get("field_type") or "").strip() != "TrackerItemChoiceField":
                 continue
-            source_tracker_ids = [
-                int(value)
-                for value in (schema_row.get("tracker_item_source_tracker_ids") or [])
-                if str(value).strip()
-            ]
             candidates.append({
                 "df_column": df_column,
                 "schema_field": schema_field,
-                "source_tracker_ids": source_tracker_ids,
-                "supports_query": bool(source_tracker_ids),
-                "query_status": str(schema_row.get("tracker_item_query_status") or "unavailable").strip(),
             })
         return candidates
 
-    def _tracker_item_query_strategy_options() -> list[tuple[str, str]]:
-        return [
-            ("가장 비슷한 값", TrackerItemQueryMatchStrategy.BEST.value),
-            ("첫 번째 결과", TrackerItemQueryMatchStrategy.FIRST.value),
-            ("마지막 결과", TrackerItemQueryMatchStrategy.LAST.value),
-            ("오류로 처리", TrackerItemQueryMatchStrategy.ERROR.value),
-        ]
-
-    def _sync_tracker_item_controls(mode_combo, regex_edit, strategy_combo) -> None:
-        """`sync_tracker_item_controls` 상태를 동기화한다."""
-        is_regex = mode_combo.currentData() == TrackerItemResolutionMode.REGEX.value
-        regex_edit.setEnabled(is_regex)
-        strategy_combo.setEnabled(not is_regex)
-        regex_edit.setPlaceholderText(
-            "ID를 추출할 정규식"
-            if is_regex
-            else "query 모드에서는 선택 파일 전체 값을 중복 제거 후 사전 조회합니다."
-        )
-
-    def _tracker_item_example_text(df_column: str, schema_field: str, mode: str, regex_pattern: str) -> str:
-        if mode != TrackerItemResolutionMode.REGEX.value:
-            return "query 모드에서는 미사용"
+    def _tracker_item_example_text(df_column: str, schema_field: str, regex_pattern: str) -> str:
         schema_row = page._schema_rows_by_name.get(schema_field, {})
         sample_values = _tracker_item_sample_values(page._upload_preview_df, df_column)
         return _build_tracker_item_regex_preview_text(
@@ -194,19 +164,14 @@ def _initialize_mapping_page(page, on_validate_requested, on_error=None):
             multiple_values=bool(schema_row.get("multiple_values", False)),
         )
 
-    def _refresh_tracker_item_example(row_index: int, df_column: str, schema_field: str, mode_combo, regex_edit) -> None:
+    def _refresh_tracker_item_example(row_index: int, df_column: str, schema_field: str, regex_edit) -> None:
         """`refresh_tracker_item_example` 표시를 새로 고친다."""
-        example_item = tracker_item_table.item(row_index, 5)
+        example_item = tracker_item_table.item(row_index, 4)
         if example_item is None:
             example_item = QTableWidgetItem("")
-            tracker_item_table.setItem(row_index, 5, example_item)
+            tracker_item_table.setItem(row_index, 4, example_item)
         example_item.setText(
-            _tracker_item_example_text(
-                df_column,
-                schema_field,
-                str(mode_combo.currentData() or TrackerItemResolutionMode.REGEX.value),
-                regex_edit.text().strip(),
-            )
+            _tracker_item_example_text(df_column, schema_field, regex_edit.text().strip())
         )
 
     def _populate_tracker_item_table(mapping: dict[str, str], tracker_item_settings: dict[str, dict[str, object]]) -> None:
@@ -221,83 +186,30 @@ def _initialize_mapping_page(page, on_validate_requested, on_error=None):
         for row_index, candidate in enumerate(candidates):
             df_column = str(candidate.get("df_column") or "")
             schema_field = str(candidate.get("schema_field") or "")
-            supports_query = bool(candidate.get("supports_query"))
-            source_tracker_ids = list(candidate.get("source_tracker_ids") or [])
-            query_status = str(candidate.get("query_status") or "unavailable").strip()
             selected_setting = page._tracker_item_settings.get(schema_field, {})
-            default_mode = (
-                TrackerItemResolutionMode.QUERY.value
-                if supports_query
-                else TrackerItemResolutionMode.REGEX.value
-            )
-            selected_mode = str(selected_setting.get("mode") or default_mode).strip()
-            if selected_mode == TrackerItemResolutionMode.QUERY.value and not supports_query:
-                selected_mode = TrackerItemResolutionMode.REGEX.value
-            selected_query_strategy = str(
-                selected_setting.get("query_match_strategy")
-                or TrackerItemQueryMatchStrategy.BEST.value
-            ).strip()
             selected_regex = str(selected_setting.get("regex_pattern") or DEFAULT_TRACKER_ITEM_ID_REGEX).strip()
 
             column_item = QTableWidgetItem(df_column)
-            column_item.setData(Qt.ItemDataRole.UserRole, {
-                "schema_field": schema_field,
-                "source_tracker_ids": source_tracker_ids,
-            })
+            column_item.setData(Qt.ItemDataRole.UserRole, {"schema_field": schema_field})
             tracker_item_table.setItem(row_index, 0, column_item)
             tracker_item_table.setItem(row_index, 1, QTableWidgetItem(schema_field))
 
-            mode_combo = QComboBox()
-            mode_combo.addItem("정규식 ID 추출", TrackerItemResolutionMode.REGEX.value)
-            if supports_query:
-                mode_combo.addItem("이름/summary 조회", TrackerItemResolutionMode.QUERY.value)
-            mode_index = mode_combo.findData(selected_mode)
-            mode_combo.setCurrentIndex(mode_index if mode_index >= 0 else 0)
-            tracker_item_table.setCellWidget(row_index, 2, mode_combo)
-
-            strategy_combo = QComboBox()
-            for label, value in _tracker_item_query_strategy_options():
-                strategy_combo.addItem(label, value)
-            strategy_index = strategy_combo.findData(selected_query_strategy)
-            strategy_combo.setCurrentIndex(strategy_index if strategy_index >= 0 else 0)
-            tracker_item_table.setCellWidget(row_index, 3, strategy_combo)
-
+            tracker_item_table.setItem(row_index, 2, QTableWidgetItem("ID 추출 (고정)"))
             regex_edit = QLineEdit(selected_regex)
-            tracker_item_table.setCellWidget(row_index, 4, regex_edit)
-            _sync_tracker_item_controls(mode_combo, regex_edit, strategy_combo)
-            tracker_item_table.setItem(row_index, 5, QTableWidgetItem(""))
-
-            source_text = (
-                ", ".join(f"tracker {tracker_id}" for tracker_id in source_tracker_ids)
-                if source_tracker_ids
-                else (
-                    "미지원 구조(정규식만 지원)"
-                    if query_status == "unsupported"
-                    else "configuration source 없음"
-                )
-            )
-            tracker_item_table.setItem(row_index, 6, QTableWidgetItem(source_text))
-            _refresh_tracker_item_example(row_index, df_column, schema_field, mode_combo, regex_edit)
-
-            mode_combo.currentIndexChanged.connect(
-                lambda _index, row=row_index, column=df_column, field=schema_field, combo=mode_combo, edit=regex_edit, strategy=strategy_combo: (
-                    _sync_tracker_item_controls(combo, edit, strategy),
-                    _refresh_tracker_item_example(row, column, field, combo, edit),
-                    _mark_dirty(),
-                )
-            )
+            tracker_item_table.setCellWidget(row_index, 3, regex_edit)
+            tracker_item_table.setItem(row_index, 4, QTableWidgetItem(""))
+            _refresh_tracker_item_example(row_index, df_column, schema_field, regex_edit)
             regex_edit.textChanged.connect(
-                lambda _text, row=row_index, column=df_column, field=schema_field, combo=mode_combo, edit=regex_edit: (
-                    _refresh_tracker_item_example(row, column, field, combo, edit),
+                lambda _text, row=row_index, column=df_column, field=schema_field, edit=regex_edit: (
+                    _refresh_tracker_item_example(row, column, field, edit),
                     _mark_dirty(),
                 )
             )
-            strategy_combo.currentTextChanged.connect(lambda _text: _mark_dirty())
 
-        _configure_table_columns(tracker_item_table, [220, 220, 140, 160, 260, 320, 200])
+        _configure_table_columns(tracker_item_table, [220, 220, 180, 300, 360])
         if candidates:
             tracker_item_help_label.setText(
-                "TrackerItemChoiceField 는 정규식 ID 추출 또는 source tracker 사전 조회를 선택하고, query 다건 결과 처리 방식도 지정하세요."
+                "TrackerItemChoiceField 는 입력값에서 ID를 추출해 사용합니다. 이름이나 summary 조회는 현재 사용할 수 없습니다."
             )
         else:
             tracker_item_help_label.setText("현재 매핑에는 별도 Tracker Item 처리 설정이 필요한 필드가 없습니다.")
@@ -619,22 +531,16 @@ def _initialize_mapping_page(page, on_validate_requested, on_error=None):
         settings: dict[str, dict[str, object]] = {}
         for row_index in range(tracker_item_table.rowCount()):
             source_item = tracker_item_table.item(row_index, 0)
-            mode_combo = tracker_item_table.cellWidget(row_index, 2)
-            strategy_combo = tracker_item_table.cellWidget(row_index, 3)
-            regex_edit = tracker_item_table.cellWidget(row_index, 4)
-            if source_item is None or mode_combo is None or strategy_combo is None or regex_edit is None:
+            regex_edit = tracker_item_table.cellWidget(row_index, 3)
+            if source_item is None or regex_edit is None:
                 continue
             metadata = source_item.data(Qt.ItemDataRole.UserRole) or {}
             schema_field = str(metadata.get("schema_field") or "").strip()
             if not schema_field:
                 continue
             settings[schema_field] = {
-                "mode": str(mode_combo.currentData() or TrackerItemResolutionMode.REGEX.value),
-                "query_match_strategy": str(
-                    strategy_combo.currentData() or TrackerItemQueryMatchStrategy.BEST.value
-                ),
+                "mode": TrackerItemResolutionMode.REGEX.value,
                 "regex_pattern": regex_edit.text().strip(),
-                "source_tracker_ids": list(metadata.get("source_tracker_ids") or []),
             }
         return settings
 
@@ -690,5 +596,3 @@ class MappingPage(QtWidget):
 def create_mapping_page(on_validate_requested, on_error=None):
     """기존 factory 호출 계약으로 `MappingPage`를 생성한다."""
     return MappingPage(on_validate_requested, on_error)
-
-

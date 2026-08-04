@@ -5,8 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from src.mapping_service import MappingService
-from src.models import TrackerItemQueryMatchStrategy
-from src.models import TrackerItemResolutionMode
 from src.upload_policy import DEFAULT_TRACKER_ITEM_ID_REGEX
 from src.upload_policy import UPLOAD_MODE_CREATE as GUI_UPLOAD_MODE_CREATE
 from src.upload_policy import UPLOAD_MODE_UPDATE as GUI_UPLOAD_MODE_UPDATE

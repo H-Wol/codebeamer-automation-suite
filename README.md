@@ -14,7 +14,7 @@ Excel 기반 계층형 데이터를 Codebeamer Tracker Item으로 변환하고 �
 - 정적 option 값을 Codebeamer reference payload로 변환
 - `UserChoiceField`, `UserReference` 필드에 대해 사용자 이름 우선 lookup 후 reference로 변환
 - `MemberField` 는 `USER/ROLE/GROUP` 타입별 후보를 이름으로 찾아 mixed reference로 변환
-- `TrackerItemChoiceField` 및 builtin `subjects` 필드에 대해 정규식 ID 추출 또는 configuration 기반 tracker item query lookup 지원
+- `TrackerItemChoiceField` 및 builtin `subjects` 필드에서 정규식으로 ID를 추출해 참조값으로 사용
 - 사용자 lookup 결과를 프로젝트 단위 임시 캐시에 저장해 반복 요청 최소화
 - `TableFieldName.ColumnName` 형식 헤더를 이용한 `TableField` 조립
 - row별 payload cache 생성과 preview/upload 재사용
@@ -36,7 +36,7 @@ Excel 기반 계층형 데이터를 Codebeamer Tracker Item으로 변환하고 �
 - 단건 쓰기와 배치 최종 결과를 최근 500건까지 보관하는 필터형 통합 실행 기록
 - GUI에서 프로젝트/트래커 조회, 다중 Excel 파일 선택, 시트/미리보기 조회
 - GUI에서 상단 데이터 생성 여부, 파일명 정규식 파싱, 루트 필드 매핑 설정
-- GUI에서 컬럼 매핑, 기본값 설정, tracker item query/regex 전략 선택
+- GUI에서 컬럼 매핑, 기본값 설정, Tracker Item ID 추출 정규식 설정
 - GUI에서 API·파일·검증 작업을 백그라운드로 실행하고 중복 작업을 막는 전역 spinner 오버레이 표시
 - GUI에서 단계별 `다음` 버튼 활성화 조건과 검증 차단 정책 적용
 - GUI 검증/결과 화면에서 내부 생성 컬럼 숨김
@@ -129,8 +129,7 @@ GUI를 실행하면 최상위 앱 셸이 열리고 `트래커 작업공간`, `�
 - 매핑 화면
   - `id`, `parent`, 내부 생성 컬럼 제외
   - 기본값 설정
-  - `TrackerItemChoiceField` 별 regex/query 방식 선택
-  - query 다건 결과 처리 전략 선택
+  - `TrackerItemChoiceField` 별 ID 추출 정규식 설정
 - 검증 화면
   - 차단 이슈와 안내 이슈 분리
   - 다중 파일일 때 선택 파일 수와 전체 예상 항목 수 표시
@@ -161,7 +160,7 @@ GUI를 실행하면 최상위 앱 셸이 열리고 `트래커 작업공간`, `�
 - 연결 테스트, 프로젝트/트래커/아이템 조회·검색·쓰기, Excel 미리보기, 매핑 준비와 검증은 `BackgroundTask` 기반으로 실행합니다. API 응답을 기다리는 동안에는 전역 spinner 오버레이가 앱 입력을 차단하며, 중첩 작업이 모두 끝난 뒤 해제됩니다.
 - 설정, 프로젝트, 파일, 검증 단계는 필수 입력이나 선행 작업이 완료되기 전까지 `다음` 버튼을 비활성화합니다.
 - 파일 단계는 값이 바뀔 때마다 Excel 을 다시 열지 않고, 사용자가 `데이터 불러오기`를 눌렀을 때만 미리보기를 갱신합니다.
-- 다중 파일 업로드 시 tracker item query 대상 값은 전체 파일에서 중복 제거 후 한 번만 사전 조회해 캐시에 올립니다.
+- Tracker Item 이름·summary 조회는 대량 검증의 API 호출을 줄이기 위해 비활성화되어 있으며, 입력값에서 ID를 추출합니다.
 - 테스트 모드에서는 실제 업로드를 막고 Dry Run만 허용합니다.
 - 기본 창 크기는 `1160x780`, 최소 크기는 `860x620`이며, 페이지 내용이 길면 내부 스크롤을 사용하고 창 높이는 화면 높이의 88%를 넘지 않도록 제한합니다.
 - 알림은 커스텀 다이얼로그로 표시하며, 테마와 톤을 맞춘 상태로 오류/안내를 구분합니다.
@@ -230,10 +229,9 @@ py -3 cli_main.py
 6. 정적 option 필드는 reference payload로 변환합니다.
 7. 사용자 선택 필드는 사용자 이름을 우선 조회하고, 숫자 입력일 때만 사용자 ID fallback 을 사용합니다.
 8. `MemberField` 는 `USER/ROLE/GROUP` 후보를 이름으로 찾아 mixed reference 로 변환합니다.
-9. `TrackerItemChoiceField` 는 configuration 에 source tracker 정보가 있으면 이름/summary query lookup 을, 없으면 정규식 ID 추출을 사용합니다.
+9. `TrackerItemChoiceField` 는 configuration 정보와 관계없이 입력값에서 정규식으로 ID를 추출합니다. 이름·summary 조회는 비활성화되어 있습니다.
 10. GUI 상단 데이터 설정이 켜져 있으면 파일별 루트 parent item payload 를 먼저 준비합니다.
 11. row별 payload를 먼저 cache하고 preview와 upload가 같은 payload를 재사용합니다.
-12. 다중 파일 업로드 시 tracker item query 값은 전체 파일 기준으로 중복 제거 후 사전 조회합니다.
 13. 업로드 시점에는 파일별 루트 parent item을 먼저 만들고, 이후 child row 의 `parentItemId` 를 `created_map[parent_row_id]` 또는 루트 item 기준으로 결정합니다.
 14. `Status` 는 transition 기반 후처리로 옮겨야 하므로 현재 TODO 로 남겨두고 있습니다.
 15. 실행 결과와 중간 dataframe, schema, payload cache, 검증 결과를 `output/`에 저장할 수 있습니다.
@@ -270,7 +268,7 @@ powershell -ExecutionPolicy Bypass -File scripts/render_uml.ps1
 - 정적 option이 없는 일반 reference 필드는 아직 자동 lookup을 모두 지원하지 않습니다.
 - 사용자 관련 필드는 이름을 우선 사용하고, 숫자 입력일 때만 사용자 ID fallback 을 사용합니다.
 - `MemberField` 의 `ROLE` 은 field permission matrix, `GROUP` 은 `/v3/users/groups` 전체 목록에서 이름으로 찾습니다.
-- `TrackerItemChoiceField` 는 tracker configuration 의 `fields` 목록에서 `referenceId == schema.field_id` 로 우선 매칭하고, source tracker가 확인되면 query lookup 을 사용할 수 있습니다.
+- `TrackerItemChoiceField` 는 tracker configuration 의 `fields` 목록에서 `referenceId == schema.field_id` 로 매칭 정보를 확인할 수 있지만, 업로드·검증에서는 항상 입력값의 ID 추출만 사용합니다.
 - 위 source tracker를 찾지 못하거나 offline snapshot 만 사용하는 경우에는 기본 정규식 ID 추출 방식으로 동작합니다.
 - 테스트 모드에서는 실제 업로드를 막고 Dry Run만 허용합니다.
 - `Status` 는 workflow transition 제약을 반영해야 하므로 현재 TODO 입니다.

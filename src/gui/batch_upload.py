@@ -8,14 +8,12 @@ from typing import Callable
 import pandas as pd
 
 from src.models import PayloadStatus
-from src.models import TrackerItemResolutionMode
 from src.upload_pipeline import load_tracker_schema_df
 from src.upload_pipeline import prepare_upload_dataframe
 from src.upload_policy import UPLOAD_MODE_CREATE as GUI_UPLOAD_MODE_CREATE
 from src.upload_policy import UPLOAD_MODE_UPDATE as GUI_UPLOAD_MODE_UPDATE
 from src.upload_policy import UPLOAD_MODE_UPSERT as GUI_UPLOAD_MODE_UPSERT
 from src.upload_policy import normalize_upload_mode as normalize_gui_upload_mode
-from src.upload_policy import scope_applies_to_upload_mode
 from src.upload_policy import upload_mode_action_label as gui_upload_mode_action_label
 from src.upload_policy import upload_mode_allows_root_items as gui_upload_mode_allows_root_items
 from src.upload_policy import upload_mode_supports_update as gui_upload_mode_supports_update
@@ -66,75 +64,6 @@ class BatchUploadService:
             wizard,
             file_path,
         )
-
-    @staticmethod
-    def _tracker_item_query_mapping(mapping_context: MappingContext) -> dict[str, str]:
-        query_mapping: dict[str, str] = {}
-        for df_column, schema_field in mapping_context.selected_mapping.items():
-            scope = dict((mapping_context.selected_mapping_modes or {}).get(str(df_column).strip()) or {})
-            if not scope_applies_to_upload_mode(
-                scope,
-                upload_mode=mapping_context.upload_mode,
-            ):
-                continue
-            setting = mapping_context.selected_tracker_item_settings.get(str(schema_field).strip(), {})
-            if str(setting.get("mode") or "").strip() != TrackerItemResolutionMode.QUERY.value:
-                continue
-            query_mapping[str(df_column).strip()] = str(schema_field).strip()
-        return query_mapping
-
-    def _prime_tracker_item_lookup_cache_for_batch(
-        self,
-        settings,
-        mapping_context: MappingContext,
-    ) -> None:
-        query_mapping = self._tracker_item_query_mapping(mapping_context)
-        if not query_mapping:
-            return
-
-        cache_wizard = self.create_wizard(settings)
-        cache_wizard.select_project(int(settings.default_project_id))
-        cache_wizard.select_tracker(int(settings.default_tracker_id))
-        cache_wizard.state.schema = mapping_context.wizard.state.schema
-        cache_wizard.state.schema_df = mapping_context.schema_df
-        cache_wizard.state.selected_mapping = dict(mapping_context.selected_mapping)
-        cache_wizard.state.selected_mapping_modes = {
-            str(key): dict(value)
-            for key, value in dict(mapping_context.selected_mapping_modes or {}).items()
-            if str(key).strip() and isinstance(value, dict)
-        }
-        cache_wizard.state.selected_tracker_item_settings = dict(mapping_context.selected_tracker_item_settings)
-        cache_wizard.state.tracker_item_lookup_cache = dict(mapping_context.tracker_item_lookup_cache)
-
-        option_maps = cache_wizard.mapper.build_option_maps_from_schema(mapping_context.schema_df)
-        option_maps = cache_wizard._decorate_tracker_item_option_maps(option_maps)
-        cache_wizard.state.option_maps = option_maps
-
-        unique_values_by_field: dict[str, set[str]] = {}
-        for file_path in mapping_context.file_paths:
-            preview_raw_df = self._cached_raw_df_for_file(mapping_context.preview_data, file_path)
-
-            prepare_upload_dataframe(
-                cache_wizard,
-                file_path=file_path,
-                sheet_name=mapping_context.sheet_name,
-                header_row=mapping_context.header_row,
-                summary_col=mapping_context.summary_column,
-                selected_mapping=mapping_context.selected_mapping,
-                schema=mapping_context.wizard.state.schema,
-                schema_df=mapping_context.schema_df,
-                raw_df=preview_raw_df,
-            )
-            current_values = cache_wizard.collect_tracker_item_query_values(
-                cache_wizard.state.upload_df,
-                query_mapping,
-                option_maps,
-            )
-            for schema_field, values in current_values.items():
-                unique_values_by_field.setdefault(schema_field, set()).update(values)
-
-        cache_wizard.prime_tracker_item_query_values(option_maps, unique_values_by_field)
-        mapping_context.tracker_item_lookup_cache = dict(cache_wizard.state.tracker_item_lookup_cache)
 
     @staticmethod
     def _batch_output_dir(output_dir: str, file_path: str, index: int) -> str:
@@ -318,13 +247,6 @@ class BatchUploadService:
                 time.sleep(0.1)
             if cancel_requested is not None and cancel_requested():
                 raise RuntimeError("__UPLOAD_CANCELLED__")
-
-        if self._tracker_item_query_mapping(mapping_context):
-            _emit({
-                "type": "log",
-                "message": "Tracker item query 대상 값을 파일 전체에서 모아 사전 조회하는 중입니다.",
-            })
-            self._prime_tracker_item_lookup_cache_for_batch(settings, mapping_context)
 
         for index, file_path in enumerate(file_paths, start=1):
             _sync_control()
@@ -513,5 +435,3 @@ class BatchUploadService:
             "unresolved_df": pd.concat(unresolved_frames, ignore_index=True) if unresolved_frames else pd.DataFrame(),
             "phase_results": phase_results,
         }
-
-
