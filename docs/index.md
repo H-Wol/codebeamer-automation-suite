@@ -11,15 +11,16 @@
 5. [CLI 사용 가이드](./cli-guide.md)
 6. [필드 지원 추가 가이드](./field-support-guide.md)
 7. [GUI 사용 가이드](./gui-plan.md)
-8. [트래커 조회 서비스 계약](./tracker-query-service.md)
-9. [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)
-10. [통합 실행 기록](./activity-history.md)
-11. [Codebeamer API 모니터](./api-monitor.md)
-12. [트러블슈팅](./troubleshooting.md)
-13. [호환 경로 감사](./compatibility.md)
-14. [샘플 데이터 및 자격증명 감사](./security-audit.md)
-15. [GUI 리팩토링 진행 및 검증 기록](./refactoring-progress.md)
-16. [v2 변경 사항](./v2-changes.md)
+8. [트래커 작업공간 GUI 기획 및 스토리보드](./tracker-workspace-gui-storyboard.md)
+9. [트래커 조회 서비스 계약](./tracker-query-service.md)
+10. [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)
+11. [통합 실행 기록](./activity-history.md)
+12. [Codebeamer API 모니터](./api-monitor.md)
+13. [트러블슈팅](./troubleshooting.md)
+14. [호환 경로 감사](./compatibility.md)
+15. [샘플 데이터 및 자격증명 감사](./security-audit.md)
+16. [GUI 리팩토링 진행 및 검증 기록](./refactoring-progress.md)
+17. [v2 변경 사항](./v2-changes.md)
 
 ## 문서별 역할
 
@@ -53,6 +54,9 @@
   개발자용 실시간 호출 통계, 표 사용법, 재시도 표시와 메타데이터 수집 보안 경계를 정리합니다.
 - [Wiki 형식 조회 렌더링](./wiki-rendering.md)
   설명과 TableField에서 명시적 Wiki 메타데이터만 렌더링하는 판정 규칙, 지원 문법과 보안 경계를 정리합니다.
+
+- [트래커 작업공간 GUI 기획 및 스토리보드](./tracker-workspace-gui-storyboard.md)
+  조회 중심 작업공간의 정보 구조, 화면 흐름, 단계별 구현 범위와 브랜치 전략을 정리한 설계 기준입니다.
 
 - [트러블슈팅](./troubleshooting.md)
   자주 발생하는 에러와 대응 방법을 정리합니다.
