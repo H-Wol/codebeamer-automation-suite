@@ -508,12 +508,6 @@ def build_create_tracker_schema(
     )
     fields: list[EditableTrackerField] = []
     for field_value in normalized_schema.fields:
-        if field_value.editor_kind == FieldEditorKind.TABLE:
-            field_value = replace(
-                field_value,
-                editor_kind=FieldEditorKind.UNSUPPORTED,
-                unsupported_reason="TableField는 새 아이템 생성 화면에서 아직 지원하지 않습니다.",
-            )
         if field_value.tracker_item_field == "name" and not field_value.mandatory:
             field_value = replace(field_value, mandatory=True)
         fields.append(field_value)

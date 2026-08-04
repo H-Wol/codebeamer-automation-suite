@@ -311,6 +311,38 @@ class TrackerQueryServiceTest(unittest.TestCase):
         self.assertEqual(detail.raw_payload["password"], "***")
         self.assertNotIn("must-not-leak", str(detail.raw_payload))
 
+    def test_tracker_metadata_is_reused_for_multiple_item_details(self) -> None:
+        self.service.load_detail(self.settings, 1001)
+        self.service.load_detail(self.settings, 1002)
+
+        tracker_calls = [call for call in QueryFakeClient.calls if call[0] == "tracker"]
+        self.assertEqual(tracker_calls, [("tracker", 20)])
+
+    def test_tracker_list_seeds_detail_metadata_cache(self) -> None:
+        self.service.load_trackers(self.settings, 10, project_name="Vehicle")
+        detail = self.service.load_detail(self.settings, 1001)
+
+        self.assertEqual(detail.summary.project_name, "Vehicle")
+        self.assertNotIn(("tracker", 20), QueryFakeClient.calls)
+
+    def test_tracker_schema_is_cached_and_returned_as_an_isolated_copy(self) -> None:
+        first = self.service.load_tracker_schema(self.settings, 20)
+        first["fields"][0]["name"] = "Changed locally"
+        second = self.service.load_tracker_schema(self.settings, 20)
+
+        self.assertEqual(second["fields"][0]["name"], "Summary")
+        self.assertEqual(
+            [call for call in QueryFakeClient.calls if call[0] == "schema"],
+            [("schema", 20)],
+        )
+
+        self.service.clear_cache()
+        self.service.load_tracker_schema(self.settings, 20)
+        self.assertEqual(
+            [call for call in QueryFakeClient.calls if call[0] == "schema"],
+            [("schema", 20), ("schema", 20)],
+        )
+
     def test_direct_item_context_contains_target_project_and_tracker(self) -> None:
         context = self.service.resolve_item_context(self.settings, 1001)
 

@@ -76,6 +76,20 @@ CREATE_SCHEMA = {
             "name": "Test Steps",
             "type": "TableField",
             "valueModel": "TableFieldValue",
+            "columns": [
+                {
+                    "id": 1001,
+                    "name": "Action",
+                    "type": "WikiTextField",
+                    "valueModel": "WikiTextFieldValue",
+                },
+                {
+                    "id": 1002,
+                    "name": "Expected",
+                    "type": "WikiTextField",
+                    "valueModel": "WikiTextFieldValue",
+                },
+            ],
         },
     ],
 }
@@ -184,6 +198,39 @@ class TrackerItemCreateModelTest(unittest.TestCase):
         )
         self.assertNotIn("status", payload)
 
+    def test_create_payload_supports_table_field_rows(self) -> None:
+        payload = build_create_item_payload(
+            self.schema,
+            (
+                TrackerItemFieldChange(self.field("Summary"), "New requirement"),
+                TrackerItemFieldChange(
+                    self.field("Test Steps"),
+                    [
+                        [
+                            {
+                                "fieldId": 1001,
+                                "name": "Action",
+                                "type": "WikiTextFieldValue",
+                                "value": "Run test",
+                            },
+                            {
+                                "fieldId": 1002,
+                                "name": "Expected",
+                                "type": "WikiTextFieldValue",
+                                "value": "Pass",
+                            },
+                        ]
+                    ],
+                ),
+            ),
+        )
+
+        table_payload = next(
+            field for field in payload["customFields"] if field["fieldId"] == 10
+        )
+        self.assertEqual(table_payload["type"], "TableFieldValue")
+        self.assertEqual(table_payload["values"][0][0]["value"], "Run test")
+
     def test_mandatory_field_and_status_rules_are_validated(self) -> None:
         with self.assertRaisesRegex(ValueError, "필수 필드"):
             build_create_item_payload(self.schema, ())
@@ -203,6 +250,7 @@ class TrackerItemCreateModelTest(unittest.TestCase):
             field for field in schema_payload["fields"] if field["id"] == 10
         )
         table_field["mandatory"] = True
+        table_field.pop("columns")
         schema = build_create_tracker_schema(schema_payload, 20)
 
         with self.assertRaisesRegex(ValueError, "입력 형식을 지원하지"):
@@ -334,7 +382,7 @@ class TrackerItemCreateDialogTest(unittest.TestCase):
 
         self.assertTrue(description_row.widget.isEnabled())
         self.assertNotIn(7, self.dialog.rows)
-        self.assertNotIn(10, self.dialog.rows)
+        self.assertIn(10, self.dialog.rows)
         self.assertTrue(self.dialog.root_radio.isChecked())
         self.dialog.child_radio.setChecked(True)
         self.assertEqual(self.dialog.selected_parent_item_id(), 1001)
@@ -354,6 +402,9 @@ class TrackerItemCreateDialogTest(unittest.TestCase):
         next(field for field in schema_payload["fields"] if field["id"] == 10)[
             "mandatory"
         ] = True
+        next(field for field in schema_payload["fields"] if field["id"] == 10).pop(
+            "columns"
+        )
         self.dialog = TrackerItemCreateDialog(
             build_create_tracker_schema(schema_payload, 20),
             tracker_name="Requirements",
@@ -362,6 +413,19 @@ class TrackerItemCreateDialogTest(unittest.TestCase):
         self.assertFalse(self.dialog.create_button.isEnabled())
         self.assertIn("Test Steps", self.dialog.validation_label.text())
         self.assertNotIn(10, self.dialog.rows)
+
+    def test_table_field_uses_shared_row_editor_input(self) -> None:
+        from PySide6.QtCore import Qt
+
+        from src.gui.tracker_item_editor_panel import TrackerTableFieldInput
+
+        table_row = self.dialog.rows[10]
+
+        self.assertIsInstance(table_row.widget, TrackerTableFieldInput)
+        self.assertFalse(table_row.widget.isEnabled())
+        table_row.include_item.setCheckState(Qt.CheckState.Checked)
+        self._app.processEvents()
+        self.assertTrue(table_row.widget.isEnabled())
 
     def test_fullscreen_button_toggles_create_window_mode(self) -> None:
         self.dialog.fullscreen_button.setChecked(True)

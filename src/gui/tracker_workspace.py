@@ -546,6 +546,10 @@ class TrackerWorkspacePage(QWidget):
         settings = self.settings_provider()
         fingerprint = self._settings_key(settings)
         settings_changed = fingerprint != self._settings_fingerprint
+        if force or settings_changed:
+            clear_cache = getattr(self.service, "clear_cache", None)
+            if callable(clear_cache):
+                clear_cache()
         if settings_changed:
             self._settings_fingerprint = fingerprint
             self._clear_context_state()

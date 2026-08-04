@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 from typing import Callable
@@ -71,6 +72,26 @@ class TrackerQueryService:
     def __init__(self, client_factory=CodebeamerClient, logger=None) -> None:
         self.client_factory = client_factory
         self.logger = logger
+        self._tracker_cache: dict[tuple[tuple[Any, ...], int], dict[str, Any]] = {}
+        self._schema_cache: dict[tuple[tuple[Any, ...], int], dict[str, Any]] = {}
+
+    @staticmethod
+    def _settings_cache_key(settings) -> tuple[Any, ...]:
+        return (
+            bool(getattr(settings, "offline_mode", False)),
+            str(getattr(settings, "base_url", "") or "").strip().rstrip("/"),
+            str(getattr(settings, "username", "") or "").strip(),
+            str(getattr(settings, "offline_schema_path", "") or "").strip(),
+            str(getattr(settings, "offline_query_data_path", "") or "").strip(),
+        )
+
+    def clear_cache(self) -> None:
+        """연결 설정이나 서버 데이터를 새로 불러올 때 세션 캐시를 비운다."""
+        self._tracker_cache.clear()
+        self._schema_cache.clear()
+
+    def _cache_key(self, settings, tracker_id: int) -> tuple[tuple[Any, ...], int]:
+        return self._settings_cache_key(settings), int(tracker_id)
 
     def _build_client(self, settings):
         return _build_gui_client(settings, self.client_factory, self.logger)
@@ -225,40 +246,58 @@ class TrackerQueryService:
             "load_trackers",
             lambda: client.get_trackers(project_id),
         )
-        return tuple(
-            TrackerSummary.from_raw(
+        trackers: list[TrackerSummary] = []
+        for item in self._extract_list(payload, "trackers", "items", "references"):
+            tracker = TrackerSummary.from_raw(
                 item,
                 project_id=project_id,
                 project_name=project_name,
             )
-            for item in self._extract_list(payload, "trackers", "items", "references")
-        )
+            trackers.append(tracker)
+            tracker_payload = dict(item)
+            tracker_payload.setdefault("id", tracker.tracker_id)
+            tracker_payload.setdefault("name", tracker.name)
+            if not isinstance(tracker_payload.get("project"), dict):
+                tracker_payload["project"] = {
+                    "id": project_id,
+                    "name": project_name,
+                }
+            self._tracker_cache[
+                self._cache_key(settings, tracker.tracker_id)
+            ] = tracker_payload
+        return tuple(trackers)
 
     def load_tracker_schema(self, settings, tracker_id: int) -> dict[str, Any]:
         normalized_tracker_id = int(tracker_id)
+        cache_key = self._cache_key(settings, normalized_tracker_id)
+        cached = self._schema_cache.get(cache_key)
+        if cached is not None:
+            return deepcopy(cached)
         client = self._client(settings, "load_tracker_schema")
         payload = self._run(
             "load_tracker_schema",
             lambda: client.get_tracker_schema(normalized_tracker_id),
         )
         if isinstance(payload, list):
-            return {
+            normalized = {
                 "id": normalized_tracker_id,
                 "fields": [dict(field) for field in payload if isinstance(field, dict)],
             }
-        if isinstance(payload, dict):
+        elif isinstance(payload, dict):
             normalized = dict(payload)
             if not isinstance(normalized.get("fields"), list):
                 fields = self._extract_list(normalized, "items", "references")
                 if fields:
                     normalized["fields"] = fields
             normalized.setdefault("id", normalized_tracker_id)
-            return normalized
-        raise TrackerQueryServiceError(
-            TrackerQueryErrorKind.SERVER,
-            "트래커 schema 응답 형식을 해석할 수 없습니다.",
-            operation="load_tracker_schema",
-        )
+        else:
+            raise TrackerQueryServiceError(
+                TrackerQueryErrorKind.SERVER,
+                "트래커 schema 응답 형식을 해석할 수 없습니다.",
+                operation="load_tracker_schema",
+            )
+        self._schema_cache[cache_key] = deepcopy(normalized)
+        return deepcopy(normalized)
 
     def load_top_level_items(
         self,
@@ -460,13 +499,18 @@ class TrackerQueryService:
         get_tracker = getattr(client, "get_tracker", None)
         warnings: tuple[str, ...] = ()
         if tracker_id is not None and callable(get_tracker):
-            try:
-                candidate = get_tracker(int(tracker_id))
-            except Exception:
-                candidate = None
-                warnings = (
-                    "소속 프로젝트 메타데이터를 불러오지 못해 아이템 상세만 표시합니다.",
-                )
+            cache_key = self._cache_key(settings, int(tracker_id))
+            candidate = self._tracker_cache.get(cache_key)
+            if candidate is None:
+                try:
+                    candidate = get_tracker(int(tracker_id))
+                except Exception:
+                    candidate = None
+                    warnings = (
+                        "소속 프로젝트 메타데이터를 불러오지 못해 아이템 상세만 표시합니다.",
+                    )
+                if isinstance(candidate, dict):
+                    self._tracker_cache[cache_key] = dict(candidate)
             if isinstance(candidate, dict):
                 tracker_payload = candidate
         detail = TrackerItemDetail.from_raw(raw_item, tracker_payload=tracker_payload)
@@ -494,10 +538,15 @@ class TrackerQueryService:
                 "아이템 응답에서 소속 트래커를 확인할 수 없습니다.",
                 operation="resolve_item_context",
             )
-        tracker_payload = self._run(
-            "resolve_item_tracker",
-            lambda: client.get_tracker(int(tracker_id)),
-        )
+        cache_key = self._cache_key(settings, int(tracker_id))
+        tracker_payload = self._tracker_cache.get(cache_key)
+        if tracker_payload is None:
+            tracker_payload = self._run(
+                "resolve_item_tracker",
+                lambda: client.get_tracker(int(tracker_id)),
+            )
+            if isinstance(tracker_payload, dict):
+                self._tracker_cache[cache_key] = dict(tracker_payload)
         if not isinstance(tracker_payload, dict):
             tracker_payload = dict(tracker_reference)
         detail = TrackerItemDetail.from_raw(raw_item, tracker_payload=tracker_payload)
