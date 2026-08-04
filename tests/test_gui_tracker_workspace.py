@@ -217,6 +217,9 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.assertEqual(self.page.tracker_combo.count(), 2)
         self.assertEqual(self.page.tracker_combo.currentData(), 24680001)
         self.assertEqual(self.page.item_tree.topLevelItemCount(), 2)
+        self.assertEqual(self.page.item_tree.columnCount(), 2)
+        self.assertEqual(self.page.item_tree.headerItem().text(0), "ID")
+        self.assertEqual(self.page.item_tree.headerItem().text(1), "요약")
         self.assertEqual(self.page.item_tree.topLevelItem(0).text(0), "9001001")
         self.assertIn("전체 표시", self.page.tree_status_label.text())
         self.assertIn("Offline Requirements", self.page.search_scope_label.text())
@@ -544,7 +547,7 @@ class TrackerWorkspaceWriteIntegrationTest(unittest.TestCase):
         self.page.editor_panel.status_combo.setCurrentIndex(target_index)
         self.page.editor_panel.transition_button.click()
 
-        self.assertEqual(self.page.item_tree.topLevelItem(0).text(2), "Review")
+        self.assertEqual(self.page.item_tree.columnCount(), 2)
         self.assertEqual(self.page.detail_fields_table.item(3, 1).text(), "Review")
 
         self.page.editor_panel.delete_button.click()

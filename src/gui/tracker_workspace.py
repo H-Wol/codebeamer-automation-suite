@@ -361,16 +361,14 @@ class TrackerWorkspacePage(QWidget):
 
         self.item_tree = QTreeWidget(tab)
         self.item_tree.setObjectName("tracker_item_tree")
-        self.item_tree.setColumnCount(4)
-        self.item_tree.setHeaderLabels(["ID", "요약", "상태", "담당자"])
+        self.item_tree.setColumnCount(2)
+        self.item_tree.setHeaderLabels(["ID", "요약"])
         self.item_tree.setAlternatingRowColors(True)
         self.item_tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.item_tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.item_tree.setUniformRowHeights(True)
         self.item_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.item_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.item_tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.item_tree.header().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.item_tree.itemExpanded.connect(self._on_tree_item_expanded)
         self.item_tree.itemSelectionChanged.connect(self._on_tree_selection_changed)
         layout.addWidget(self.item_tree, 1)
@@ -1029,8 +1027,6 @@ class TrackerWorkspacePage(QWidget):
             [
                 str(summary.item_id),
                 summary.name,
-                summary.status or "-",
-                ", ".join(summary.assignees) or "-",
             ]
         )
         item.setData(0, ITEM_SUMMARY_ROLE, summary)
@@ -1045,7 +1041,7 @@ class TrackerWorkspacePage(QWidget):
 
     @staticmethod
     def _placeholder_item(text: str) -> QTreeWidgetItem:
-        placeholder = QTreeWidgetItem(["", text, "", ""])
+        placeholder = QTreeWidgetItem(["", text])
         placeholder.setData(0, PLACEHOLDER_ROLE, True)
         placeholder.setDisabled(True)
         return placeholder
@@ -2118,8 +2114,6 @@ class TrackerWorkspacePage(QWidget):
                 )
                 item.setData(0, ITEM_SUMMARY_ROLE, updated)
                 item.setText(1, updated.name)
-                item.setText(2, updated.status or "-")
-                item.setText(3, ", ".join(updated.assignees) or "-")
             for child_index in range(item.childCount()):
                 update_tree_item(item.child(child_index))
 
