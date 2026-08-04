@@ -17,6 +17,8 @@ from .settings_center import SettingsCenterPage
 from .settings_store import GuiSettings
 from .settings_store import GuiSettingsStore
 from .tracker_workspace import TrackerWorkspacePage
+from .tracker_bulk_update import BulkUpdateRunStore
+from .tracker_bulk_update import default_bulk_update_runs_path
 from .window_support import _estimate_upload_remaining_seconds
 from .window_support import _format_clock_text
 from .window_support import _format_duration_text
@@ -184,8 +186,12 @@ class MainWindow(QMainWindow):
         self.activity_store = ActivityHistoryStore(
             default_activity_history_path(self.settings_store.root_dir)
         )
+        self.bulk_run_store = BulkUpdateRunStore(
+            default_bulk_update_runs_path(self.settings_store.root_dir)
+        )
         self.activity_page = ActivityHistoryPage(
             self.activity_store,
+            bulk_retry_requested=self._open_bulk_retry,
             parent=content,
         )
 
@@ -193,6 +199,8 @@ class MainWindow(QMainWindow):
             settings_provider=self.settings_store.load,
             open_settings=self._open_global_settings,
             activity_recorder=self._record_activity,
+            bulk_run_store=self.bulk_run_store,
+            bulk_chunk_size_saver=self.settings_store.save_bulk_update_chunk_size,
             busy_started=self._begin_busy,
             busy_finished=self._end_busy,
             parent=content,
@@ -361,6 +369,10 @@ class MainWindow(QMainWindow):
 
     def _open_global_settings(self) -> None:
         self._show_route(ROUTE_SETTINGS)
+
+    def _open_bulk_retry(self, run_id: str) -> None:
+        self._show_route(ROUTE_TRACKER_WORKSPACE)
+        self.tracker_workspace_page.open_bulk_retry(run_id)
 
     def _set_navigation_collapsed(self, collapsed: bool, *, announce: bool = True) -> None:
         self.navigation_collapsed = bool(collapsed)

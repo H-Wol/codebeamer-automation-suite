@@ -661,3 +661,16 @@ class GuiAppSettingsStoreTest(unittest.TestCase):
             self.assertEqual(effective.base_url, "https://example.test")
             self.assertEqual(effective.username, "tester")
             self.assertEqual(effective.password, "secret")
+
+    def test_bulk_update_chunk_size_is_remembered_in_app_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = _DeterministicSettingsStore(
+                Path(tmp_dir), credential_store=_FakeCredentialStore()
+            )
+            store.ensure_app_settings()
+
+            store.save_bulk_update_chunk_size(2500)
+
+            self.assertEqual(store.load().bulk_update_chunk_size, 2500)
+            payload = json.loads(store.app_settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["bulk_update_chunk_size"], 2500)

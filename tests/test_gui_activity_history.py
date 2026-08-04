@@ -172,6 +172,32 @@ class ActivityHistoryPageTest(unittest.TestCase):
         self.assertEqual(self.page.table.rowCount(), 0)
         self.assertFalse(self.page.clear_button.isEnabled())
 
+    def test_bulk_failure_record_enables_retry_without_storing_field_values(self) -> None:
+        requested = []
+        self.page.bulk_retry_requested = requested.append
+        self.store.append(
+            ActivityRecord.create(
+                ActivityOperation.BULK_UPDATE,
+                ActivityResult.PARTIAL,
+                source="test",
+                summary="일괄 수정 일부 실패",
+                tracker_id=20,
+                details={
+                    "run_id": "bulk-run-1",
+                    "failed_count": 1,
+                    "rolled_back_count": 2,
+                    "unattempted_count": 0,
+                },
+            )
+        )
+        self.page.activate()
+
+        self.assertTrue(self.page.retry_button.isEnabled())
+        self.page.retry_button.click()
+
+        self.assertEqual(requested, ["bulk-run-1"])
+        self.assertNotIn("fieldValues", self.page.detail_view.toPlainText())
+
 
 class BatchActivityIntegrationTest(unittest.TestCase):
     @classmethod

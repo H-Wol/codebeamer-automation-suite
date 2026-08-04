@@ -44,6 +44,12 @@ from .tracker_item_editor_panel import ConfirmItemDeleteDialog
 from .tracker_item_editor_panel import TrackerItemEditorPanel
 from .tracker_item_create_dialog import TrackerItemCreateDialog
 from .tracker_item_create_dialog import TrackerItemCreateRequest
+from .tracker_bulk_update import BulkUpdateRunStore
+from .tracker_bulk_update import TrackerBulkUpdateService
+from .tracker_bulk_update_dialog import BulkUpdateProgressDialog
+from .tracker_bulk_update_dialog import BulkUpdateRequest
+from .tracker_bulk_update_dialog import TrackerBulkUpdateDialog
+from .tracker_condition_builder import TrackerConditionBuilder
 from .tracker_query_models import PageResult
 from .tracker_query_models import ProjectSummary
 from .tracker_query_models import TrackerFieldValue
@@ -51,6 +57,7 @@ from .tracker_query_models import TrackerItemContext
 from .tracker_query_models import TrackerItemDetail
 from .tracker_query_models import TrackerItemSummary
 from .tracker_query_models import TrackerQuery
+from .tracker_query_models import TrackerSearchMode
 from .tracker_query_models import TrackerQueryServiceError
 from .tracker_query_models import TrackerSummary
 from .tracker_query_service import TrackerQueryService
@@ -58,6 +65,7 @@ from .tracker_table_field_dialog import TrackerTableFieldDialog
 from .tracker_table_field_dialog import is_table_field
 from .tracker_table_field_dialog import table_field_summary
 from .worker import BackgroundTask
+from .worker import BulkUpdateWorker
 from .wiki_renderer import codebeamer_wiki_to_html
 from .wiki_renderer import is_explicit_wiki_type
 from .wiki_renderer import payload_uses_wiki
@@ -77,6 +85,8 @@ REQUEST_BUSY_MESSAGES = {
     "create_schema": "새 아이템 생성 필드를 확인하는 중입니다.",
     "item_create": "새 트래커 아이템을 생성하는 중입니다.",
     "search": "현재 트래커에서 아이템을 검색하는 중입니다.",
+    "search_schema": "다중 조건 검색 필드를 확인하는 중입니다.",
+    "search_all": "검색 결과 전체 대상을 확인하는 중입니다.",
     "direct": "아이템 ID의 위치와 계층을 확인하는 중입니다.",
     "editor_schema": "수정 가능한 필드를 확인하는 중입니다.",
     "item_write": "트래커 아이템 변경 사항을 반영하는 중입니다.",
@@ -106,6 +116,10 @@ class TrackerWorkspacePage(QWidget):
         ]
         | None = None,
         activity_recorder: Callable[[ActivityRecord], None] | None = None,
+        bulk_update_service: TrackerBulkUpdateService | None = None,
+        bulk_run_store: BulkUpdateRunStore | None = None,
+        bulk_chunk_size_saver: Callable[[int], None] | None = None,
+        bulk_request_provider: Callable[..., BulkUpdateRequest | None] | None = None,
         busy_started: Callable[[str], object] | None = None,
         busy_finished: Callable[[object], None] | None = None,
         task_factory=BackgroundTask,
@@ -123,6 +137,10 @@ class TrackerWorkspacePage(QWidget):
         self.delete_confirmer = delete_confirmer
         self.create_request_provider = create_request_provider
         self.activity_recorder = activity_recorder
+        self.bulk_update_service = bulk_update_service or TrackerBulkUpdateService()
+        self.bulk_run_store = bulk_run_store
+        self.bulk_chunk_size_saver = bulk_chunk_size_saver
+        self.bulk_request_provider = bulk_request_provider
         self.busy_started = busy_started
         self.busy_finished = busy_finished
         self.task_factory = task_factory
@@ -139,7 +157,12 @@ class TrackerWorkspacePage(QWidget):
         self._request_tokens: dict[str, int] = {}
         self._tasks: set[Any] = set()
         self._search_page = 1
-        self._last_search_values: tuple[str, str, str] | None = None
+        self._last_search_query: TrackerQuery | None = None
+        self._last_search_result: PageResult[TrackerItemSummary] | None = None
+        self._search_schema: EditableTrackerSchema | None = None
+        self._selected_search_ids: set[int] = set()
+        self._all_search_selected = False
+        self._excluded_search_ids: set[int] = set()
         self._selected_item_id: int | None = None
         self._current_detail: TrackerItemDetail | None = None
         self._description_text = ""
@@ -147,6 +170,8 @@ class TrackerWorkspacePage(QWidget):
         self._pre_editor_splitter_sizes: list[int] | None = None
         self._create_busy = False
         self._editor_dialog: TrackerItemEditorDialog | None = None
+        self._bulk_worker = None
+        self._bulk_progress_dialog: BulkUpdateProgressDialog | None = None
 
         self._build_ui()
         self._reset_workspace("프로젝트와 트래커를 불러오면 조회를 시작할 수 있습니다.")
@@ -381,36 +406,72 @@ class TrackerWorkspacePage(QWidget):
         layout.setContentsMargins(6, 8, 6, 6)
         layout.setSpacing(6)
 
-        first_row = QHBoxLayout()
-        self.search_text_input = QLineEdit(tab)
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("검색 방식", tab))
+        self.search_mode_combo = QComboBox(tab)
+        self.search_mode_combo.addItem("간편 검색", TrackerSearchMode.SIMPLE.value)
+        self.search_mode_combo.addItem("다중 조건 검색", TrackerSearchMode.CONDITIONS.value)
+        self.search_mode_combo.currentIndexChanged.connect(self._on_search_mode_changed)
+        mode_row.addWidget(self.search_mode_combo)
+        mode_row.addStretch(1)
+        self.search_button = QPushButton("현재 트래커 검색", tab)
+        self.search_button.setObjectName("primary_button")
+        self.search_button.clicked.connect(self._run_search)
+        mode_row.addWidget(self.search_button)
+        layout.addLayout(mode_row)
+
+        self.simple_search_host = QWidget(tab)
+        first_row = QHBoxLayout(self.simple_search_host)
+        first_row.setContentsMargins(0, 0, 0, 0)
+        self.search_text_input = QLineEdit(self.simple_search_host)
         self.search_text_input.setObjectName("tracker_search_text")
         self.search_text_input.setPlaceholderText("ID 또는 요약")
         self.search_text_input.returnPressed.connect(self._run_search)
         first_row.addWidget(self.search_text_input, 2)
-        self.search_status_input = QLineEdit(tab)
+        self.search_status_input = QLineEdit(self.simple_search_host)
         self.search_status_input.setObjectName("tracker_search_status")
         self.search_status_input.setPlaceholderText("상태")
         self.search_status_input.returnPressed.connect(self._run_search)
         first_row.addWidget(self.search_status_input, 1)
-        self.search_assignee_input = QLineEdit(tab)
+        self.search_assignee_input = QLineEdit(self.simple_search_host)
         self.search_assignee_input.setObjectName("tracker_search_assignee")
         self.search_assignee_input.setPlaceholderText("담당자")
         self.search_assignee_input.returnPressed.connect(self._run_search)
         first_row.addWidget(self.search_assignee_input, 1)
-        self.search_button = QPushButton("현재 트래커 검색", tab)
-        self.search_button.setObjectName("primary_button")
-        self.search_button.clicked.connect(self._run_search)
-        first_row.addWidget(self.search_button)
-        layout.addLayout(first_row)
+        layout.addWidget(self.simple_search_host)
+
+        self.condition_builder = TrackerConditionBuilder(tab)
+        self.condition_builder.hide()
+        layout.addWidget(self.condition_builder)
 
         self.search_scope_label = QLabel("프로젝트와 트래커를 먼저 선택하세요.")
         self.search_scope_label.setObjectName("tracker_panel_status")
         self.search_scope_label.setWordWrap(True)
         layout.addWidget(self.search_scope_label)
 
-        self.search_table = QTableWidget(0, 4, tab)
+        selection_row = QHBoxLayout()
+        self.search_selection_label = QLabel("선택 0개", tab)
+        self.search_selection_label.setObjectName("tracker_panel_status")
+        selection_row.addWidget(self.search_selection_label)
+        selection_row.addStretch(1)
+        self.select_page_button = QPushButton("현재 페이지 선택", tab)
+        self.select_page_button.clicked.connect(self._select_current_search_page)
+        selection_row.addWidget(self.select_page_button)
+        self.select_all_results_button = QPushButton("검색 결과 전체 선택", tab)
+        self.select_all_results_button.clicked.connect(self._select_all_search_results)
+        selection_row.addWidget(self.select_all_results_button)
+        self.clear_search_selection_button = QPushButton("선택 해제", tab)
+        self.clear_search_selection_button.clicked.connect(self._clear_search_selection)
+        selection_row.addWidget(self.clear_search_selection_button)
+        self.bulk_update_button = QPushButton("선택 항목 일괄 수정", tab)
+        self.bulk_update_button.setObjectName("primary_button")
+        self.bulk_update_button.clicked.connect(self._start_bulk_update)
+        selection_row.addWidget(self.bulk_update_button)
+        layout.addLayout(selection_row)
+
+        self.search_table = QTableWidget(0, 5, tab)
         self.search_table.setObjectName("tracker_search_results")
-        self.search_table.setHorizontalHeaderLabels(["ID", "요약", "상태", "담당자"])
+        self.search_table.setHorizontalHeaderLabels(["선택", "ID", "요약", "상태", "담당자"])
         self.search_table.setAlternatingRowColors(True)
         self.search_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.search_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -420,14 +481,15 @@ class TrackerWorkspacePage(QWidget):
             0, QHeaderView.ResizeMode.ResizeToContents
         )
         self.search_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch
-        )
-        self.search_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.ResizeToContents
+            2, QHeaderView.ResizeMode.Stretch
         )
         self.search_table.horizontalHeader().setSectionResizeMode(
             3, QHeaderView.ResizeMode.ResizeToContents
         )
+        self.search_table.horizontalHeader().setSectionResizeMode(
+            4, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.search_table.itemChanged.connect(self._on_search_check_changed)
         self.search_table.itemSelectionChanged.connect(self._on_search_selection_changed)
         layout.addWidget(self.search_table, 1)
 
@@ -579,7 +641,10 @@ class TrackerWorkspacePage(QWidget):
         self.project_combo.clear()
         self.tracker_combo.clear()
         self.search_table.setRowCount(0)
-        self._last_search_values = None
+        self._last_search_query = None
+        self._last_search_result = None
+        self._search_schema = None
+        self._clear_search_selection()
         self._search_page = 1
         self._selected_item_id = None
         self._current_detail = None
@@ -605,6 +670,13 @@ class TrackerWorkspacePage(QWidget):
         self.search_status_input.setEnabled(available and self._current_tracker is not None)
         self.search_assignee_input.setEnabled(available and self._current_tracker is not None)
         self.search_button.setEnabled(available and self._current_tracker is not None)
+        self.search_mode_combo.setEnabled(available and self._current_tracker is not None)
+        self.bulk_update_button.setEnabled(
+            available
+            and self._current_tracker is not None
+            and not bool(settings.offline_mode)
+            and self._selected_search_count() > 0
+        )
         self.create_item_button.setEnabled(
             available
             and self._current_tracker is not None
@@ -935,7 +1007,11 @@ class TrackerWorkspacePage(QWidget):
             return
         self._current_tracker = tracker
         self._selected_item_id = None
-        self._last_search_values = None
+        self._last_search_query = None
+        self._last_search_result = None
+        self._search_schema = None
+        self.condition_builder.setEnabled(False)
+        self._clear_search_selection()
         self.search_table.setRowCount(0)
         self._reset_detail()
         self._update_search_scope()
@@ -1118,9 +1194,28 @@ class TrackerWorkspacePage(QWidget):
         selected = self.search_table.selectedItems()
         if not selected:
             return
-        summary = self.search_table.item(selected[0].row(), 0).data(ITEM_SUMMARY_ROLE)
+        summary = self.search_table.item(selected[0].row(), 1).data(ITEM_SUMMARY_ROLE)
         if isinstance(summary, TrackerItemSummary):
             self._load_detail(summary.item_id)
+
+    def _on_search_check_changed(self, item: QTableWidgetItem) -> None:
+        if item.column() != 0:
+            return
+        id_item = self.search_table.item(item.row(), 1)
+        summary = id_item.data(ITEM_SUMMARY_ROLE) if id_item is not None else None
+        if not isinstance(summary, TrackerItemSummary):
+            return
+        checked = item.checkState() == Qt.CheckState.Checked
+        if self._all_search_selected:
+            if checked:
+                self._excluded_search_ids.discard(summary.item_id)
+            else:
+                self._excluded_search_ids.add(summary.item_id)
+        elif checked:
+            self._selected_search_ids.add(summary.item_id)
+        else:
+            self._selected_search_ids.discard(summary.item_id)
+        self._update_search_selection_ui()
 
     def _show_detail_id_badge(self, item_id: int) -> None:
         normalized_id = int(item_id)
@@ -1440,30 +1535,49 @@ class TrackerWorkspacePage(QWidget):
         if tracker is None:
             self._set_workspace_status("검색할 트래커를 먼저 선택하세요.", tone="warning")
             return
-        if reuse and self._last_search_values is not None:
-            text, status, assignee = self._last_search_values
+        if reuse and self._last_search_query is not None:
+            query = replace(self._last_search_query, page=max(int(page), 1))
+        elif self.search_mode_combo.currentData() == TrackerSearchMode.CONDITIONS.value:
+            if self._search_schema is None:
+                self._load_search_schema(run_after=True)
+                return
+            try:
+                groups = self.condition_builder.values()
+                query = TrackerQuery(
+                    tracker_id=tracker.tracker_id,
+                    mode=TrackerSearchMode.CONDITIONS,
+                    groups=groups,
+                    page=max(int(page), 1),
+                    page_size=DEFAULT_SEARCH_PAGE_SIZE,
+                    sort="item.id ASC",
+                )
+                query.build_cbql()
+            except Exception as exc:
+                self._set_workspace_status(str(exc), tone="warning")
+                return
         else:
             text = self.search_text_input.text().strip()
             status = self.search_status_input.text().strip()
             assignee = self.search_assignee_input.text().strip()
-            self._last_search_values = (text, status, assignee)
-        if not any((text, status, assignee)):
-            self._set_workspace_status(
-                "트래커 검색에는 ID/요약, 상태, 담당자 중 하나 이상을 입력하세요.",
-                tone="warning",
+            if not any((text, status, assignee)):
+                self._set_workspace_status(
+                    "트래커 검색에는 ID/요약, 상태, 담당자 중 하나 이상을 입력하세요.",
+                    tone="warning",
+                )
+                return
+            query = TrackerQuery(
+                tracker_id=tracker.tracker_id,
+                mode=TrackerSearchMode.SIMPLE,
+                text=text,
+                status=status,
+                assignee=assignee,
+                page=max(int(page), 1),
+                page_size=DEFAULT_SEARCH_PAGE_SIZE,
+                sort="item.id ASC",
             )
-            return
-
-        normalized_page = max(int(page), 1)
-        query = TrackerQuery(
-            tracker_id=tracker.tracker_id,
-            text=text,
-            status=status,
-            assignee=assignee,
-            page=normalized_page,
-            page_size=DEFAULT_SEARCH_PAGE_SIZE,
-            sort="item.id ASC",
-        )
+        if not reuse:
+            self._clear_search_selection()
+        self._last_search_query = replace(query, page=1)
         tracker_id = tracker.tracker_id
         settings = self.settings_provider()
         self.search_button.setEnabled(False)
@@ -1491,18 +1605,32 @@ class TrackerWorkspacePage(QWidget):
         self.search_table.blockSignals(True)
         self.search_table.setRowCount(len(result.items))
         for row, summary in enumerate(result.items):
+            check_item = QTableWidgetItem("")
+            check_item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
+            )
+            selected = (
+                summary.item_id not in self._excluded_search_ids
+                if self._all_search_selected
+                else summary.item_id in self._selected_search_ids
+            )
+            check_item.setCheckState(
+                Qt.CheckState.Checked if selected else Qt.CheckState.Unchecked
+            )
+            self.search_table.setItem(row, 0, check_item)
             values = (
                 str(summary.item_id),
                 summary.name,
                 summary.status or "-",
                 ", ".join(summary.assignees) or "-",
             )
-            for column, value in enumerate(values):
+            for column, value in enumerate(values, start=1):
                 cell = QTableWidgetItem(value)
-                if column == 0:
+                if column == 1:
                     cell.setData(ITEM_SUMMARY_ROLE, summary)
                 self.search_table.setItem(row, column, cell)
         self.search_table.blockSignals(False)
+        self._last_search_result = result
         self._search_page = result.page
         visible_end = min(result.page * result.page_size, result.total)
         visible_start = 0 if not result.items else ((result.page - 1) * result.page_size) + 1
@@ -1514,6 +1642,304 @@ class TrackerWorkspacePage(QWidget):
         pagination_available = result.server_honored_pagination
         self.search_previous_button.setEnabled(pagination_available and result.has_previous)
         self.search_next_button.setEnabled(pagination_available and result.has_next)
+        self._update_search_selection_ui()
+
+    def _on_search_mode_changed(self, *args) -> None:
+        del args
+        condition_mode = (
+            self.search_mode_combo.currentData() == TrackerSearchMode.CONDITIONS.value
+        )
+        self.simple_search_host.setVisible(not condition_mode)
+        self.condition_builder.setVisible(condition_mode)
+        self._last_search_query = None
+        self._last_search_result = None
+        self.search_table.setRowCount(0)
+        self._clear_search_selection()
+        if condition_mode and self._current_tracker is not None:
+            self._load_search_schema()
+
+    def _load_search_schema(self, *, run_after: bool = False) -> None:
+        tracker = self._current_tracker
+        if tracker is None:
+            return
+        if self._search_schema is not None and self._search_schema.tracker_id == tracker.tracker_id:
+            if run_after:
+                self._run_search()
+            return
+        tracker_id = tracker.tracker_id
+        settings = self.settings_provider()
+
+        def loaded(schema: EditableTrackerSchema) -> None:
+            if self._current_tracker is None or self._current_tracker.tracker_id != tracker_id:
+                return
+            self._search_schema = schema
+            self.condition_builder.set_schema(schema)
+            if run_after:
+                self._run_search()
+
+        def failed(exc: Exception) -> None:
+            self._show_error(exc, prefix="검색 schema 조회 실패")
+
+        self._submit(
+            "search_schema",
+            lambda: self.editor_service.load_create_schema(settings, tracker_id),
+            loaded,
+            failed,
+        )
+
+    def _selected_search_count(self) -> int:
+        if self._all_search_selected and self._last_search_result is not None:
+            return max(self._last_search_result.total - len(self._excluded_search_ids), 0)
+        return len(self._selected_search_ids)
+
+    def _update_search_selection_ui(self) -> None:
+        count = self._selected_search_count()
+        suffix = " · 검색 결과 전체 기준" if self._all_search_selected else ""
+        self.search_selection_label.setText(f"선택 {count:,}개{suffix}")
+        has_result = self._last_search_result is not None and bool(
+            self._last_search_result.items
+        )
+        self.select_page_button.setEnabled(has_result)
+        self.select_all_results_button.setEnabled(has_result)
+        self.clear_search_selection_button.setEnabled(count > 0)
+        settings = self.settings_provider()
+        self.bulk_update_button.setEnabled(
+            count > 0
+            and self._current_tracker is not None
+            and not bool(settings.offline_mode)
+        )
+
+    def _select_current_search_page(self) -> None:
+        result = self._last_search_result
+        if result is None:
+            return
+        if self._all_search_selected:
+            self._excluded_search_ids.difference_update(
+                summary.item_id for summary in result.items
+            )
+        else:
+            self._selected_search_ids.update(summary.item_id for summary in result.items)
+        self._render_search_results(result)
+
+    def _select_all_search_results(self) -> None:
+        if self._last_search_result is None:
+            return
+        self._all_search_selected = True
+        self._selected_search_ids.clear()
+        self._excluded_search_ids.clear()
+        self._render_search_results(self._last_search_result)
+
+    def _clear_search_selection(self) -> None:
+        self._selected_search_ids.clear()
+        self._all_search_selected = False
+        self._excluded_search_ids.clear()
+        if hasattr(self, "search_table"):
+            self.search_table.blockSignals(True)
+            for row in range(self.search_table.rowCount()):
+                item = self.search_table.item(row, 0)
+                if item is not None:
+                    item.setCheckState(Qt.CheckState.Unchecked)
+            self.search_table.blockSignals(False)
+        if hasattr(self, "search_selection_label"):
+            self._update_search_selection_ui()
+
+    def _start_bulk_update(self) -> None:
+        if self._selected_search_count() <= 0:
+            return
+        if self._all_search_selected:
+            query = self._last_search_query
+            if query is None:
+                return
+            settings = self.settings_provider()
+            exclusions = set(self._excluded_search_ids)
+
+            def loaded(items: tuple[TrackerItemSummary, ...]) -> None:
+                item_ids = tuple(
+                    item.item_id for item in items if item.item_id not in exclusions
+                )
+                self._prepare_bulk_update(item_ids)
+
+            self._submit(
+                "search_all",
+                lambda: self.service.load_all_search_items(settings, query),
+                loaded,
+                lambda exc: self._show_error(exc, prefix="전체 검색 결과 조회 실패"),
+            )
+            return
+        self._prepare_bulk_update(tuple(sorted(self._selected_search_ids)))
+
+    def _prepare_bulk_update(
+        self,
+        item_ids: tuple[int, ...],
+        *,
+        initial_field_ids: tuple[int, ...] = (),
+        initial_clear_field_ids: tuple[int, ...] = (),
+        initial_atomic: bool = True,
+        initial_chunk_size: int | None = None,
+    ) -> None:
+        tracker = self._current_tracker
+        if tracker is None or not item_ids:
+            return
+        settings = self.settings_provider()
+        if bool(settings.offline_mode):
+            self._set_workspace_status(
+                "테스트 모드에서는 일괄 수정할 수 없습니다.", tone="warning"
+            )
+            return
+        tracker_id = tracker.tracker_id
+
+        def loaded(schema: EditableTrackerSchema) -> None:
+            if self._current_tracker is None or self._current_tracker.tracker_id != tracker_id:
+                return
+            kwargs = {
+                "tracker_name": tracker.name,
+                "target_count": len(item_ids),
+                "initial_chunk_size": (
+                    initial_chunk_size
+                    if initial_chunk_size is not None
+                    else int(getattr(settings, "bulk_update_chunk_size", 1000) or 1000)
+                ),
+                "initial_field_ids": initial_field_ids,
+                "initial_clear_field_ids": initial_clear_field_ids,
+                "initial_atomic": initial_atomic,
+                "parent": self,
+            }
+            request = (
+                self.bulk_request_provider(schema, **kwargs)
+                if self.bulk_request_provider is not None
+                else TrackerBulkUpdateDialog.request(schema, **kwargs)
+            )
+            if request is None:
+                return
+            if callable(self.bulk_chunk_size_saver):
+                self.bulk_chunk_size_saver(request.chunk_size)
+            self._execute_bulk_update(item_ids, schema, request)
+
+        self._submit(
+            "editor_schema",
+            lambda: self.editor_service.load_create_schema(settings, tracker_id),
+            loaded,
+            lambda exc: self._show_error(exc, prefix="일괄 수정 schema 조회 실패"),
+        )
+
+    def _execute_bulk_update(
+        self,
+        item_ids: tuple[int, ...],
+        schema: EditableTrackerSchema,
+        request: BulkUpdateRequest,
+    ) -> None:
+        tracker = self._current_tracker
+        if tracker is None:
+            return
+        settings = self.settings_provider()
+        progress = BulkUpdateProgressDialog(len(item_ids), self)
+        worker = BulkUpdateWorker(
+            self.bulk_update_service,
+            settings,
+            tracker_id=tracker.tracker_id,
+            item_ids=item_ids,
+            schema=schema,
+            changes=request.changes,
+            atomic=request.atomic,
+            chunk_size=request.chunk_size,
+        )
+        self._bulk_progress_dialog = progress
+        self._bulk_worker = worker
+        progress.cancel_button.clicked.connect(worker.request_cancel)
+        progress.cancel_button.clicked.connect(
+            lambda _checked=False: progress.cancel_button.setEnabled(False)
+        )
+        worker.progress_changed.connect(progress.update_event)
+        worker.completed.connect(self._finish_bulk_update)
+        worker.failed.connect(self._fail_bulk_update)
+        worker.finished.connect(self._cleanup_bulk_worker)
+        progress.show()
+        worker.start()
+
+    def _finish_bulk_update(self, result) -> None:
+        progress = self._bulk_progress_dialog
+        if progress is not None:
+            progress.accept()
+        self._bulk_progress_dialog = None
+        if self.bulk_run_store is not None:
+            self.bulk_run_store.append(result)
+        success_count = len(result.successful_item_ids)
+        retry_count = len(result.retry_item_ids)
+        if result.cancelled:
+            activity_result = ActivityResult.CANCELLED
+        elif retry_count and success_count:
+            activity_result = ActivityResult.PARTIAL
+        elif retry_count:
+            activity_result = ActivityResult.FAILED
+        else:
+            activity_result = ActivityResult.SUCCESS
+        tracker = self._current_tracker
+        project = self._current_project
+        if callable(self.activity_recorder):
+            self.activity_recorder(
+                ActivityRecord.create(
+                    ActivityOperation.BULK_UPDATE,
+                    activity_result,
+                    source="tracker_workspace",
+                    summary=(
+                        f"일괄 수정 성공 {success_count:,}건, 재시도 대상 {retry_count:,}건"
+                    ),
+                    project_id=project.project_id if project else None,
+                    project_name=project.name if project else "",
+                    tracker_id=tracker.tracker_id if tracker else result.tracker_id,
+                    tracker_name=tracker.name if tracker else "",
+                    details={
+                        "run_id": result.run_id,
+                        "target_count": len(result.target_item_ids),
+                        "success_count": success_count,
+                        "failed_count": len(result.failed_item_ids),
+                        "rolled_back_count": len(result.rolled_back_item_ids),
+                        "unattempted_count": len(result.unattempted_item_ids),
+                        "atomic": result.atomic,
+                        "chunk_size": result.chunk_size,
+                    },
+                )
+            )
+        self._set_workspace_status(
+            f"일괄 수정 완료: 성공 {success_count:,}건, 재시도 대상 {retry_count:,}건.",
+            tone="warning" if retry_count else "info",
+        )
+        self._clear_search_selection()
+
+    def _fail_bulk_update(self, exc: Exception) -> None:
+        if self._bulk_progress_dialog is not None:
+            self._bulk_progress_dialog.reject()
+        self._bulk_progress_dialog = None
+        self._show_error(exc, prefix="일괄 수정 실패")
+
+    def _cleanup_bulk_worker(self) -> None:
+        worker = self._bulk_worker
+        self._bulk_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def open_bulk_retry(self, run_id: str) -> None:
+        if self.bulk_run_store is None:
+            return
+        record = self.bulk_run_store.get(run_id)
+        if record is None:
+            self._set_workspace_status("재시도 실행 기록을 찾지 못했습니다.", tone="warning")
+            return
+        if self._current_tracker is None or self._current_tracker.tracker_id != record.tracker_id:
+            self._set_workspace_status(
+                f"트래커 {record.tracker_id}을 선택한 뒤 재시도하세요.", tone="warning"
+            )
+            return
+        if not record.retry_item_ids:
+            self._set_workspace_status("이 실행 기록에는 재시도 대상이 없습니다.")
+            return
+        self._prepare_bulk_update(
+            record.retry_item_ids,
+            initial_field_ids=record.field_ids,
+            initial_clear_field_ids=record.clear_field_ids,
+            initial_atomic=record.atomic,
+            initial_chunk_size=record.chunk_size,
+        )
 
     def _open_direct_item(self) -> None:
         raw_id = self.direct_id_input.text().strip()

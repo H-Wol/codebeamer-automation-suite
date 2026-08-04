@@ -21,6 +21,7 @@ class ActivityOperation(str, Enum):
     TRACKER_UPDATE = "tracker_update"
     STATUS_TRANSITION = "status_transition"
     TRACKER_DELETE = "tracker_delete"
+    BULK_UPDATE = "bulk_update"
     BATCH_UPLOAD = "batch_upload"
 
 
@@ -36,6 +37,7 @@ ACTIVITY_OPERATION_LABELS = {
     ActivityOperation.TRACKER_UPDATE: "필드 수정",
     ActivityOperation.STATUS_TRANSITION: "상태 전환",
     ActivityOperation.TRACKER_DELETE: "아이템 삭제",
+    ActivityOperation.BULK_UPDATE: "일괄 수정",
     ActivityOperation.BATCH_UPLOAD: "배치 작업",
 }
 

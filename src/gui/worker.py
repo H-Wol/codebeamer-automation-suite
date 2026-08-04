@@ -162,3 +162,44 @@ class BackgroundTask:
                     self.failed.emit(exc)
 
         return _BackgroundTask(func, args, kwargs)
+
+
+class BulkUpdateWorker:
+    """일괄 수정을 실행하면서 청크 진행률과 취소 상태를 전달한다."""
+
+    def __new__(cls, service, settings, **request):
+        qt = _require_qt()
+        base_cls = qt["QThread"]
+        Signal = qt["Signal"]
+
+        class _BulkUpdateWorker(base_cls):
+            progress_changed = Signal(object)
+            completed = Signal(object)
+            failed = Signal(object)
+
+            def __init__(self, service, settings, request) -> None:
+                super().__init__()
+                self.service = service
+                self.settings = settings
+                self.request = dict(request)
+                self._cancel_requested = False
+
+            def request_cancel(self) -> None:
+                self._cancel_requested = True
+
+            def run(self) -> None:
+                try:
+                    result = self.service.execute(
+                        self.settings,
+                        **self.request,
+                        event_callback=lambda event: self.progress_changed.emit(
+                            dict(event)
+                        ),
+                        cancel_requested=lambda: self._cancel_requested,
+                    )
+                except Exception as exc:
+                    self.failed.emit(exc)
+                    return
+                self.completed.emit(result)
+
+        return _BulkUpdateWorker(service, settings, request)

@@ -480,6 +480,41 @@ class TrackerQueryService:
         metadata["scopedCbql"] = scoped_cbql
         return replace(result, server_metadata=metadata)
 
+    def load_all_search_items(
+        self,
+        settings,
+        query: TrackerQuery,
+        *,
+        page_size: int = 500,
+    ) -> tuple[TrackerItemSummary, ...]:
+        """검색 조건에 맞는 전체 ID를 서버 페이지 단위로 빠짐없이 수집한다."""
+        normalized_page_size = min(max(int(page_size), 1), 500)
+        collected: list[TrackerItemSummary] = []
+        seen_ids: set[int] = set()
+        page = 1
+        while True:
+            result = self.search(
+                settings,
+                replace(query, page=page, page_size=normalized_page_size),
+            )
+            added = 0
+            for summary in result.items:
+                if summary.item_id in seen_ids:
+                    continue
+                seen_ids.add(summary.item_id)
+                collected.append(summary)
+                added += 1
+            if len(collected) >= result.total:
+                break
+            if not result.items or added == 0:
+                raise TrackerQueryServiceError(
+                    TrackerQueryErrorKind.SERVER,
+                    "서버가 검색 결과의 다음 페이지를 적용하지 않았습니다.",
+                    operation="load_all_search_items",
+                )
+            page += 1
+        return tuple(collected)
+
     def load_detail(self, settings, item_id: int) -> TrackerItemDetail:
         client = self._client(settings, "load_item_detail")
         raw_item = self._run(

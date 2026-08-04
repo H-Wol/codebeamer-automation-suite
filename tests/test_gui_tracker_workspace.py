@@ -386,7 +386,7 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.page._run_search()
 
         requirement_ids = {
-            int(self.page.search_table.item(row, 0).text())
+            int(self.page.search_table.item(row, 1).text())
             for row in range(self.page.search_table.rowCount())
         }
         self.assertEqual(requirement_ids, {9001003, 9001004})
@@ -396,12 +396,49 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.page._run_search()
 
         test_case_ids = {
-            int(self.page.search_table.item(row, 0).text())
+            int(self.page.search_table.item(row, 1).text())
             for row in range(self.page.search_table.rowCount())
         }
         self.assertEqual(test_case_ids, {9101002})
         self.assertNotIn(9001003, test_case_ids)
         self.assertIn("Offline Test Cases", self.page.search_scope_label.text())
+
+    def test_search_result_selection_supports_page_and_all_query_modes(self) -> None:
+        from PySide6.QtCore import Qt
+
+        self.page.activate()
+        self.page.search_text_input.setText("Steering")
+        self.page._run_search()
+
+        self.page._select_current_search_page()
+        self.assertEqual(self.page._selected_search_ids, {9001003, 9001004})
+        self.assertEqual(self.page._selected_search_count(), 2)
+
+        self.page._select_all_search_results()
+        self.assertTrue(self.page._all_search_selected)
+        self.assertEqual(self.page._selected_search_count(), 2)
+        first_checkbox = self.page.search_table.item(0, 0)
+        first_checkbox.setCheckState(Qt.CheckState.Unchecked)
+        self.assertEqual(self.page._selected_search_count(), 1)
+        self.assertEqual(len(self.page._excluded_search_ids), 1)
+
+    def test_condition_search_mode_loads_schema_and_builds_condition_query(self) -> None:
+        self.page.activate()
+        mode_index = self.page.search_mode_combo.findData("conditions")
+        self.page.search_mode_combo.setCurrentIndex(mode_index)
+        group = self.page.condition_builder.groups[0]
+        row = group.rows[0]
+        summary_index = row.field_combo.findText("Summary")
+        row.field_combo.setCurrentIndex(summary_index)
+        contains_index = row.operator_combo.findData("contains")
+        row.operator_combo.setCurrentIndex(contains_index)
+        row.value_input.setText("Steering")
+
+        self.page._run_search()
+
+        self.assertIsNotNone(self.page._last_search_query)
+        self.assertEqual(self.page._last_search_query.mode.value, "conditions")
+        self.assertEqual(self.page.search_table.rowCount(), 2)
 
     def test_direct_id_open_resolves_other_tracker_and_builds_ancestor_path(self) -> None:
         self.page.activate()

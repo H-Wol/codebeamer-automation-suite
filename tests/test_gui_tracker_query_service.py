@@ -150,6 +150,27 @@ class LeakingSearchFakeClient(QueryFakeClient):
         return payload
 
 
+class PaginatedSearchClient(QueryFakeClient):
+    def search_items(self, *, query_string, baseline_id=None, page, page_size):
+        del baseline_id
+        tracker_id = int(re.search(r"tracker\.id = (\d+)", query_string).group(1))
+        start = (page - 1) * page_size
+        ids = list(range(1, 1202))[start : start + page_size]
+        return {
+            "page": page,
+            "pageSize": page_size,
+            "total": 1201,
+            "items": [
+                {
+                    "id": item_id,
+                    "name": f"Item {item_id}",
+                    "tracker": {"id": tracker_id},
+                }
+                for item_id in ids
+            ],
+        }
+
+
 class TrackerMetadataFailureFakeClient(QueryFakeClient):
     def get_tracker(self, tracker_id: int):
         raise _HttpError(403)
@@ -578,6 +599,23 @@ class OfflineTrackerQueryServiceIntegrationTest(unittest.TestCase):
             TrackerQueryErrorKind.OFFLINE_DATA_UNAVAILABLE,
         )
         self.assertNotIn("JSON", str(raised.exception))
+
+    def test_load_all_search_items_collects_every_server_page_without_cap(self) -> None:
+        service = TrackerQueryService(client_factory=PaginatedSearchClient)
+        settings = GuiSettings(
+            base_url="https://example.test/cb",
+            username="sample",
+            password="placeholder",
+        )
+
+        items = service.load_all_search_items(
+            settings,
+            TrackerQuery(tracker_id=20, text="Item"),
+        )
+
+        self.assertEqual(len(items), 1201)
+        self.assertEqual(items[0].item_id, 1)
+        self.assertEqual(items[-1].item_id, 1201)
 
 
 if __name__ == "__main__":

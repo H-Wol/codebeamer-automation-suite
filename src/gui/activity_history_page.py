@@ -92,12 +92,14 @@ class ActivityHistoryPage(QWidget):
         store: ActivityHistoryStore,
         *,
         clear_confirmer: Callable[[int], bool] | None = None,
+        bulk_retry_requested: Callable[[str], None] | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("activity_history_page")
         self.store = store
         self.clear_confirmer = clear_confirmer
+        self.bulk_retry_requested = bulk_retry_requested
         self._records: tuple[ActivityRecord, ...] = ()
         self._visible_records: tuple[ActivityRecord, ...] = ()
 
@@ -177,6 +179,10 @@ class ActivityHistoryPage(QWidget):
         self.clear_button.setObjectName("danger_button")
         self.clear_button.clicked.connect(self._clear_history)
         filter_row.addWidget(self.clear_button)
+        self.retry_button = QPushButton("실패 대상 재시도", self)
+        self.retry_button.setEnabled(False)
+        self.retry_button.clicked.connect(self._retry_selected_bulk_update)
+        filter_row.addWidget(self.retry_button)
         layout.addLayout(filter_row)
 
         self.status_label = QLabel("", self)
@@ -303,6 +309,7 @@ class ActivityHistoryPage(QWidget):
             self.table.selectRow(0)
         else:
             self.detail_view.clear()
+            self.retry_button.setEnabled(False)
         self.table.blockSignals(False)
         if self._visible_records:
             self._show_record_detail(self._visible_records[0])
@@ -355,6 +362,27 @@ class ActivityHistoryPage(QWidget):
                 )
             )
         self.detail_view.setPlainText("\n".join(lines))
+        self.retry_button.setEnabled(
+            record.operation == ActivityOperation.BULK_UPDATE
+            and bool(record.details.get("run_id"))
+            and int(record.details.get("failed_count") or 0)
+            + int(record.details.get("rolled_back_count") or 0)
+            + int(record.details.get("unattempted_count") or 0)
+            > 0
+            and callable(self.bulk_retry_requested)
+        )
+
+    def _retry_selected_bulk_update(self) -> None:
+        selected = self.table.selectedItems()
+        if not selected or not callable(self.bulk_retry_requested):
+            return
+        item = self.table.item(selected[0].row(), 0)
+        record = item.data(ACTIVITY_RECORD_ROLE) if item is not None else None
+        if not isinstance(record, ActivityRecord):
+            return
+        run_id = str(record.details.get("run_id") or "")
+        if run_id:
+            self.bulk_retry_requested(run_id)
 
     def _clear_history(self) -> None:
         if not self._records:

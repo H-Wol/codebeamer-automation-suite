@@ -66,7 +66,7 @@ class CodebeamerClient:
         """POST 요청을 보내고 JSON 응답을 돌려준다."""
         return self._request_json("POST", path, json_body=json_body, params=params)
 
-    def _put(self, path: str, json_body: dict | None = None, params: dict | None = None) -> Any:
+    def _put(self, path: str, json_body: Any = None, params: dict | None = None) -> Any:
         """PUT 요청을 보내고 JSON 응답을 돌려준다."""
         return self._request_json("PUT", path, json_body=json_body, params=params)
 
@@ -516,6 +516,22 @@ class CodebeamerClient:
             lambda: self._put(
                 f"/v3/items/{int(item_id)}/fields",
                 json_body={"fieldValues": list(field_values)},
+            ),
+        )
+
+    def bulk_update_item_fields(
+        self,
+        operations: list[dict],
+        *,
+        atomic: bool = True,
+    ) -> dict:
+        """여러 아이템의 지정 필드를 한 번의 v3 bulk 요청으로 갱신한다."""
+        return self._run_rate_limited_request(
+            "bulk_update_item_fields",
+            lambda: self._put(
+                "/v3/items/fields",
+                json_body=list(operations),
+                params={"atomic": str(bool(atomic)).lower()},
             ),
         )
 
