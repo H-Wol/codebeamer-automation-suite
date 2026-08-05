@@ -44,6 +44,10 @@ class MappingContext:
     selected_tracker_item_settings: dict[str, dict[str, Any]]
     tracker_item_field_candidates: list[TrackerItemFieldCandidate]
     tracker_item_lookup_cache: dict[tuple[str, str], tuple[Any, str | None, str | None]]
+    user_lookup_cache: dict[tuple[int | None, str], tuple[Any, Any, str, str | None]]
+    member_lookup_cache: dict[tuple[int | None, int | None, int | None, str], tuple[Any, Any, str, str | None]]
+    group_lookup_cache: dict[str, list[dict[str, Any]]]
+    tracker_role_cache: dict[tuple[int, int, int], dict[str, list[dict[str, Any]]]]
     list_cols: list[str]
     file_paths: list[str]
     representative_file_path: str

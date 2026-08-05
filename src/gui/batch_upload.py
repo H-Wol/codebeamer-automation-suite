@@ -174,6 +174,10 @@ class BatchUploadService:
             if str(key).strip() and isinstance(value, dict)
         }
         wizard.state.selected_tracker_item_settings = dict(mapping_context.selected_tracker_item_settings)
+        wizard.state.user_lookup_cache = dict(mapping_context.user_lookup_cache)
+        wizard.state.member_lookup_cache = dict(mapping_context.member_lookup_cache)
+        wizard.state.group_lookup_cache = dict(mapping_context.group_lookup_cache)
+        wizard.state.tracker_role_cache = dict(mapping_context.tracker_role_cache)
         wizard.state.tracker_item_lookup_cache = dict(mapping_context.tracker_item_lookup_cache)
         wizard.state.existing_item_cache = {}
         wizard.state.comparison_df = wizard.mapper.compare_upload_df_with_schema(
@@ -193,6 +197,10 @@ class BatchUploadService:
             force=True,
             fetch_existing_items=not gui_upload_mode_supports_update(mapping_context.upload_mode),
         )
+        mapping_context.user_lookup_cache = dict(wizard.state.user_lookup_cache)
+        mapping_context.member_lookup_cache = dict(wizard.state.member_lookup_cache)
+        mapping_context.group_lookup_cache = dict(wizard.state.group_lookup_cache)
+        mapping_context.tracker_role_cache = dict(wizard.state.tracker_role_cache)
         return wizard
 
     def run_batch_upload(

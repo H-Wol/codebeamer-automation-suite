@@ -15,7 +15,7 @@ Excel 기반 계층형 데이터를 Codebeamer Tracker Item으로 변환하고 �
 - `UserChoiceField`, `UserReference` 필드에 대해 사용자 이름 우선 lookup 후 reference로 변환
 - `MemberField` 는 `USER/ROLE/GROUP` 타입별 후보를 이름으로 찾아 mixed reference로 변환
 - `TrackerItemChoiceField` 및 builtin `subjects` 필드에서 정규식으로 ID를 추출해 참조값으로 사용
-- 사용자 lookup 결과를 프로젝트 단위 임시 캐시에 저장해 반복 요청 최소화
+- 사용자·Member lookup 결과를 검증부터 다중 파일 업로드까지 이어지는 공용 캐시에 저장해 반복 요청 최소화
 - `TableFieldName.ColumnName` 형식 헤더를 이용한 `TableField` 조립
 - row별 payload cache 생성과 preview/upload 재사용
 - parent-first 순서 보장 업로드

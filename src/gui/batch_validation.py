@@ -609,6 +609,10 @@ class BatchValidationService:
         wizard.state.selected_mapping_modes = dict(normalized_mapping_modes)
         wizard.state.selected_default_value_modes = dict(normalized_default_value_modes)
         wizard.state.selected_tracker_item_settings = dict(normalized_tracker_item_settings)
+        wizard.state.user_lookup_cache = dict(mapping_context.user_lookup_cache)
+        wizard.state.member_lookup_cache = dict(mapping_context.member_lookup_cache)
+        wizard.state.group_lookup_cache = dict(mapping_context.group_lookup_cache)
+        wizard.state.tracker_role_cache = dict(mapping_context.tracker_role_cache)
         wizard.state.tracker_item_lookup_cache = dict(mapping_context.tracker_item_lookup_cache)
         wizard.state.existing_item_cache = {}
         validation_result = run_validation_pipeline(
@@ -693,6 +697,10 @@ class BatchValidationService:
                 )
             )
 
+        mapping_context.user_lookup_cache = dict(wizard.state.user_lookup_cache)
+        mapping_context.member_lookup_cache = dict(wizard.state.member_lookup_cache)
+        mapping_context.group_lookup_cache = dict(wizard.state.group_lookup_cache)
+        mapping_context.tracker_role_cache = dict(wizard.state.tracker_role_cache)
         mapping_context.tracker_item_lookup_cache = dict(wizard.state.tracker_item_lookup_cache)
         mapping_context.existing_item_cache = {}
         option_check_df = (
@@ -776,5 +784,4 @@ class BatchValidationService:
     def _build_row_label(cls, row: pd.Series) -> str:
         """중복 update 이슈에서 사용할 Excel 행 표시를 만든다."""
         return ValidationPresenter.build_row_label(row)
-
 

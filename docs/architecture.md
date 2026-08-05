@@ -132,7 +132,7 @@
 - 사용자 선택 필드를 사용자 이름 우선 lookup 후 reference로 변환
 - `MemberField` 를 `USER/ROLE/GROUP` mixed reference 로 변환
 - tracker item 선택 필드를 tracker item ID parse 후 reference로 변환
-- 프로젝트 단위 user lookup cache 유지
+- 검증과 다중 파일 업로드 사이에 프로젝트 단위 user/member/group/role lookup cache 유지
 - parent-first 순서로 업로드 수행
 - 실행 산출물 저장
 - GUI upload worker가 재사용할 progress/pause/cancel hook 제공
@@ -354,7 +354,7 @@ flowchart TD
 13. 사용자 선택 필드는 사용자 이름으로 조회하고 필요시 숫자 입력에 한해 ID fallback 을 사용합니다.
 14. `MemberField` 는 `USER/ROLE/GROUP` 후보를 이름으로 찾아 mixed reference 로 변환합니다.
 15. `TrackerItemChoiceField` 는 regex로 ID를 추출해 `TrackerItemReference` 를 만듭니다. 이름·summary query lookup은 비활성화되어 있습니다.
-16. user/member lookup 결과는 cache에 저장해 다음 행과 다음 파일에서 재사용합니다.
+16. user/member/group/role lookup 결과는 공용 cache에 저장해 검증 이후의 파일별 업로드에서도 재사용합니다.
 17. wizard가 row별 payload를 먼저 계산해 `payload_df` cache에 저장합니다.
 18. preview는 `payload_df`를 재사용하고 upload는 같은 payload로 parent-first 업로드를 수행합니다.
 19. 상단 데이터가 켜져 있으면 파일별 root parent item을 먼저 업로드한 뒤 child row의 parent를 연결합니다.
@@ -372,7 +372,7 @@ flowchart TD
 - schema 로딩 후 `schema`, `schema_df`, `comparison_df`가 채워짐
 - option 처리 후 `option_candidates_df`, `option_maps`, `option_check_df`, `converted_upload_df`가 채워짐
 - payload 생성 후 `payload_df` 가 채워짐
-- 사용자 lookup 중간 결과는 `user_lookup_cache` 에 유지됨
+- 사용자·Member lookup 중간 결과는 `MappingContext`를 통해 검증 wizard와 파일별 업로드 wizard 사이에서 재사용됨
 - upload 수행 후 `upload_result`가 채워짐
 
 ## TableField 처리 방식
