@@ -11,6 +11,7 @@ try:
     from PySide6.QtWidgets import QAbstractItemView
     from PySide6.QtWidgets import QApplication
     from PySide6.QtWidgets import QComboBox
+    from PySide6.QtWidgets import QDialog
     from PySide6.QtWidgets import QFrame
     from PySide6.QtWidgets import QHBoxLayout
     from PySide6.QtWidgets import QHeaderView
@@ -61,6 +62,11 @@ from .tracker_query_models import TrackerSearchMode
 from .tracker_query_models import TrackerQueryServiceError
 from .tracker_query_models import TrackerSummary
 from .tracker_query_service import TrackerQueryService
+from .tracker_baseline_compare import BaselineComparisonKind
+from .tracker_baseline_compare import BaselineComparisonResult
+from .tracker_baseline_compare import BaselineComparisonSource
+from .tracker_baseline_compare import TrackerBaseline
+from .tracker_baseline_compare import TrackerItemComparison
 from .tracker_table_field_dialog import TrackerTableFieldDialog
 from .tracker_table_field_dialog import is_table_field
 from .tracker_table_field_dialog import table_field_summary
@@ -87,6 +93,8 @@ REQUEST_BUSY_MESSAGES = {
     "search": "현재 트래커에서 아이템을 검색하는 중입니다.",
     "search_schema": "다중 조건 검색 필드를 확인하는 중입니다.",
     "search_all": "검색 결과 전체 대상을 확인하는 중입니다.",
+    "baseline_list": "비교 가능한 baseline 목록을 불러오는 중입니다.",
+    "baseline_compare": "두 기준의 검색 결과 전체를 비교하는 중입니다.",
     "direct": "아이템 ID의 위치와 계층을 확인하는 중입니다.",
     "editor_schema": "수정 가능한 필드를 확인하는 중입니다.",
     "item_write": "트래커 아이템 변경 사항을 반영하는 중입니다.",
@@ -97,6 +105,159 @@ REQUEST_BUSY_MESSAGES = {
 class _DirectItemResult:
     context: TrackerItemContext
     ancestor_path: tuple[TrackerItemSummary, ...]
+
+
+class _BaselineComparisonDialog(QDialog):
+    """기존 검색 조건을 두 읽기 전용 기준에서 비교하는 대화상자."""
+
+    _KIND_LABELS = {
+        BaselineComparisonKind.ADDED: "추가",
+        BaselineComparisonKind.REMOVED: "삭제",
+        BaselineComparisonKind.CHANGED: "변경",
+        BaselineComparisonKind.UNCHANGED: "변경 없음",
+    }
+
+    def __init__(
+        self,
+        baselines: tuple[TrackerBaseline, ...],
+        run_comparison: Callable[[BaselineComparisonSource, BaselineComparisonSource], None],
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Baseline 비교")
+        self.setModal(False)
+        self.resize(980, 660)
+        self._run_comparison = run_comparison
+        self._result: BaselineComparisonResult | None = None
+
+        layout = QVBoxLayout(self)
+        source_row = QHBoxLayout()
+        source_row.addWidget(QLabel("기준 A", self))
+        self.before_combo = QComboBox(self)
+        self.before_combo.addItem("현재 상태", None)
+        source_row.addWidget(self.before_combo, 1)
+        source_row.addWidget(QLabel("기준 B", self))
+        self.after_combo = QComboBox(self)
+        self.after_combo.addItem("선택하세요", "")
+        self.after_combo.addItem("현재 상태", None)
+        for baseline in baselines:
+            label = baseline.name
+            if baseline.created_at:
+                label = f"{label} ({baseline.created_at})"
+            self.before_combo.addItem(label, baseline.baseline_id)
+            self.after_combo.addItem(label, baseline.baseline_id)
+        source_row.addWidget(self.after_combo, 1)
+        self.run_button = QPushButton("전체 검색 결과 비교", self)
+        self.run_button.setObjectName("primary_button")
+        self.run_button.clicked.connect(self._run)
+        source_row.addWidget(self.run_button)
+        layout.addLayout(source_row)
+
+        self.status_label = QLabel("현재 검색 조건을 두 기준에 각각 적용합니다.", self)
+        self.status_label.setObjectName("tracker_panel_status")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("표시", self))
+        self.kind_filter = QComboBox(self)
+        self.kind_filter.addItem("변경만", "changed")
+        self.kind_filter.addItem("전체", "all")
+        for kind, label in self._KIND_LABELS.items():
+            self.kind_filter.addItem(label, kind.value)
+        self.kind_filter.currentIndexChanged.connect(self._render_items)
+        filter_row.addWidget(self.kind_filter)
+        filter_row.addStretch(1)
+        layout.addLayout(filter_row)
+
+        self.table = QTableWidget(0, 4, self)
+        self.table.setHorizontalHeaderLabels(["유형", "ID", "요약", "변경 필드"])
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.itemSelectionChanged.connect(self._render_detail)
+        layout.addWidget(self.table, 2)
+
+        self.detail = QPlainTextEdit(self)
+        self.detail.setReadOnly(True)
+        self.detail.setPlaceholderText("변경 항목을 선택하면 필드별 이전/이후 값이 표시됩니다.")
+        layout.addWidget(self.detail, 1)
+
+    def _source(self, combo: QComboBox) -> BaselineComparisonSource | None:
+        value = combo.currentData()
+        if value == "":
+            return None
+        return BaselineComparisonSource(None if value is None else int(value))
+
+    def _run(self) -> None:
+        before = self._source(self.before_combo)
+        after = self._source(self.after_combo)
+        if before is None or after is None:
+            self.status_label.setText("비교할 두 기준을 선택하세요.")
+            return
+        if before == after:
+            self.status_label.setText("서로 다른 두 비교 기준을 선택하세요.")
+            return
+        self.run_button.setEnabled(False)
+        self.status_label.setText("모든 검색 결과 페이지를 수집해 비교하는 중입니다.")
+        self._run_comparison(before, after)
+
+    def set_result(self, result: BaselineComparisonResult) -> None:
+        self._result = result
+        self.run_button.setEnabled(True)
+        self.status_label.setText(
+            "추가 {added}개 · 삭제 {removed}개 · 변경 {changed}개 · 변경 없음 {unchanged}개".format(
+                added=result.count(BaselineComparisonKind.ADDED),
+                removed=result.count(BaselineComparisonKind.REMOVED),
+                changed=result.count(BaselineComparisonKind.CHANGED),
+                unchanged=result.count(BaselineComparisonKind.UNCHANGED),
+            )
+        )
+        self._render_items()
+
+    def set_error(self, message: str) -> None:
+        self.run_button.setEnabled(True)
+        self.status_label.setText(message)
+
+    def _render_items(self) -> None:
+        result = self._result
+        self.table.setRowCount(0)
+        self.detail.clear()
+        if result is None:
+            return
+        selected = str(self.kind_filter.currentData() or "changed")
+        items = result.items if selected == "all" else tuple(
+            item for item in result.items if item.kind.value == selected
+        )
+        self.table.setRowCount(len(items))
+        for row, comparison in enumerate(items):
+            values = (
+                self._KIND_LABELS[comparison.kind],
+                str(comparison.item_id),
+                comparison.name,
+                str(len(comparison.fields)),
+            )
+            for column, value in enumerate(values):
+                cell = QTableWidgetItem(value)
+                if column == 0:
+                    cell.setData(ITEM_SUMMARY_ROLE, comparison)
+                self.table.setItem(row, column, cell)
+
+    def _render_detail(self) -> None:
+        selected = self.table.selectedItems()
+        if not selected:
+            return
+        comparison = self.table.item(selected[0].row(), 0).data(ITEM_SUMMARY_ROLE)
+        if not isinstance(comparison, TrackerItemComparison):
+            return
+        if comparison.kind != BaselineComparisonKind.CHANGED:
+            self.detail.setPlainText(f"{self._KIND_LABELS[comparison.kind]}된 아이템입니다.")
+            return
+        blocks = [f"#{comparison.item_id} {comparison.name}"]
+        for field in comparison.fields:
+            blocks.append(f"\n[{field.label}]\n이전: {field.before_text()}\n이후: {field.after_text()}")
+        self.detail.setPlainText("\n".join(blocks))
 
 
 class TrackerWorkspacePage(QWidget):
@@ -418,6 +579,11 @@ class TrackerWorkspacePage(QWidget):
         self.search_button.setObjectName("primary_button")
         self.search_button.clicked.connect(self._run_search)
         mode_row.addWidget(self.search_button)
+        self.baseline_compare_button = QPushButton("Baseline 비교", tab)
+        self.baseline_compare_button.setObjectName("tracker_baseline_compare_button")
+        self.baseline_compare_button.setToolTip("현재 검색 조건을 현재 상태 또는 baseline 간에 비교합니다.")
+        self.baseline_compare_button.clicked.connect(self._open_baseline_comparison)
+        mode_row.addWidget(self.baseline_compare_button)
         layout.addLayout(mode_row)
 
         self.simple_search_host = QWidget(tab)
@@ -670,6 +836,9 @@ class TrackerWorkspacePage(QWidget):
         self.search_status_input.setEnabled(available and self._current_tracker is not None)
         self.search_assignee_input.setEnabled(available and self._current_tracker is not None)
         self.search_button.setEnabled(available and self._current_tracker is not None)
+        self.baseline_compare_button.setEnabled(
+            available and self._current_tracker is not None and self._last_search_query is not None
+        )
         self.search_mode_combo.setEnabled(available and self._current_tracker is not None)
         self.bulk_update_button.setEnabled(
             available
@@ -1589,6 +1758,7 @@ class TrackerWorkspacePage(QWidget):
             if self._current_tracker is None or self._current_tracker.tracker_id != tracker_id:
                 return
             self.search_button.setEnabled(True)
+            self.baseline_compare_button.setEnabled(True)
             self._render_search_results(result)
             self._set_workspace_status(
                 f"현재 트래커에서 검색 결과 {result.total}개를 찾았습니다."
@@ -1596,10 +1766,72 @@ class TrackerWorkspacePage(QWidget):
 
         def failed(exc: Exception) -> None:
             self.search_button.setEnabled(True)
+            self.baseline_compare_button.setEnabled(self._last_search_query is not None)
             self._update_search_scope()
             self._show_error(exc, prefix="트래커 검색 실패")
 
         self._submit("search", lambda: self.service.search(settings, query), loaded, failed)
+
+    def _open_baseline_comparison(self) -> None:
+        tracker = self._current_tracker
+        query = self._last_search_query
+        if tracker is None or query is None:
+            self._set_workspace_status("먼저 비교할 검색 조건을 실행하세요.", tone="warning")
+            return
+        settings = self.settings_provider()
+        self.baseline_compare_button.setEnabled(False)
+
+        def loaded(baselines: tuple[TrackerBaseline, ...]) -> None:
+            self.baseline_compare_button.setEnabled(True)
+            dialog = _BaselineComparisonDialog(
+                baselines,
+                self._run_baseline_comparison,
+                self,
+            )
+            self._baseline_comparison_dialog = dialog
+            dialog.show()
+
+        def failed(exc: Exception) -> None:
+            self.baseline_compare_button.setEnabled(True)
+            self._show_error(exc, prefix="Baseline 목록 조회 실패")
+
+        self._submit(
+            "baseline_list",
+            lambda: self.service.load_tracker_baselines(settings, tracker.tracker_id),
+            loaded,
+            failed,
+        )
+
+    def _run_baseline_comparison(
+        self,
+        before_source: BaselineComparisonSource,
+        after_source: BaselineComparisonSource,
+    ) -> None:
+        dialog = getattr(self, "_baseline_comparison_dialog", None)
+        query = self._last_search_query
+        if not isinstance(dialog, _BaselineComparisonDialog) or query is None:
+            return
+        settings = self.settings_provider()
+
+        def loaded(result: BaselineComparisonResult) -> None:
+            if dialog is self._baseline_comparison_dialog:
+                dialog.set_result(result)
+
+        def failed(exc: Exception) -> None:
+            if dialog is self._baseline_comparison_dialog:
+                dialog.set_error(str(exc))
+
+        self._submit(
+            "baseline_compare",
+            lambda: self.service.compare_search_results(
+                settings,
+                query,
+                before_source=before_source,
+                after_source=after_source,
+            ),
+            loaded,
+            failed,
+        )
 
     def _render_search_results(self, result: PageResult[TrackerItemSummary]) -> None:
         self.search_table.blockSignals(True)

@@ -334,6 +334,20 @@ class CodebeamerClient:
         """특정 field의 permission matrix를 가져온다."""
         return self._get(f"/v3/trackers/{tracker_id}/fields/{field_id}/permissions")
 
+    def get_tracker_baselines(self, tracker_id: int) -> list[dict]:
+        """트래커에 정의된 baseline 목록을 반환한다."""
+        data = self._run_rate_limited_request(
+            "get_tracker_baselines",
+            lambda: self._get(f"/v3/trackers/{int(tracker_id)}/baselines"),
+        )
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for key in ("baselines", "items", "results"):
+                if isinstance(data.get(key), list):
+                    return data[key]
+        return []
+
     def get_field_options(self, item_id: int, field_id: int) -> list[dict]:
         """특정 아이템 필드에서 선택 가능한 옵션 목록을 가져온다."""
         data = self._get(f"/v3/items/{item_id}/fields/{field_id}/options")

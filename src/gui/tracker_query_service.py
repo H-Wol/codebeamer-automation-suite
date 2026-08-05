@@ -15,6 +15,10 @@ from .tracker_query_models import TrackerQuery
 from .tracker_query_models import TrackerQueryErrorKind
 from .tracker_query_models import TrackerQueryServiceError
 from .tracker_query_models import TrackerSummary
+from .tracker_baseline_compare import BaselineComparisonResult
+from .tracker_baseline_compare import BaselineComparisonSource
+from .tracker_baseline_compare import TrackerBaseline
+from .tracker_baseline_compare import compare_tracker_items
 from src.codebeamer_client import CodebeamerClient
 
 
@@ -480,6 +484,23 @@ class TrackerQueryService:
         metadata["scopedCbql"] = scoped_cbql
         return replace(result, server_metadata=metadata)
 
+    def load_tracker_baselines(self, settings, tracker_id: int) -> tuple[TrackerBaseline, ...]:
+        client = self._client(settings, "load_tracker_baselines")
+        payload = self._run(
+            "load_tracker_baselines",
+            lambda: client.get_tracker_baselines(int(tracker_id)),
+        )
+        raw_baselines = self._extract_list(payload, "baselines", "items", "results")
+        if isinstance(payload, list):
+            raw_baselines = [item for item in payload if isinstance(item, dict)]
+        baselines: list[TrackerBaseline] = []
+        for raw in raw_baselines:
+            try:
+                baselines.append(TrackerBaseline.from_raw(raw))
+            except ValueError:
+                continue
+        return tuple(sorted(baselines, key=lambda baseline: (baseline.created_at, baseline.baseline_id), reverse=True))
+
     def load_all_search_items(
         self,
         settings,
@@ -514,6 +535,35 @@ class TrackerQueryService:
                 )
             page += 1
         return tuple(collected)
+
+    def compare_search_results(
+        self,
+        settings,
+        query: TrackerQuery,
+        *,
+        before_source: BaselineComparisonSource,
+        after_source: BaselineComparisonSource,
+    ) -> BaselineComparisonResult:
+        if before_source == after_source:
+            raise TrackerQueryServiceError(
+                TrackerQueryErrorKind.INVALID_QUERY,
+                "서로 다른 두 비교 기준을 선택하세요.",
+                operation="compare_search_results",
+            )
+        before = self.load_all_search_items(
+            settings,
+            replace(query, baseline_id=before_source.baseline_id, page=1),
+        )
+        after = self.load_all_search_items(
+            settings,
+            replace(query, baseline_id=after_source.baseline_id, page=1),
+        )
+        return compare_tracker_items(
+            before,
+            after,
+            before_source=before_source,
+            after_source=after_source,
+        )
 
     def load_detail(self, settings, item_id: int) -> TrackerItemDetail:
         client = self._client(settings, "load_item_detail")

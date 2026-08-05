@@ -349,6 +349,24 @@ class OfflineGuiClient:
         item["childCount"] = len(child_ids)
         return item
 
+    def _baseline_item_payload(self, item: dict[str, Any], tracker_id: int) -> dict[str, Any]:
+        payload = deepcopy(item)
+        tracker = self._offline_trackers[int(tracker_id)]
+        project_id = int(tracker.get("projectId") or 0)
+        payload["tracker"] = {
+            "id": int(tracker_id),
+            "name": str(tracker.get("name") or tracker_id),
+            "type": "TrackerReference",
+            "project": {
+                "id": project_id,
+                "name": str(self._offline_projects[project_id].get("name") or project_id),
+                "type": "ProjectReference",
+            },
+        }
+        payload.setdefault("customFields", [])
+        payload.setdefault("assignedTo", [])
+        return payload
+
     def get_projects(self) -> list[dict[str, Any]]:
         """`get_projects` 값을 반환한다."""
         if self.query_data is not None:
@@ -381,6 +399,22 @@ class OfflineGuiClient:
         if tracker is None:
             raise KeyError(f"offline tracker not found: {tracker_id}")
         return deepcopy(tracker)
+
+    def get_tracker_baselines(self, tracker_id: int) -> list[dict[str, Any]]:
+        self._require_query_data()
+        if int(tracker_id) not in self._offline_trackers:
+            raise KeyError(f"offline tracker not found: {tracker_id}")
+        baselines = self.query_data.get("baselines", []) if self.query_data else []
+        if not isinstance(baselines, list):
+            return []
+        result: list[dict[str, Any]] = []
+        for item in baselines:
+            if not isinstance(item, dict) or int(item.get("trackerId") or tracker_id) != int(tracker_id):
+                continue
+            reference = deepcopy(item)
+            reference.pop("items", None)
+            result.append(reference)
+        return result
 
     def get_tracker_schema(self, tracker_id: int) -> dict[str, Any]:
         """`get_tracker_schema` 값을 반환한다."""
@@ -514,7 +548,6 @@ class OfflineGuiClient:
         page: int = 1,
         page_size: int = 100,
     ) -> dict[str, Any]:
-        del baseline_id
         self._require_query_data()
         tracker_match = re.search(
             r"\btracker\.id\s*=\s*(\d+)",
@@ -534,9 +567,31 @@ class OfflineGuiClient:
             flags=re.IGNORECASE,
         )
         predicate = build_offline_cbql_predicate(condition_expression)
+        if baseline_id is None:
+            source_items = [self._item_payload(item_id) for item_id in self._offline_items]
+        else:
+            baselines = self.query_data.get("baselines", []) if self.query_data else []
+            baseline = next(
+                (
+                    item for item in baselines
+                    if isinstance(item, dict)
+                    and int(item.get("id") or 0) == int(baseline_id)
+                    and int(item.get("trackerId") or tracker_id) == tracker_id
+                ),
+                None,
+            )
+            if baseline is None:
+                raise KeyError(f"offline baseline not found: {baseline_id}")
+            raw_items = baseline.get("items")
+            if not isinstance(raw_items, list):
+                raise OfflineQueryDataUnavailable("테스트 baseline snapshot에 items 목록이 없습니다.")
+            source_items = [
+                self._baseline_item_payload(item, tracker_id)
+                for item in raw_items if isinstance(item, dict)
+            ]
+
         matches: list[dict[str, Any]] = []
-        for item_id in self._offline_items:
-            item_payload = self._item_payload(item_id)
+        for item_payload in source_items:
             if predicate(item_payload):
                 matches.append(item_payload)
 
