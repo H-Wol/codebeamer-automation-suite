@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-import json
+import re
 from typing import Any
 
 from .tracker_query_models import TrackerItemSummary
@@ -56,10 +56,10 @@ class TrackerFieldDifference:
     is_changed: bool
 
     def before_text(self) -> str:
-        return _display_value(self.before)
+        return _display_value(self.before, field_key=self.field_key)
 
     def after_text(self) -> str:
-        return _display_value(self.after)
+        return _display_value(self.after, field_key=self.field_key)
 
 
 @dataclass(frozen=True)
@@ -215,9 +215,7 @@ def _comparison_fields(raw: dict[str, Any]) -> dict[str, tuple[str, Any, Any]]:
             name = str(field.get("name") or field_id or f"custom-{index}")
             key = f"custom:{field_id if field_id is not None else name}"
             value = field.get("values") if "values" in field else field.get("value")
-            type_name = str(field.get("type") or field.get("valueModel") or "").strip()
-            label = f"{name} ({type_name})" if type_name else name
-            fields[key] = normalize_field(label, value)
+            fields[key] = normalize_field(name, value)
     elif "customFields" in safe_raw:
         fields["customFields"] = normalize_field("사용자 정의 필드", custom_fields)
     return fields
@@ -242,12 +240,96 @@ def _canonical(value: Any) -> Any:
     return value
 
 
-def _display_value(value: Any) -> str:
-    if value in (None, "", []):
+_NESTED_LABELS = {
+    "id": "ID",
+    "name": "이름",
+    "summary": "요약",
+    "label": "이름",
+    "type": "유형",
+    "project": "프로젝트",
+    "tracker": "트래커",
+    "status": "상태",
+    "value": "값",
+    "values": "값",
+}
+
+_DESCRIPTION_FORMAT_LABELS = {
+    "plaintext": "일반 텍스트",
+    "wiki": "Wiki 텍스트",
+    "wikitext": "Wiki 텍스트",
+    "html": "HTML",
+}
+
+_ISO_TIMESTAMP = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?$"
+)
+
+
+def _display_value(value: Any, *, field_key: str = "") -> str:
+    if value is None or value == "" or value == [] or value == {}:
         return "-"
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
+    if field_key == "descriptionFormat" and isinstance(value, str):
+        return _DESCRIPTION_FORMAT_LABELS.get(value.casefold(), value)
+    if isinstance(value, bool):
+        return "예" if value else "아니요"
+    if isinstance(value, dict):
+        return _display_mapping(value)
+    if isinstance(value, (list, tuple)):
+        return _display_list(value)
+    if isinstance(value, str) and _ISO_TIMESTAMP.fullmatch(value):
+        readable = value.replace("T", " ", 1)
+        return f"{readable[:-1]} UTC" if readable.endswith("Z") else readable
     return str(value)
+
+
+def _display_mapping(value: dict[str, Any]) -> str:
+    display_name = value.get("name") or value.get("summary") or value.get("label")
+    reference_id = value.get("id")
+    reference_keys = {"id", "name", "summary", "label", "type"}
+    lines: list[str] = []
+    if display_name not in (None, "") or reference_id not in (None, ""):
+        if display_name not in (None, "") and reference_id not in (None, ""):
+            lines.append(
+                str(display_name)
+                if str(display_name) == str(reference_id)
+                else f"{display_name} (ID {reference_id})"
+            )
+        elif display_name not in (None, ""):
+            lines.append(str(display_name))
+        else:
+            lines.append(f"ID {reference_id}")
+    for key, nested in value.items():
+        if key in reference_keys and lines:
+            continue
+        label = _NESTED_LABELS.get(str(key), str(key))
+        nested_text = _display_value(nested)
+        lines.extend(_labeled_lines(label, nested_text))
+    return "\n".join(lines) if lines else "-"
+
+
+def _display_list(value: list[Any] | tuple[Any, ...]) -> str:
+    if not value:
+        return "-"
+    if all(isinstance(row, (list, tuple)) for row in value):
+        rows: list[str] = []
+        for index, row in enumerate(value, start=1):
+            cells = [_display_value(cell).replace("\n", " / ") for cell in row]
+            rows.append(f"행 {index}: {' | '.join(cells)}")
+        return "\n".join(rows)
+    lines: list[str] = []
+    for item in value:
+        item_text = _display_value(item)
+        item_lines = item_text.splitlines() or ["-"]
+        lines.append(f"• {item_lines[0]}")
+        lines.extend(f"  {line}" for line in item_lines[1:])
+    return "\n".join(lines)
+
+
+def _labeled_lines(label: str, value: str) -> list[str]:
+    lines = value.splitlines() or ["-"]
+    if len(lines) == 1:
+        return [f"{label}: {lines[0]}"]
+    return [f"{label}:", *(f"  {line}" for line in lines)]
 
 
 __all__ = [

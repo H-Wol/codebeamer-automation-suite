@@ -88,7 +88,7 @@ class TrackerBaselineComparisonTest(unittest.TestCase):
         table_field = next(
             field for field in result.items[0].fields if field.field_key == "custom:10"
         )
-        self.assertEqual(table_field.label, "Table (TableFieldValue)")
+        self.assertEqual(table_field.label, "Table")
         self.assertTrue(table_field.is_changed)
 
     def test_comparison_classifies_added_removed_and_changed(self):
@@ -197,6 +197,66 @@ class TrackerBaselineComparisonTest(unittest.TestCase):
         self.assertFalse(fields["unknownMetadata"].is_changed)
         self.assertTrue(fields["version"].is_changed)
         self.assertTrue(fields["modifiedAt"].is_changed)
+        self.assertEqual(fields["unknownMetadata"].after_text(), "flag: 예")
+        self.assertNotIn("{", fields["unknownMetadata"].after_text())
+
+    def test_comparison_values_are_formatted_for_general_users(self):
+        before = TrackerItemSummary.from_raw(
+            {
+                "id": 1,
+                "name": "Item 1",
+                "descriptionFormat": "PlainText",
+                "tracker": {"id": 20, "name": "Requirements", "type": "TrackerReference"},
+                "assignedTo": [
+                    {"id": 7, "name": "Sample User", "type": "UserReference"}
+                ],
+                "customFields": [
+                    {
+                        "fieldId": 10,
+                        "name": "검증 표",
+                        "type": "TableFieldValue",
+                        "value": [["조건 A", True], ["조건 B", False]],
+                    }
+                ],
+            }
+        )
+        after = TrackerItemSummary.from_raw(
+            {
+                "id": 1,
+                "name": "Item 1",
+                "descriptionFormat": "PlainText",
+                "tracker": {"id": 20, "name": "Requirements", "type": "TrackerReference"},
+                "assignedTo": [
+                    {"id": 7, "name": "Sample User", "type": "UserReference"}
+                ],
+                "customFields": [
+                    {
+                        "fieldId": 10,
+                        "name": "검증 표",
+                        "type": "TableFieldValue",
+                        "value": [["조건 A", True], ["조건 B", True]],
+                    }
+                ],
+            }
+        )
+
+        result = compare_tracker_items(
+            (before,),
+            (after,),
+            before_source=BaselineComparisonSource(11),
+            after_source=BaselineComparisonSource(None),
+        )
+
+        fields = {field.field_key: field for field in result.items[0].fields}
+        self.assertEqual(fields["descriptionFormat"].after_text(), "일반 텍스트")
+        self.assertEqual(fields["tracker"].after_text(), "Requirements (ID 20)")
+        self.assertEqual(fields["assignedTo"].after_text(), "• Sample User (ID 7)")
+        self.assertEqual(
+            fields["custom:10"].after_text(),
+            "행 1: 조건 A | 예\n행 2: 조건 B | 예",
+        )
+        self.assertNotIn("TrackerReference", fields["tracker"].after_text())
+        self.assertNotIn("{", fields["assignedTo"].after_text())
 
     def test_reference_display_name_does_not_create_false_change(self):
         before = TrackerItemSummary.from_raw(

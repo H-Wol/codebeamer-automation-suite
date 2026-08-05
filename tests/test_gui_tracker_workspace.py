@@ -7,6 +7,8 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
+
 from src.gui.settings_store import GuiSettings
 from src.gui.tracker_baseline_compare import BaselineComparisonSource
 from src.gui.tracker_baseline_compare import compare_tracker_items
@@ -292,6 +294,40 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.assertIn("버전", labels)
         self.assertIn("unknownMetadata", labels)
         self.assertIn("전체 필드 4개", panel.status_label.text())
+        self.assertTrue(panel.detail.isSortingEnabled())
+        self.assertEqual(panel.detail.horizontalHeader().sortIndicatorSection(), 3)
+        self.assertEqual(panel.detail.item(0, 3).text(), "● 변경")
+
+        changed_row = next(
+            row
+            for row in range(panel.detail.rowCount())
+            if panel.detail.item(row, 0).text() == "요약"
+        )
+        same_row = next(
+            row
+            for row in range(panel.detail.rowCount())
+            if panel.detail.item(row, 0).text() == "ID"
+        )
+        self.assertNotEqual(
+            panel.detail.item(changed_row, 0).background().style(),
+            Qt.BrushStyle.NoBrush,
+        )
+        self.assertEqual(
+            panel.detail.item(same_row, 0).background().style(),
+            Qt.BrushStyle.NoBrush,
+        )
+        self.assertEqual(panel.detail.item(same_row, 3).text(), "✓ 동일")
+        self.assertTrue(panel.detail.item(changed_row, 3).font().bold())
+
+        panel.detail.sortItems(0, Qt.SortOrder.DescendingOrder)
+        sorted_labels = [
+            panel.detail.item(row, 0).text()
+            for row in range(panel.detail.rowCount())
+        ]
+        self.assertEqual(
+            sorted_labels,
+            sorted(sorted_labels, key=str.casefold, reverse=True),
+        )
 
     def test_baseline_state_survives_tab_navigation_until_explicit_reload(self) -> None:
         self.page.activate()

@@ -8,6 +8,8 @@ from typing import Callable
 
 try:
     from PySide6.QtCore import Qt
+    from PySide6.QtGui import QBrush
+    from PySide6.QtGui import QColor
     from PySide6.QtWidgets import QAbstractItemView
     from PySide6.QtWidgets import QApplication
     from PySide6.QtWidgets import QComboBox
@@ -105,14 +107,42 @@ class _DirectItemResult:
     ancestor_path: tuple[TrackerItemSummary, ...]
 
 
+class _SortableTableItem(QTableWidgetItem):
+    def __init__(self, text: str, sort_value: Any) -> None:
+        super().__init__(text)
+        self._sort_value = sort_value
+
+    def __lt__(self, other: QTableWidgetItem) -> bool:
+        if isinstance(other, _SortableTableItem):
+            return self._sort_value < other._sort_value
+        return super().__lt__(other)
+
+
+def _blend_colors(base: QColor, accent: QColor, ratio: float) -> QColor:
+    clamped = max(0.0, min(float(ratio), 1.0))
+    inverse = 1.0 - clamped
+    return QColor(
+        int(base.red() * inverse + accent.red() * clamped),
+        int(base.green() * inverse + accent.green() * clamped),
+        int(base.blue() * inverse + accent.blue() * clamped),
+    )
+
+
 class _BaselineComparisonPanel(QWidget):
     """선택한 단일 아이템을 두 읽기 전용 기준에서 비교한다."""
 
-    _KIND_LABELS = {
-        BaselineComparisonKind.ADDED: "추가",
-        BaselineComparisonKind.REMOVED: "삭제",
-        BaselineComparisonKind.CHANGED: "변경",
-        BaselineComparisonKind.UNCHANGED: "변경 없음",
+    _KIND_BADGES = {
+        BaselineComparisonKind.ADDED: "＋ 추가",
+        BaselineComparisonKind.REMOVED: "－ 삭제",
+        BaselineComparisonKind.CHANGED: "● 변경",
+        BaselineComparisonKind.UNCHANGED: "✓ 변경 없음",
+    }
+
+    _KIND_ACCENTS = {
+        BaselineComparisonKind.ADDED: QColor("#16A34A"),
+        BaselineComparisonKind.REMOVED: QColor("#DC2626"),
+        BaselineComparisonKind.CHANGED: QColor("#D97706"),
+        BaselineComparisonKind.UNCHANGED: QColor("#16A34A"),
     }
 
     def __init__(
@@ -157,6 +187,13 @@ class _BaselineComparisonPanel(QWidget):
         self.detail.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         self.detail.setColumnWidth(3, 64)
         self.detail.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.detail.setSortingEnabled(True)
+        self.detail.horizontalHeader().setSortIndicator(
+            3, Qt.SortOrder.AscendingOrder
+        )
+        self.detail.horizontalHeader().setToolTip(
+            "열 제목을 클릭하면 해당 값으로 정렬합니다."
+        )
         layout.addWidget(self.detail, 1)
 
     def _source(self, combo: QComboBox) -> BaselineComparisonSource | None:
@@ -200,31 +237,78 @@ class _BaselineComparisonPanel(QWidget):
     def set_result(self, result: BaselineComparisonResult) -> None:
         self._result = result
         self.run_button.setEnabled(True)
+        header = self.detail.horizontalHeader()
+        sort_column = header.sortIndicatorSection()
+        sort_order = header.sortIndicatorOrder()
+        if sort_column < 0:
+            sort_column = 3
+            sort_order = Qt.SortOrder.AscendingOrder
+        self.detail.setSortingEnabled(False)
         self.detail.setRowCount(0)
         if not result.items:
             self.status_label.setText("선택한 아이템을 두 기준에서 찾지 못했습니다.")
+            self.detail.setSortingEnabled(True)
             return
         comparison = result.items[0]
         changed_count = sum(field.is_changed for field in comparison.fields)
         self.status_label.setText(
-            f"#{comparison.item_id} · {self._KIND_LABELS[comparison.kind]} · "
+            f"#{comparison.item_id} · {self._KIND_BADGES[comparison.kind]} · "
             f"변경 필드 {changed_count}개 / 전체 필드 {len(comparison.fields)}개"
         )
+        palette = self.detail.palette()
+        base_color = palette.base().color()
+        text_color = palette.text().color()
+        change_accent = self._KIND_ACCENTS[comparison.kind]
+        same_accent = self._KIND_ACCENTS[BaselineComparisonKind.UNCHANGED]
+        changed_background = QBrush(_blend_colors(base_color, change_accent, 0.18))
+        changed_result_background = QBrush(
+            _blend_colors(base_color, change_accent, 0.32)
+        )
+        changed_foreground = QBrush(_blend_colors(text_color, change_accent, 0.62))
+        same_result_background = QBrush(
+            _blend_colors(base_color, same_accent, 0.16)
+        )
+        same_foreground = QBrush(_blend_colors(text_color, same_accent, 0.52))
         self.detail.setRowCount(len(comparison.fields))
         for row, field in enumerate(comparison.fields):
+            reference_text = field.after_text()
+            comparison_text = field.before_text()
             values = (
                 field.label,
-                field.after_text(),
-                field.before_text(),
-                "변경" if field.is_changed else "동일",
+                reference_text,
+                comparison_text,
+                "● 변경" if field.is_changed else "✓ 동일",
+            )
+            sort_values = (
+                field.label.casefold(),
+                reference_text.casefold(),
+                comparison_text.casefold(),
+                (0 if field.is_changed else 1, row),
             )
             for column, value in enumerate(values):
-                cell = QTableWidgetItem(value)
+                cell = _SortableTableItem(value, sort_values[column])
                 cell.setToolTip(value)
                 cell.setTextAlignment(
                     Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
                 )
+                if field.is_changed:
+                    cell.setBackground(
+                        changed_result_background
+                        if column == 3
+                        else changed_background
+                    )
+                elif column == 3:
+                    cell.setBackground(same_result_background)
+                if column == 3:
+                    font = cell.font()
+                    font.setBold(True)
+                    cell.setFont(font)
+                    cell.setForeground(
+                        changed_foreground if field.is_changed else same_foreground
+                    )
                 self.detail.setItem(row, column, cell)
+        self.detail.setSortingEnabled(True)
+        self.detail.sortItems(sort_column, sort_order)
         self.detail.resizeRowsToContents()
 
     def set_error(self, message: str) -> None:
