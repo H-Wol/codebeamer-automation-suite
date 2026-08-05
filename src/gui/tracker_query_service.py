@@ -490,9 +490,7 @@ class TrackerQueryService:
             "load_tracker_baselines",
             lambda: client.get_tracker_baselines(int(tracker_id)),
         )
-        raw_baselines = self._extract_list(payload, "baselines", "items", "results")
-        if isinstance(payload, list):
-            raw_baselines = [item for item in payload if isinstance(item, dict)]
+        raw_baselines = self._extract_baselines(payload)
         baselines: list[TrackerBaseline] = []
         for raw in raw_baselines:
             try:
@@ -500,6 +498,21 @@ class TrackerQueryService:
             except ValueError:
                 continue
         return tuple(sorted(baselines, key=lambda baseline: (baseline.created_at, baseline.baseline_id), reverse=True))
+
+    @classmethod
+    def _extract_baselines(cls, payload: Any) -> list[dict[str, Any]]:
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if not isinstance(payload, dict):
+            return []
+        for key in ("baselines", "trackerBaselines", "baselineList", "items", "results", "content"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        data = payload.get("data")
+        if isinstance(data, (dict, list)):
+            return cls._extract_baselines(data)
+        return [payload] if payload.get("id") is not None else []
 
     def load_all_search_items(
         self,

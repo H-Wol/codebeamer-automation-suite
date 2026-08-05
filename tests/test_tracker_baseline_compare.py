@@ -107,6 +107,12 @@ class TrackerBaselineComparisonTest(unittest.TestCase):
         self.assertEqual(result.count(BaselineComparisonKind.REMOVED), 1)
         self.assertEqual(result.count(BaselineComparisonKind.CHANGED), 1)
 
+    def test_baseline_list_accepts_tracker_baselines_container(self):
+        items = TrackerQueryService._extract_baselines(
+            {"data": {"trackerBaselines": [{"id": 11, "name": "R1"}]}}
+        )
+        self.assertEqual(items, [{"id": 11, "name": "R1"}])
+
 
 if __name__ == "__main__":
     unittest.main()

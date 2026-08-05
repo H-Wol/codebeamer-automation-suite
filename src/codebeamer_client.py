@@ -343,7 +343,7 @@ class CodebeamerClient:
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
-            for key in ("baselines", "items", "results"):
+            for key in ("baselines", "trackerBaselines", "baselineList", "items", "results", "content", "data"):
                 if isinstance(data.get(key), list):
                     return data[key]
         return []
