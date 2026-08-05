@@ -85,7 +85,11 @@ class TrackerBaselineComparisonTest(unittest.TestCase):
             after_source=BaselineComparisonSource(None),
         )
         self.assertEqual(result.items[0].kind, BaselineComparisonKind.CHANGED)
-        self.assertEqual(result.items[0].fields[0].label, "Table")
+        table_field = next(
+            field for field in result.items[0].fields if field.field_key == "custom:10"
+        )
+        self.assertEqual(table_field.label, "Table (TableFieldValue)")
+        self.assertTrue(table_field.is_changed)
 
     def test_comparison_classifies_added_removed_and_changed(self):
         result = compare_tracker_items(
@@ -113,8 +117,12 @@ class TrackerBaselineComparisonTest(unittest.TestCase):
             comparison_source=BaselineComparisonSource(11),
         )
         self.assertEqual(result.count(BaselineComparisonKind.CHANGED), 1)
-        self.assertEqual(result.items[0].fields[0].before, {"id": "Draft", "name": "Draft", "type": "ChoiceOptionReference"})
-        self.assertEqual(result.items[0].fields[0].after, {"id": "Open", "name": "Open", "type": "ChoiceOptionReference"})
+        status_field = next(
+            field for field in result.items[0].fields if field.field_key == "status"
+        )
+        self.assertEqual(status_field.before, {"id": "Draft", "name": "Draft", "type": "ChoiceOptionReference"})
+        self.assertEqual(status_field.after, {"id": "Open", "name": "Open", "type": "ChoiceOptionReference"})
+        self.assertTrue(status_field.is_changed)
 
     def test_reference_only_item_is_classified_as_added(self):
         settings = GuiSettings(base_url="https://example.invalid", username="sample", password="sample")
@@ -129,6 +137,8 @@ class TrackerBaselineComparisonTest(unittest.TestCase):
         )
 
         self.assertEqual(result.items[0].kind, BaselineComparisonKind.ADDED)
+        self.assertTrue(result.items[0].fields)
+        self.assertTrue(all(field.is_changed for field in result.items[0].fields))
 
     def test_comparison_only_item_is_classified_as_removed(self):
         settings = GuiSettings(base_url="https://example.invalid", username="sample", password="sample")
@@ -143,6 +153,83 @@ class TrackerBaselineComparisonTest(unittest.TestCase):
         )
 
         self.assertEqual(result.items[0].kind, BaselineComparisonKind.REMOVED)
+        self.assertTrue(result.items[0].fields)
+        self.assertTrue(all(field.is_changed for field in result.items[0].fields))
+
+    def test_comparison_includes_unchanged_and_unknown_response_fields(self):
+        before = TrackerItemSummary.from_raw(
+            {
+                "id": 1,
+                "name": "Item 1",
+                "version": 1,
+                "modifiedAt": "2026-01-01T00:00:00Z",
+                "unknownMetadata": {"flag": True},
+                "customFields": [],
+            },
+            tracker_id=20,
+        )
+        after = TrackerItemSummary.from_raw(
+            {
+                "id": 1,
+                "name": "Item 1",
+                "version": 2,
+                "modifiedAt": "2026-01-02T00:00:00Z",
+                "unknownMetadata": {"flag": True},
+                "customFields": [],
+            },
+            tracker_id=20,
+        )
+
+        result = compare_tracker_items(
+            (before,),
+            (after,),
+            before_source=BaselineComparisonSource(11),
+            after_source=BaselineComparisonSource(None),
+        )
+
+        fields = {field.field_key: field for field in result.items[0].fields}
+        self.assertEqual(
+            set(fields),
+            {"id", "name", "version", "modifiedAt", "unknownMetadata"},
+        )
+        self.assertFalse(fields["id"].is_changed)
+        self.assertFalse(fields["name"].is_changed)
+        self.assertFalse(fields["unknownMetadata"].is_changed)
+        self.assertTrue(fields["version"].is_changed)
+        self.assertTrue(fields["modifiedAt"].is_changed)
+
+    def test_reference_display_name_does_not_create_false_change(self):
+        before = TrackerItemSummary.from_raw(
+            {
+                "id": 1,
+                "name": "Item 1",
+                "tracker": {"id": 20, "name": "Old tracker name"},
+            },
+            tracker_id=20,
+        )
+        after = TrackerItemSummary.from_raw(
+            {
+                "id": 1,
+                "name": "Item 1",
+                "tracker": {"id": 20, "name": "New tracker name"},
+            },
+            tracker_id=20,
+        )
+
+        result = compare_tracker_items(
+            (before,),
+            (after,),
+            before_source=BaselineComparisonSource(11),
+            after_source=BaselineComparisonSource(None),
+        )
+
+        tracker_field = next(
+            field for field in result.items[0].fields if field.field_key == "tracker"
+        )
+        self.assertEqual(result.items[0].kind, BaselineComparisonKind.UNCHANGED)
+        self.assertFalse(tracker_field.is_changed)
+        self.assertIn("Old tracker name", tracker_field.before_text())
+        self.assertIn("New tracker name", tracker_field.after_text())
 
     def test_baseline_list_accepts_tracker_baselines_container(self):
         items = TrackerQueryService._extract_baselines(

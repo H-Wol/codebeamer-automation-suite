@@ -8,6 +8,8 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from src.gui.settings_store import GuiSettings
+from src.gui.tracker_baseline_compare import BaselineComparisonSource
+from src.gui.tracker_baseline_compare import compare_tracker_items
 from src.gui.tracker_item_create_dialog import TrackerItemCreateRequest
 from src.gui.tracker_item_editor import TrackerItemEditorService
 from src.gui.tracker_item_editor import TrackerItemFieldChange
@@ -27,6 +29,7 @@ class CountingTrackerQueryService(TrackerQueryService):
         super().__init__()
         self.child_load_count = 0
         self.baseline_compare_count = 0
+        self.baseline_load_count = 0
 
     def load_all_child_items(self, *args, **kwargs):
         self.child_load_count += 1
@@ -35,6 +38,10 @@ class CountingTrackerQueryService(TrackerQueryService):
     def compare_item_at_sources(self, *args, **kwargs):
         self.baseline_compare_count += 1
         return super().compare_item_at_sources(*args, **kwargs)
+
+    def load_tracker_baselines(self, *args, **kwargs):
+        self.baseline_load_count += 1
+        return super().load_tracker_baselines(*args, **kwargs)
 
 
 EDITOR_SCHEMA = {
@@ -241,6 +248,89 @@ class TrackerWorkspacePageTest(unittest.TestCase):
 
         self.assertEqual(self.page.baseline_item_tree.topLevelItemCount(), 2)
         self.assertEqual(self.service.baseline_compare_count, 0)
+        self.assertEqual(self.service.baseline_load_count, 1)
+
+    def test_baseline_comparison_directly_shows_all_fields_without_result_filter(self) -> None:
+        self.page.activate()
+        panel = self.page.baseline_comparison_panel
+        comparison = TrackerItemSummary.from_raw(
+            {
+                "id": 9001001,
+                "name": "Earlier summary",
+                "version": 1,
+                "unknownMetadata": {"flag": True},
+                "customFields": [],
+            }
+        )
+        reference = TrackerItemSummary.from_raw(
+            {
+                "id": 9001001,
+                "name": "Current summary",
+                "version": 2,
+                "unknownMetadata": {"flag": True},
+                "customFields": [],
+            }
+        )
+        result = compare_tracker_items(
+            (comparison,),
+            (reference,),
+            before_source=BaselineComparisonSource(11),
+            after_source=BaselineComparisonSource(None),
+        )
+
+        panel.set_result(result)
+
+        self.assertFalse(hasattr(panel, "kind_filter"))
+        self.assertFalse(hasattr(panel, "table"))
+        self.assertEqual(panel.detail.columnCount(), 4)
+        labels = {
+            panel.detail.item(row, 0).text()
+            for row in range(panel.detail.rowCount())
+        }
+        self.assertIn("ID", labels)
+        self.assertIn("요약", labels)
+        self.assertIn("버전", labels)
+        self.assertIn("unknownMetadata", labels)
+        self.assertIn("전체 필드 4개", panel.status_label.text())
+
+    def test_baseline_state_survives_tab_navigation_until_explicit_reload(self) -> None:
+        self.page.activate()
+        self.page.workspace_mode_tabs.setCurrentIndex(self.page.baseline_mode_index)
+        self._app.processEvents()
+        panel = self.page.baseline_comparison_panel
+        panel.after_combo.addItem("R1", 11)
+        panel.after_combo.setCurrentIndex(panel.after_combo.count() - 1)
+        self.page._baseline_selected_item_id = 9001001
+        root = self.page.baseline_item_tree.topLevelItem(0)
+        self.page.baseline_item_tree.blockSignals(True)
+        self.page.baseline_item_tree.setCurrentItem(root)
+        self.page.baseline_item_tree.blockSignals(False)
+        result = compare_tracker_items(
+            (TrackerItemSummary.from_raw({"id": 9001001, "name": "Earlier"}),),
+            (TrackerItemSummary.from_raw({"id": 9001001, "name": "Current"}),),
+            before_source=BaselineComparisonSource(11),
+            after_source=BaselineComparisonSource(None),
+        )
+        panel.set_result(result)
+        detail_rows = panel.detail.rowCount()
+
+        self.page.workspace_mode_tabs.setCurrentIndex(0)
+        self.page.workspace_mode_tabs.setCurrentIndex(self.page.baseline_mode_index)
+        self._app.processEvents()
+
+        self.assertEqual(self.service.baseline_load_count, 1)
+        self.assertEqual(panel.after_combo.currentData(), 11)
+        self.assertEqual(self.page._baseline_selected_item_id, 9001001)
+        self.assertIs(self.page.baseline_item_tree.currentItem(), root)
+        self.assertEqual(panel.detail.rowCount(), detail_rows)
+
+        self.page.baseline_reload_button.click()
+        self._app.processEvents()
+
+        self.assertEqual(self.service.baseline_load_count, 2)
+        self.assertIsNone(self.page._baseline_selected_item_id)
+        self.assertEqual(panel.after_combo.currentData(), "")
+        self.assertEqual(panel.detail.rowCount(), 0)
 
     def test_unknown_child_metadata_keeps_tree_item_expandable(self) -> None:
         unknown = TrackerItemSummary.from_raw({"id": 1, "name": "Unknown"})

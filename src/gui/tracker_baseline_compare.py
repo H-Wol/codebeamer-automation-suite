@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from .tracker_query_models import TrackerItemSummary
+from .tracker_query_models import mask_sensitive_payload
 
 
 class BaselineComparisonKind(str, Enum):
@@ -52,6 +53,7 @@ class TrackerFieldDifference:
     label: str
     before: Any
     after: Any
+    is_changed: bool
 
     def before_text(self) -> str:
         return _display_value(self.before)
@@ -100,44 +102,111 @@ def compare_tracker_items(
         before = before_by_id.get(item_id)
         after = after_by_id.get(item_id)
         if before is None:
-            comparisons.append(TrackerItemComparison(item_id, BaselineComparisonKind.ADDED, None, after))
+            fields = _field_comparisons({}, after.raw_reference if after is not None else {})
+            comparisons.append(
+                TrackerItemComparison(
+                    item_id,
+                    BaselineComparisonKind.ADDED,
+                    None,
+                    after,
+                    fields,
+                )
+            )
             continue
         if after is None:
-            comparisons.append(TrackerItemComparison(item_id, BaselineComparisonKind.REMOVED, before, None))
+            fields = _field_comparisons(before.raw_reference, {})
+            comparisons.append(
+                TrackerItemComparison(
+                    item_id,
+                    BaselineComparisonKind.REMOVED,
+                    before,
+                    None,
+                    fields,
+                )
+            )
             continue
-        differences = _field_differences(before.raw_reference, after.raw_reference)
-        kind = BaselineComparisonKind.CHANGED if differences else BaselineComparisonKind.UNCHANGED
-        comparisons.append(TrackerItemComparison(item_id, kind, before, after, differences))
+        fields = _field_comparisons(before.raw_reference, after.raw_reference)
+        kind = (
+            BaselineComparisonKind.CHANGED
+            if any(field.is_changed for field in fields)
+            else BaselineComparisonKind.UNCHANGED
+        )
+        comparisons.append(TrackerItemComparison(item_id, kind, before, after, fields))
     return BaselineComparisonResult(before_source, after_source, tuple(comparisons))
 
 
-def _field_differences(before: dict[str, Any], after: dict[str, Any]) -> tuple[TrackerFieldDifference, ...]:
+def _field_comparisons(
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> tuple[TrackerFieldDifference, ...]:
     before_fields = _comparison_fields(before)
     after_fields = _comparison_fields(after)
-    differences: list[TrackerFieldDifference] = []
-    for key in sorted(before_fields.keys() | after_fields.keys()):
-        before_label, before_compare, before_value = before_fields.get(key, (key, None, None))
-        after_label, after_compare, after_value = after_fields.get(key, (key, None, None))
-        if before_compare != after_compare:
-            differences.append(TrackerFieldDifference(key, after_label or before_label, before_value, after_value))
-    return tuple(differences)
+    comparisons: list[TrackerFieldDifference] = []
+    missing = object()
+    for key in dict.fromkeys((*after_fields, *before_fields)):
+        before_entry = before_fields.get(key)
+        after_entry = after_fields.get(key)
+        before_label, before_compare, before_value = (
+            before_entry if before_entry is not None else (key, missing, None)
+        )
+        after_label, after_compare, after_value = (
+            after_entry if after_entry is not None else (key, missing, None)
+        )
+        comparisons.append(
+            TrackerFieldDifference(
+                key,
+                after_label or before_label,
+                before_value,
+                after_value,
+                before_compare != after_compare,
+            )
+        )
+    return tuple(comparisons)
+
+
+_FIELD_LABELS = {
+    "id": "ID",
+    "name": "요약",
+    "summary": "요약 (summary)",
+    "description": "설명",
+    "descriptionFormat": "설명 형식",
+    "type": "유형",
+    "tracker": "트래커",
+    "project": "프로젝트",
+    "status": "상태",
+    "assignedTo": "담당자",
+    "assignees": "담당자 (assignees)",
+    "parent": "상위 아이템",
+    "children": "하위 아이템",
+    "childCount": "하위 아이템 수",
+    "hasChildren": "하위 아이템 여부",
+    "createdAt": "생성 시각",
+    "createdBy": "생성자",
+    "modifiedAt": "수정 시각",
+    "modifiedBy": "수정자",
+    "version": "버전",
+}
+
+_FIELD_ORDER = tuple(_FIELD_LABELS)
 
 
 def _comparison_fields(raw: dict[str, Any]) -> dict[str, tuple[str, Any, Any]]:
     if not isinstance(raw, dict):
         return {}
+
     def normalize_field(label: str, value: Any) -> tuple[str, Any, Any]:
         return label, _canonical(value), value
 
-    fields: dict[str, tuple[str, Any, Any]] = {
-        "summary": normalize_field("요약", raw.get("name") if raw.get("name") is not None else raw.get("summary")),
-        "description": normalize_field("설명", raw.get("description")),
-        "descriptionFormat": normalize_field("설명 형식", raw.get("descriptionFormat")),
-        "status": normalize_field("상태", raw.get("status")),
-        "assignedTo": normalize_field("담당자", raw.get("assignedTo") or []),
-        "parent": normalize_field("상위 아이템", raw.get("parent")),
-    }
-    custom_fields = raw.get("customFields")
+    safe_raw = mask_sensitive_payload(raw)
+    fields: dict[str, tuple[str, Any, Any]] = {}
+    ordered_keys = (
+        *(key for key in _FIELD_ORDER if key in safe_raw),
+        *(key for key in safe_raw if key not in _FIELD_LABELS and key != "customFields"),
+    )
+    for key in ordered_keys:
+        fields[key] = normalize_field(_FIELD_LABELS.get(key, key), safe_raw[key])
+
+    custom_fields = safe_raw.get("customFields")
     if isinstance(custom_fields, list):
         for index, field in enumerate(custom_fields):
             if not isinstance(field, dict):
@@ -146,15 +215,28 @@ def _comparison_fields(raw: dict[str, Any]) -> dict[str, tuple[str, Any, Any]]:
             name = str(field.get("name") or field_id or f"custom-{index}")
             key = f"custom:{field_id if field_id is not None else name}"
             value = field.get("values") if "values" in field else field.get("value")
-            fields[key] = normalize_field(name, value)
+            type_name = str(field.get("type") or field.get("valueModel") or "").strip()
+            label = f"{name} ({type_name})" if type_name else name
+            fields[key] = normalize_field(label, value)
+    elif "customFields" in safe_raw:
+        fields["customFields"] = normalize_field("사용자 정의 필드", custom_fields)
     return fields
 
 
 def _canonical(value: Any) -> Any:
     if isinstance(value, dict):
-        if value.get("id") is not None and value.get("type"):
-            return {"id": value.get("id"), "type": value.get("type")}
-        return {str(key): _canonical(nested) for key, nested in sorted(value.items()) if key not in {"modifiedAt", "version", "name", "summary"}}
+        reference_keys = {"id", "name", "summary", "type"}
+        if value.get("id") is not None and (
+            value.get("type") or set(value).issubset(reference_keys)
+        ):
+            identity = {"id": value.get("id")}
+            if value.get("type"):
+                identity["type"] = value.get("type")
+            return identity
+        return {
+            str(key): _canonical(nested)
+            for key, nested in sorted(value.items())
+        }
     if isinstance(value, (list, tuple)):
         return [_canonical(item) for item in value]
     return value
