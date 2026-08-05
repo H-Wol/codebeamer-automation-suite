@@ -505,7 +505,15 @@ class TrackerQueryService:
             return [item for item in payload if isinstance(item, dict)]
         if not isinstance(payload, dict):
             return []
-        for key in ("baselines", "trackerBaselines", "baselineList", "items", "results", "content"):
+        for key in (
+            "reference",
+            "baselines",
+            "trackerBaselines",
+            "baselineList",
+            "items",
+            "results",
+            "content",
+        ):
             value = payload.get(key)
             if isinstance(value, list):
                 return [item for item in value if isinstance(item, dict)]

@@ -113,6 +113,17 @@ class TrackerBaselineComparisonTest(unittest.TestCase):
         )
         self.assertEqual(items, [{"id": 11, "name": "R1"}])
 
+    def test_baseline_list_accepts_paged_reference_container(self):
+        items = TrackerQueryService._extract_baselines(
+            {
+                "page": 1,
+                "pageSize": 100,
+                "total": 1,
+                "reference": [{"id": 11, "name": "R1", "type": "BaselineReference"}],
+            }
+        )
+        self.assertEqual(items[0]["id"], 11)
+
 
 if __name__ == "__main__":
     unittest.main()
