@@ -109,10 +109,40 @@ class TrackerBaselineComparisonTest(unittest.TestCase):
             settings,
             1,
             20,
-            before_source=BaselineComparisonSource(11),
-            after_source=BaselineComparisonSource(None),
+            reference_source=BaselineComparisonSource(None),
+            comparison_source=BaselineComparisonSource(11),
         )
         self.assertEqual(result.count(BaselineComparisonKind.CHANGED), 1)
+        self.assertEqual(result.items[0].fields[0].before, {"id": "Draft", "name": "Draft", "type": "ChoiceOptionReference"})
+        self.assertEqual(result.items[0].fields[0].after, {"id": "Open", "name": "Open", "type": "ChoiceOptionReference"})
+
+    def test_reference_only_item_is_classified_as_added(self):
+        settings = GuiSettings(base_url="https://example.invalid", username="sample", password="sample")
+        service = TrackerQueryService(client_factory=_ComparisonClient)
+
+        result = service.compare_item_at_sources(
+            settings,
+            2,
+            20,
+            reference_source=BaselineComparisonSource(None),
+            comparison_source=BaselineComparisonSource(11),
+        )
+
+        self.assertEqual(result.items[0].kind, BaselineComparisonKind.ADDED)
+
+    def test_comparison_only_item_is_classified_as_removed(self):
+        settings = GuiSettings(base_url="https://example.invalid", username="sample", password="sample")
+        service = TrackerQueryService(client_factory=_ComparisonClient)
+
+        result = service.compare_item_at_sources(
+            settings,
+            3,
+            20,
+            reference_source=BaselineComparisonSource(None),
+            comparison_source=BaselineComparisonSource(11),
+        )
+
+        self.assertEqual(result.items[0].kind, BaselineComparisonKind.REMOVED)
 
     def test_baseline_list_accepts_tracker_baselines_container(self):
         items = TrackerQueryService._extract_baselines(

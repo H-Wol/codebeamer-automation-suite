@@ -563,10 +563,10 @@ class TrackerQueryService:
         item_id: int,
         tracker_id: int,
         *,
-        before_source: BaselineComparisonSource,
-        after_source: BaselineComparisonSource,
+        reference_source: BaselineComparisonSource,
+        comparison_source: BaselineComparisonSource,
     ) -> BaselineComparisonResult:
-        if before_source == after_source:
+        if reference_source == comparison_source:
             raise TrackerQueryServiceError(
                 TrackerQueryErrorKind.INVALID_QUERY,
                 "서로 다른 두 비교 기준을 선택하세요.",
@@ -588,13 +588,18 @@ class TrackerQueryService:
                 return ()
             return (TrackerItemSummary.from_raw(raw, tracker_id=normalized_tracker_id),)
 
-        before = self._run("compare_item_at_sources", lambda: load_source(before_source))
-        after = self._run("compare_item_at_sources", lambda: load_source(after_source))
+        reference = self._run(
+            "compare_item_at_sources", lambda: load_source(reference_source)
+        )
+        comparison = self._run(
+            "compare_item_at_sources", lambda: load_source(comparison_source)
+        )
+        # 추가/삭제는 비교 대상에서 기준으로 이동했을 때의 변화로 판정한다.
         return compare_tracker_items(
-            before,
-            after,
-            before_source=before_source,
-            after_source=after_source,
+            comparison,
+            reference,
+            before_source=comparison_source,
+            after_source=reference_source,
         )
 
     def load_detail(self, settings, item_id: int) -> TrackerItemDetail:

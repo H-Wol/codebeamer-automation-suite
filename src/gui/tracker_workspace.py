@@ -127,11 +127,11 @@ class _BaselineComparisonPanel(QWidget):
 
         layout = QVBoxLayout(self)
         source_row = QHBoxLayout()
-        source_row.addWidget(QLabel("기준 A", self))
+        source_row.addWidget(QLabel("기준", self))
         self.before_combo = QComboBox(self)
         self.before_combo.addItem("현재 상태", None)
         source_row.addWidget(self.before_combo, 1)
-        source_row.addWidget(QLabel("기준 B", self))
+        source_row.addWidget(QLabel("비교", self))
         self.after_combo = QComboBox(self)
         self.after_combo.addItem("선택하세요", "")
         self.after_combo.addItem("현재 상태", None)
@@ -169,7 +169,7 @@ class _BaselineComparisonPanel(QWidget):
         layout.addWidget(self.table, 2)
 
         self.detail = QTableWidget(0, 3, self)
-        self.detail.setHorizontalHeaderLabels(["필드", "기준 A", "기준 B"])
+        self.detail.setHorizontalHeaderLabels(["필드", "기준", "비교"])
         self.detail.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.detail.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.detail.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
@@ -271,8 +271,8 @@ class _BaselineComparisonPanel(QWidget):
         self.detail.setRowCount(len(comparison.fields))
         for row, field in enumerate(comparison.fields):
             self.detail.setItem(row, 0, QTableWidgetItem(field.label))
-            self.detail.setItem(row, 1, QTableWidgetItem(field.before_text()))
-            self.detail.setItem(row, 2, QTableWidgetItem(field.after_text()))
+            self.detail.setItem(row, 1, QTableWidgetItem(field.after_text()))
+            self.detail.setItem(row, 2, QTableWidgetItem(field.before_text()))
 
 
 class TrackerWorkspacePage(QWidget):
@@ -1959,8 +1959,8 @@ class TrackerWorkspacePage(QWidget):
 
     def _run_baseline_comparison(
         self,
-        before_source: BaselineComparisonSource,
-        after_source: BaselineComparisonSource,
+        reference_source: BaselineComparisonSource,
+        comparison_source: BaselineComparisonSource,
     ) -> None:
         tracker = self._current_tracker
         if tracker is None:
@@ -1984,8 +1984,8 @@ class TrackerWorkspacePage(QWidget):
                 settings,
                 item_id,
                 tracker.tracker_id,
-                before_source=before_source,
-                after_source=after_source,
+                reference_source=reference_source,
+                comparison_source=comparison_source,
             ),
             loaded,
             failed,
