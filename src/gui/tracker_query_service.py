@@ -371,28 +371,6 @@ class TrackerQueryService:
             ),
         )
 
-    def load_all_tracker_items(
-        self,
-        settings,
-        tracker_id: int,
-        *,
-        page_size: int = 500,
-    ) -> tuple[TrackerItemSummary, ...]:
-        normalized_tracker_id = int(tracker_id)
-        client = self._client(settings, "load_all_tracker_items")
-        return self._load_all_item_summaries(
-            client,
-            operation="load_all_tracker_items",
-            page_method="get_tracker_items_page",
-            list_method="get_tracker_items",
-            entity_id=normalized_tracker_id,
-            page_size=page_size,
-            normalize=lambda item: TrackerItemSummary.from_raw(
-                item,
-                tracker_id=normalized_tracker_id,
-            ),
-        )
-
     def load_child_items(
         self,
         settings,
@@ -579,10 +557,11 @@ class TrackerQueryService:
             page += 1
         return tuple(collected)
 
-    def compare_tracker_items_at_sources(
+    def compare_item_at_sources(
         self,
         settings,
-        query: TrackerQuery,
+        item_id: int,
+        tracker_id: int,
         *,
         before_source: BaselineComparisonSource,
         after_source: BaselineComparisonSource,
@@ -591,32 +570,26 @@ class TrackerQueryService:
             raise TrackerQueryServiceError(
                 TrackerQueryErrorKind.INVALID_QUERY,
                 "서로 다른 두 비교 기준을 선택하세요.",
-                operation="compare_tracker_items_at_sources",
+                operation="compare_item_at_sources",
             )
-        item_refs = self.load_all_tracker_items(settings, query.tracker_id)
-        client = self._client(settings, "compare_tracker_items")
+        normalized_item_id = int(item_id)
+        normalized_tracker_id = int(tracker_id)
+        client = self._client(settings, "compare_item_at_sources")
 
         def load_source(source: BaselineComparisonSource) -> tuple[TrackerItemSummary, ...]:
-            items: list[TrackerItemSummary] = []
-            for reference in item_refs:
-                try:
-                    raw = client.get_item(
-                        reference.item_id,
-                        baseline_id=source.baseline_id,
-                    )
-                except Exception as exc:
-                    kind, _status_code = classify_tracker_query_error(exc)
-                    if kind == TrackerQueryErrorKind.NOT_FOUND:
-                        continue
-                    raise
-                if isinstance(raw, dict):
-                    items.append(
-                        TrackerItemSummary.from_raw(raw, tracker_id=query.tracker_id)
-                    )
-            return tuple(items)
+            try:
+                raw = client.get_item(normalized_item_id, baseline_id=source.baseline_id)
+            except Exception as exc:
+                kind, _status_code = classify_tracker_query_error(exc)
+                if kind == TrackerQueryErrorKind.NOT_FOUND:
+                    return ()
+                raise
+            if not isinstance(raw, dict):
+                return ()
+            return (TrackerItemSummary.from_raw(raw, tracker_id=normalized_tracker_id),)
 
-        before = self._run("compare_tracker_items", lambda: load_source(before_source))
-        after = self._run("compare_tracker_items", lambda: load_source(after_source))
+        before = self._run("compare_item_at_sources", lambda: load_source(before_source))
+        after = self._run("compare_item_at_sources", lambda: load_source(after_source))
         return compare_tracker_items(
             before,
             after,

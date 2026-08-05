@@ -26,10 +26,15 @@ class CountingTrackerQueryService(TrackerQueryService):
     def __init__(self) -> None:
         super().__init__()
         self.child_load_count = 0
+        self.baseline_compare_count = 0
 
     def load_all_child_items(self, *args, **kwargs):
         self.child_load_count += 1
         return super().load_all_child_items(*args, **kwargs)
+
+    def compare_item_at_sources(self, *args, **kwargs):
+        self.baseline_compare_count += 1
+        return super().compare_item_at_sources(*args, **kwargs)
 
 
 EDITOR_SCHEMA = {
@@ -225,6 +230,17 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.assertIn("Offline Requirements", self.page.search_scope_label.text())
         self.assertTrue(self.page.search_button.isEnabled())
         self.assertFalse(self.page.create_item_button.isEnabled())
+
+    def test_baseline_compare_uses_separate_workspace_and_does_not_eagerly_fetch_details(self) -> None:
+        self.page.activate()
+
+        self.assertEqual(self.page.workspace_mode_tabs.count(), 2)
+        self.assertEqual(self.page.workspace_mode_tabs.tabText(1), "Baseline 비교")
+        self.page.workspace_mode_tabs.setCurrentIndex(self.page.baseline_mode_index)
+        self._app.processEvents()
+
+        self.assertEqual(self.page.baseline_item_tree.topLevelItemCount(), 2)
+        self.assertEqual(self.service.baseline_compare_count, 0)
 
     def test_unknown_child_metadata_keeps_tree_item_expandable(self) -> None:
         unknown = TrackerItemSummary.from_raw({"id": 1, "name": "Unknown"})

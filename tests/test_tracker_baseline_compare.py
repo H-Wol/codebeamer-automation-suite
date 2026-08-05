@@ -7,7 +7,6 @@ from src.gui.tracker_baseline_compare import BaselineComparisonKind
 from src.gui.tracker_baseline_compare import BaselineComparisonSource
 from src.gui.tracker_baseline_compare import compare_tracker_items
 from src.gui.tracker_query_models import TrackerItemSummary
-from src.gui.tracker_query_models import TrackerQuery
 from src.gui.tracker_query_service import TrackerQueryService
 from src.gui.service_core import OfflineGuiClient
 
@@ -101,19 +100,18 @@ class TrackerBaselineComparisonTest(unittest.TestCase):
             BaselineComparisonKind.ADDED,
         ])
 
-    def test_service_lists_baselines_and_collects_all_pages_for_both_sources(self):
+    def test_service_lists_baselines_and_compares_only_selected_item(self):
         settings = GuiSettings(base_url="https://example.invalid", username="sample", password="sample")
         service = TrackerQueryService(client_factory=_ComparisonClient)
         baselines = service.load_tracker_baselines(settings, 20)
         self.assertEqual([(baseline.baseline_id, baseline.name) for baseline in baselines], [(11, "R1")])
-        result = service.compare_tracker_items_at_sources(
+        result = service.compare_item_at_sources(
             settings,
-            TrackerQuery(tracker_id=20, text="Item"),
+            1,
+            20,
             before_source=BaselineComparisonSource(11),
             after_source=BaselineComparisonSource(None),
         )
-        self.assertEqual(result.count(BaselineComparisonKind.ADDED), 1)
-        self.assertEqual(result.count(BaselineComparisonKind.REMOVED), 1)
         self.assertEqual(result.count(BaselineComparisonKind.CHANGED), 1)
 
     def test_baseline_list_accepts_tracker_baselines_container(self):
