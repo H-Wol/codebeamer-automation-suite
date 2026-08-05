@@ -344,7 +344,7 @@ class CodebeamerClient:
             return data
         if isinstance(data, dict):
             for key in (
-                "reference",
+                "references",
                 "baselines",
                 "trackerBaselines",
                 "baselineList",
@@ -368,11 +368,12 @@ class CodebeamerClient:
                     return data[key]
         return []
 
-    def get_item(self, item_id: int) -> dict:
+    def get_item(self, item_id: int, baseline_id: int | None = None) -> dict:
         """아이템 한 개의 상세 정보를 가져온다."""
+        params = None if baseline_id is None else {"baselineId": int(baseline_id)}
         return self._run_rate_limited_request(
             "get_item",
-            lambda: self._get(f"/v3/items/{item_id}"),
+            lambda: self._get(f"/v3/items/{item_id}", params=params),
         )
 
     def search_items(

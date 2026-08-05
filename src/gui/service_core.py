@@ -533,9 +533,33 @@ class OfflineGuiClient:
         del item_id
         raise RuntimeError("테스트 모드에서는 아이템 삭제를 실행할 수 없습니다.")
 
-    def get_item(self, item_id: int) -> dict[str, Any]:
+    def get_item(self, item_id: int, baseline_id: int | None = None) -> dict[str, Any]:
         """`get_item` 값을 반환한다."""
         self._require_query_data()
+        if baseline_id is not None:
+            baselines = self.query_data.get("baselines", []) if self.query_data else []
+            baseline = next(
+                (
+                    entry
+                    for entry in baselines
+                    if isinstance(entry, dict) and int(entry.get("id") or 0) == int(baseline_id)
+                ),
+                None,
+            )
+            if baseline is None or not isinstance(baseline.get("items"), list):
+                raise KeyError(f"offline baseline not found: {baseline_id}")
+            item = next(
+                (
+                    entry
+                    for entry in baseline["items"]
+                    if isinstance(entry, dict) and int(entry.get("id") or 0) == int(item_id)
+                ),
+                None,
+            )
+            if item is None:
+                raise KeyError(f"offline baseline item not found: {item_id}")
+            tracker_id = int(item.get("trackerId") or self.tracker_id)
+            return self._baseline_item_payload(item, tracker_id)
         if int(item_id) not in self._offline_items:
             raise KeyError(f"offline item not found: {item_id}")
         return self._item_payload(int(item_id))

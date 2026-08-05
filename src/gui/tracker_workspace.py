@@ -1841,7 +1841,7 @@ class TrackerWorkspacePage(QWidget):
 
         self._submit(
             "baseline_compare",
-            lambda: self.service.compare_search_results(
+            lambda: self.service.compare_tracker_items_at_sources(
                 settings,
                 query,
                 before_source=before_source,

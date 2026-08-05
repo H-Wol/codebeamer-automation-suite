@@ -37,14 +37,23 @@ class _ComparisonClient:
         self.tracker_id = tracker_id
         return [{"id": 11, "name": "R1", "createdAt": "2026-01-01T00:00:00Z"}]
 
-    def search_items(self, *, query_string, baseline_id=None, page, page_size):
-        del query_string, page_size
+    def get_tracker_items_page(self, tracker_id, *, page, page_size):
+        del tracker_id, page_size
+        refs = [{"id": item_id, "name": f"Item {item_id}"} for item_id in (1, 2, 3)]
+        start = (page - 1) * 2
+        return {"page": page, "pageSize": 2, "total": len(refs), "itemRefs": refs[start : start + 2]}
+
+    def get_tracker_items(self, tracker_id):
+        return self.get_tracker_items_page(tracker_id, page=1, page_size=500)["itemRefs"]
+
+    def get_item(self, item_id, baseline_id=None):
         items = {
-            None: [_summary(1).raw_reference, _summary(2).raw_reference],
-            11: [_summary(1, status="Draft").raw_reference, _summary(3).raw_reference],
+            None: {1: _summary(1).raw_reference, 2: _summary(2).raw_reference},
+            11: {1: _summary(1, status="Draft").raw_reference, 3: _summary(3).raw_reference},
         }[baseline_id]
-        start = (page - 1) * 1
-        return {"page": page, "pageSize": 1, "total": len(items), "items": items[start : start + 1]}
+        if item_id not in items:
+            raise KeyError(item_id)
+        return items[item_id]
 
 
 class TrackerBaselineComparisonTest(unittest.TestCase):
@@ -97,7 +106,7 @@ class TrackerBaselineComparisonTest(unittest.TestCase):
         service = TrackerQueryService(client_factory=_ComparisonClient)
         baselines = service.load_tracker_baselines(settings, 20)
         self.assertEqual([(baseline.baseline_id, baseline.name) for baseline in baselines], [(11, "R1")])
-        result = service.compare_search_results(
+        result = service.compare_tracker_items_at_sources(
             settings,
             TrackerQuery(tracker_id=20, text="Item"),
             before_source=BaselineComparisonSource(11),
@@ -113,13 +122,13 @@ class TrackerBaselineComparisonTest(unittest.TestCase):
         )
         self.assertEqual(items, [{"id": 11, "name": "R1"}])
 
-    def test_baseline_list_accepts_paged_reference_container(self):
+    def test_baseline_list_accepts_paged_references_container(self):
         items = TrackerQueryService._extract_baselines(
             {
                 "page": 1,
                 "pageSize": 100,
                 "total": 1,
-                "reference": [{"id": 11, "name": "R1", "type": "BaselineReference"}],
+                "references": [{"id": 11, "name": "R1", "type": "BaselineReference"}],
             }
         )
         self.assertEqual(items[0]["id"], 11)
