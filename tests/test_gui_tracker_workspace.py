@@ -566,8 +566,20 @@ class TrackerWorkspacePageTest(unittest.TestCase):
 
     def test_condition_search_mode_loads_schema_and_builds_condition_query(self) -> None:
         self.page.activate()
+        self.page.browser_tabs.setCurrentIndex(1)
         mode_index = self.page.search_mode_combo.findData("conditions")
         self.page.search_mode_combo.setCurrentIndex(mode_index)
+        self.assertTrue(self.page.condition_search_host.isVisible())
+        self.assertFalse(self.page.condition_dialog.isVisible())
+        self.assertEqual(self.page.search_button.text(), "상세 조건으로 검색")
+        self.assertIn("조건 묶음 1개", self.page.condition_summary_label.text())
+
+        self.page.condition_open_button.click()
+        self._app.processEvents()
+        self.assertTrue(self.page.condition_dialog.isVisible())
+        self.assertGreaterEqual(self.page.condition_dialog.width(), 860)
+        self.assertGreaterEqual(self.page.condition_dialog.height(), 600)
+
         group = self.page.condition_builder.groups[0]
         row = group.rows[0]
         summary_index = row.field_combo.findText("Summary")
@@ -575,12 +587,24 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         contains_index = row.operator_combo.findData("contains")
         row.operator_combo.setCurrentIndex(contains_index)
         row.value_input.setText("Steering")
+        self.page.condition_dialog.close_button.click()
+        self._app.processEvents()
+        self.assertFalse(self.page.condition_dialog.isVisible())
+        self.assertEqual(
+            self.page.condition_builder.groups[0].rows[0].value_input.text(),
+            "Steering",
+        )
 
         self.page._run_search()
 
         self.assertIsNotNone(self.page._last_search_query)
         self.assertEqual(self.page._last_search_query.mode.value, "conditions")
         self.assertEqual(self.page.search_table.rowCount(), 2)
+
+        self.page.search_mode_combo.setCurrentIndex(0)
+        self._app.processEvents()
+        self.assertFalse(self.page.condition_dialog.isVisible())
+        self.assertEqual(self.page.search_button.text(), "현재 트래커 검색")
 
     def test_direct_id_open_resolves_other_tracker_and_builds_ancestor_path(self) -> None:
         self.page.activate()

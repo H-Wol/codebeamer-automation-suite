@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from typing import Any
 
 try:
+    from PySide6.QtCore import Qt
     from PySide6.QtCore import Signal
     from PySide6.QtWidgets import QComboBox
+    from PySide6.QtWidgets import QDialog
     from PySide6.QtWidgets import QFrame
     from PySide6.QtWidgets import QHBoxLayout
     from PySide6.QtWidgets import QLabel
@@ -38,10 +40,10 @@ _OPERATOR_LABELS = {
     "not_equals": "같지 않음",
     "contains": "포함",
     "not_contains": "포함하지 않음",
-    "gt": ">",
-    "gte": ">=",
-    "lt": "<",
-    "lte": "<=",
+    "gt": "보다 큼",
+    "gte": "이상",
+    "lt": "보다 작음",
+    "lte": "이하",
     "in": "목록 중 하나",
     "not_in": "목록에 없음",
 }
@@ -163,7 +165,7 @@ class TrackerConditionRow(QFrame):
         elif spec is not None and spec.options:
             self.value_input.setPlaceholderText("가능 값: " + ", ".join(spec.options[:6]))
         elif spec is not None and spec.kind == FieldEditorKind.BOOLEAN:
-            self.value_input.setPlaceholderText("true 또는 false")
+            self.value_input.setPlaceholderText("예 또는 아니요")
         else:
             self.value_input.setPlaceholderText("검색 값")
         self.changed.emit()
@@ -198,7 +200,7 @@ def _typed_value(spec: TrackerQueryFieldSpec, value: str) -> Any:
     if spec.kind == FieldEditorKind.BOOLEAN:
         lowered = normalized.casefold()
         if lowered not in {"true", "false", "1", "0", "예", "아니요"}:
-            raise ValueError("Boolean 검색값은 true 또는 false여야 합니다.")
+            raise ValueError("참·거짓 검색값은 예 또는 아니요여야 합니다.")
         return lowered in {"true", "1", "예"}
     return normalized
 
@@ -226,10 +228,10 @@ class TrackerConditionGroup(QFrame):
         self.title_label.setObjectName("tracker_detail_section_title")
         header.addWidget(self.title_label)
         header.addStretch(1)
-        add_button = QPushButton("AND 조건 추가", self)
-        add_button.clicked.connect(lambda _checked=False: self.add_row())
-        header.addWidget(add_button)
-        self.remove_button = QPushButton("OR 그룹 삭제", self)
+        self.add_row_button = QPushButton("함께 만족할 조건 추가", self)
+        self.add_row_button.clicked.connect(lambda _checked=False: self.add_row())
+        header.addWidget(self.add_row_button)
+        self.remove_button = QPushButton("조건 묶음 삭제", self)
         self.remove_button.clicked.connect(
             lambda _checked=False: self.remove_requested.emit(self)
         )
@@ -242,7 +244,9 @@ class TrackerConditionGroup(QFrame):
         self.add_row()
 
     def set_index(self, index: int) -> None:
-        self.title_label.setText(f"조건 그룹 {int(index) + 1} · 그룹 안은 AND")
+        self.title_label.setText(
+            f"조건 묶음 {int(index) + 1} · 아래 조건을 모두 만족"
+        )
 
     def add_row(self) -> TrackerConditionRow:
         row = TrackerConditionRow(self.fields, self)
@@ -281,10 +285,14 @@ class TrackerConditionBuilder(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
         toolbar = QHBoxLayout()
-        helper = QLabel("그룹 안은 AND, 그룹 사이는 OR로 검색합니다.", self)
-        helper.setObjectName("tracker_panel_status")
-        toolbar.addWidget(helper, 1)
-        self.add_group_button = QPushButton("OR 그룹 추가", self)
+        self.helper_label = QLabel(
+            "한 묶음 안의 조건은 모두 만족해야 합니다. 묶음이 여러 개면 그중 하나만 만족해도 검색됩니다.",
+            self,
+        )
+        self.helper_label.setObjectName("tracker_panel_status")
+        self.helper_label.setWordWrap(True)
+        toolbar.addWidget(self.helper_label, 1)
+        self.add_group_button = QPushButton("다른 조건 묶음 추가", self)
         self.add_group_button.clicked.connect(lambda _checked=False: self.add_group())
         toolbar.addWidget(self.add_group_button)
         self.clear_button = QPushButton("조건 초기화", self)
@@ -306,6 +314,11 @@ class TrackerConditionBuilder(QWidget):
         self.fields = query_field_specs(schema)
         self.reset()
         self.setEnabled(bool(self.fields))
+
+    def clear_schema(self) -> None:
+        self.fields = ()
+        self.reset()
+        self.setEnabled(False)
 
     def add_group(self) -> TrackerConditionGroup | None:
         if not self.fields:
@@ -344,9 +357,81 @@ class TrackerConditionBuilder(QWidget):
     def values(self) -> tuple[TrackerQueryGroup, ...]:
         return tuple(group.value() for group in self.groups)
 
+    def summary_text(self) -> str:
+        group_count = len(self.groups)
+        condition_count = sum(len(group.rows) for group in self.groups)
+        if not self.fields:
+            return "상세 검색에 사용할 필드 정보를 불러오지 않았습니다."
+        return f"조건 묶음 {group_count}개 · 입력 조건 {condition_count}개"
+
+
+class TrackerConditionDialog(QDialog):
+    """상세 검색 조건을 넓은 별도 창에서 편집한다."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("tracker_condition_dialog")
+        self.setWindowTitle("상세 검색 조건 설정")
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
+        self.setModal(False)
+        self.setMinimumSize(860, 600)
+        self.resize(1180, 760)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 16)
+        layout.setSpacing(10)
+
+        heading = QHBoxLayout()
+        title = QLabel("상세 검색 조건 설정", self)
+        title.setObjectName("tracker_detail_title")
+        heading.addWidget(title, 1)
+        self.fullscreen_button = QPushButton("전체 화면", self)
+        self.fullscreen_button.setCheckable(True)
+        self.fullscreen_button.toggled.connect(self._set_fullscreen)
+        heading.addWidget(self.fullscreen_button)
+        self.close_button = QPushButton("설정 완료", self)
+        self.close_button.setObjectName("primary_button")
+        self.close_button.clicked.connect(self.close)
+        heading.addWidget(self.close_button)
+        layout.addLayout(heading)
+
+        self.guide_label = QLabel(
+            "필드와 비교 방식을 선택하고 검색값을 입력하세요. 작성한 조건은 설정 완료 후에도 유지됩니다.",
+            self,
+        )
+        self.guide_label.setObjectName("tracker_panel_status")
+        self.guide_label.setWordWrap(True)
+        layout.addWidget(self.guide_label)
+
+        self.builder = TrackerConditionBuilder(self)
+        layout.addWidget(self.builder, 1)
+
+        self.summary_label = QLabel("", self)
+        self.summary_label.setObjectName("tracker_panel_status")
+        layout.addWidget(self.summary_label)
+        self.builder.changed.connect(self.refresh_summary)
+        self.refresh_summary()
+
+    def refresh_summary(self) -> None:
+        self.summary_label.setText(self.builder.summary_text())
+
+    def show_editor(self) -> None:
+        self.refresh_summary()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _set_fullscreen(self, enabled: bool) -> None:
+        self.fullscreen_button.setText("창 모드" if enabled else "전체 화면")
+        if enabled:
+            self.showFullScreen()
+            return
+        self.showNormal()
+
 
 __all__ = [
     "TrackerConditionBuilder",
+    "TrackerConditionDialog",
     "TrackerConditionGroup",
     "TrackerConditionRow",
     "TrackerQueryFieldSpec",

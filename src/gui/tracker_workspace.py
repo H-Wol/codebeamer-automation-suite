@@ -51,7 +51,7 @@ from .tracker_bulk_update import TrackerBulkUpdateService
 from .tracker_bulk_update_dialog import BulkUpdateProgressDialog
 from .tracker_bulk_update_dialog import BulkUpdateRequest
 from .tracker_bulk_update_dialog import TrackerBulkUpdateDialog
-from .tracker_condition_builder import TrackerConditionBuilder
+from .tracker_condition_builder import TrackerConditionDialog
 from .tracker_query_models import PageResult
 from .tracker_query_models import ProjectSummary
 from .tracker_query_models import TrackerFieldValue
@@ -91,7 +91,7 @@ REQUEST_BUSY_MESSAGES = {
     "create_schema": "새 아이템 생성 필드를 확인하는 중입니다.",
     "item_create": "새 트래커 아이템을 생성하는 중입니다.",
     "search": "현재 트래커에서 아이템을 검색하는 중입니다.",
-    "search_schema": "다중 조건 검색 필드를 확인하는 중입니다.",
+    "search_schema": "상세 검색에 사용할 필드를 확인하는 중입니다.",
     "search_all": "검색 결과 전체 대상을 확인하는 중입니다.",
     "baseline_list": "비교 가능한 baseline 목록을 불러오는 중입니다.",
     "baseline_compare": "선택한 아이템을 두 기준에서 비교하는 중입니다.",
@@ -656,7 +656,7 @@ class TrackerWorkspacePage(QWidget):
         mode_row.addWidget(QLabel("검색 방식", tab))
         self.search_mode_combo = QComboBox(tab)
         self.search_mode_combo.addItem("간편 검색", TrackerSearchMode.SIMPLE.value)
-        self.search_mode_combo.addItem("다중 조건 검색", TrackerSearchMode.CONDITIONS.value)
+        self.search_mode_combo.addItem("상세 조건 검색", TrackerSearchMode.CONDITIONS.value)
         self.search_mode_combo.currentIndexChanged.connect(self._on_search_mode_changed)
         mode_row.addWidget(self.search_mode_combo)
         mode_row.addStretch(1)
@@ -691,9 +691,26 @@ class TrackerWorkspacePage(QWidget):
         first_row.addWidget(self.search_assignee_input, 1)
         layout.addWidget(self.simple_search_host)
 
-        self.condition_builder = TrackerConditionBuilder(tab)
-        self.condition_builder.hide()
-        layout.addWidget(self.condition_builder)
+        self.condition_dialog = TrackerConditionDialog(self)
+        self.condition_builder = self.condition_dialog.builder
+        self.condition_builder.changed.connect(self._update_condition_summary)
+        self.condition_search_host = QWidget(tab)
+        condition_row = QHBoxLayout(self.condition_search_host)
+        condition_row.setContentsMargins(0, 0, 0, 0)
+        condition_row.setSpacing(8)
+        self.condition_summary_label = QLabel(
+            "상세 검색 조건을 설정하세요.", self.condition_search_host
+        )
+        self.condition_summary_label.setObjectName("tracker_panel_status")
+        self.condition_summary_label.setWordWrap(True)
+        condition_row.addWidget(self.condition_summary_label, 1)
+        self.condition_open_button = QPushButton(
+            "상세 조건 설정", self.condition_search_host
+        )
+        self.condition_open_button.clicked.connect(self._open_condition_dialog)
+        condition_row.addWidget(self.condition_open_button)
+        self.condition_search_host.hide()
+        layout.addWidget(self.condition_search_host)
 
         self.search_scope_label = QLabel("프로젝트와 트래커를 먼저 선택하세요.")
         self.search_scope_label.setObjectName("tracker_panel_status")
@@ -934,7 +951,7 @@ class TrackerWorkspacePage(QWidget):
         self.search_table.setRowCount(0)
         self._last_search_query = None
         self._last_search_result = None
-        self._search_schema = None
+        self._reset_condition_search("트래커를 선택하면 상세 조건을 설정할 수 있습니다.")
         self._clear_search_selection()
         self._search_page = 1
         self._selected_item_id = None
@@ -984,6 +1001,9 @@ class TrackerWorkspacePage(QWidget):
             available and self._current_tracker is not None and self._last_search_query is not None
         )
         self.search_mode_combo.setEnabled(available and self._current_tracker is not None)
+        self.condition_open_button.setEnabled(
+            available and self._current_tracker is not None
+        )
         self.bulk_update_button.setEnabled(
             available
             and self._current_tracker is not None
@@ -1243,6 +1263,7 @@ class TrackerWorkspacePage(QWidget):
         self._current_project = project
         self._current_tracker = None
         self._selected_item_id = None
+        self._reset_condition_search("트래커를 불러오는 중입니다.")
         self._reset_baseline_state("트래커를 불러오는 중입니다.")
         self._reset_detail()
         self._load_trackers(project)
@@ -1293,6 +1314,8 @@ class TrackerWorkspacePage(QWidget):
                 f"'{self._current_tracker.name}' 트래커의 최상위 아이템을 조회합니다."
             )
             self._load_roots()
+            if self.search_mode_combo.currentData() == TrackerSearchMode.CONDITIONS.value:
+                self._load_search_schema()
 
         def failed(exc: Exception) -> None:
             self._trackers = ()
@@ -1324,14 +1347,15 @@ class TrackerWorkspacePage(QWidget):
         self._reset_baseline_state("Baseline 목록을 불러오는 중입니다.")
         self._last_search_query = None
         self._last_search_result = None
-        self._search_schema = None
-        self.condition_builder.setEnabled(False)
+        self._reset_condition_search("상세 검색 필드 정보를 불러오는 중입니다.")
         self._clear_search_selection()
         self.search_table.setRowCount(0)
         self._reset_detail()
         self._update_search_scope()
         self._set_available(True)
         self._load_roots()
+        if self.search_mode_combo.currentData() == TrackerSearchMode.CONDITIONS.value:
+            self._load_search_schema()
         if self.workspace_mode_tabs.currentIndex() == self.baseline_mode_index:
             self._refresh_baseline_comparison()
 
@@ -2129,7 +2153,12 @@ class TrackerWorkspacePage(QWidget):
             self.search_mode_combo.currentData() == TrackerSearchMode.CONDITIONS.value
         )
         self.simple_search_host.setVisible(not condition_mode)
-        self.condition_builder.setVisible(condition_mode)
+        self.condition_search_host.setVisible(condition_mode)
+        self.search_button.setText(
+            "상세 조건으로 검색" if condition_mode else "현재 트래커 검색"
+        )
+        if not condition_mode:
+            self.condition_dialog.close()
         self._last_search_query = None
         self._last_search_result = None
         self.search_table.setRowCount(0)
@@ -2137,26 +2166,70 @@ class TrackerWorkspacePage(QWidget):
         if condition_mode and self._current_tracker is not None:
             self._load_search_schema()
 
-    def _load_search_schema(self, *, run_after: bool = False) -> None:
+    def _open_condition_dialog(self) -> None:
+        tracker = self._current_tracker
+        if tracker is None:
+            self._set_workspace_status(
+                "상세 검색 조건을 설정할 트래커를 먼저 선택하세요.",
+                tone="warning",
+            )
+            return
+        if self._search_schema is None or self._search_schema.tracker_id != tracker.tracker_id:
+            self.condition_summary_label.setText(
+                "상세 검색에 사용할 필드 정보를 불러오는 중입니다."
+            )
+            self._load_search_schema(open_after=True)
+            return
+        self.condition_dialog.show_editor()
+
+    def _update_condition_summary(self) -> None:
+        self.condition_dialog.refresh_summary()
+        self.condition_summary_label.setText(
+            f"{self.condition_builder.summary_text()} · 버튼을 눌러 조건을 편집할 수 있습니다."
+        )
+
+    def _reset_condition_search(self, message: str) -> None:
+        self._search_schema = None
+        self.condition_dialog.close()
+        self.condition_builder.clear_schema()
+        self.condition_summary_label.setText(message)
+
+    def _load_search_schema(
+        self,
+        *,
+        run_after: bool = False,
+        open_after: bool = False,
+    ) -> None:
         tracker = self._current_tracker
         if tracker is None:
             return
         if self._search_schema is not None and self._search_schema.tracker_id == tracker.tracker_id:
             if run_after:
                 self._run_search()
+            if open_after:
+                self.condition_dialog.show_editor()
             return
         tracker_id = tracker.tracker_id
         settings = self.settings_provider()
+        self.condition_summary_label.setText(
+            "상세 검색에 사용할 필드 정보를 불러오는 중입니다."
+        )
 
         def loaded(schema: EditableTrackerSchema) -> None:
             if self._current_tracker is None or self._current_tracker.tracker_id != tracker_id:
                 return
             self._search_schema = schema
             self.condition_builder.set_schema(schema)
+            self._update_condition_summary()
             if run_after:
                 self._run_search()
+            if open_after:
+                self.condition_dialog.show_editor()
 
         def failed(exc: Exception) -> None:
+            self.condition_summary_label.setText(
+                "상세 검색 필드 정보를 불러오지 못했습니다. 다시 시도하세요."
+            )
             self._show_error(exc, prefix="검색 schema 조회 실패")
 
         self._submit(
@@ -2466,6 +2539,9 @@ class TrackerWorkspacePage(QWidget):
         self._current_project = project
         self._current_tracker = tracker
         if previous_tracker_id != tracker.tracker_id:
+            self._reset_condition_search(
+                "트래커가 변경되었습니다. 상세 검색 조건을 다시 설정하세요."
+            )
             self._reset_baseline_state("Baseline 비교 기준을 다시 불러오세요.")
         self.project_combo.setCurrentIndex(
             -1

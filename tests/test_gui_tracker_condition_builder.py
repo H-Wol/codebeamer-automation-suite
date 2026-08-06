@@ -6,6 +6,7 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from src.gui.tracker_condition_builder import TrackerConditionBuilder
+from src.gui.tracker_condition_builder import TrackerConditionDialog
 from src.gui.tracker_condition_builder import query_field_specs
 from src.gui.tracker_item_editor import build_create_tracker_schema
 
@@ -124,6 +125,35 @@ class TrackerConditionBuilderTest(unittest.TestCase):
         condition = row.condition()
 
         self.assertEqual(condition.value, ["A", "B"])
+
+    def test_user_labels_explain_condition_logic_without_and_or_terms(self) -> None:
+        group = self.builder.groups[0]
+        labels = [
+            self.builder.helper_label.text(),
+            self.builder.add_group_button.text(),
+            group.title_label.text(),
+            group.add_row_button.text(),
+            group.remove_button.text(),
+        ]
+
+        self.assertTrue(all("AND" not in label and "OR" not in label for label in labels))
+        self.assertIn("모두 만족", group.title_label.text())
+        self.assertIn("하나만 만족", self.builder.helper_label.text())
+
+    def test_condition_dialog_provides_large_editor_and_preserves_builder(self) -> None:
+        dialog = TrackerConditionDialog()
+        try:
+            dialog.builder.set_schema(self.schema)
+            dialog.show_editor()
+            self._app.processEvents()
+
+            self.assertTrue(dialog.isVisible())
+            self.assertGreaterEqual(dialog.minimumWidth(), 860)
+            self.assertGreaterEqual(dialog.minimumHeight(), 600)
+            self.assertIn("조건 묶음 1개", dialog.summary_label.text())
+            self.assertIs(dialog.builder.parent(), dialog)
+        finally:
+            dialog.close()
 
 
 if __name__ == "__main__":
