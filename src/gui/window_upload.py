@@ -52,7 +52,10 @@ class WindowUploadMixin:
             getattr(self.session_state.settings, "upload_mode", None)
         )
         self.upload_page.status_label.setText(f"{action_label} 실행 중")
-        self.upload_worker.start()
+        try:
+            self.upload_worker.start()
+        except Exception as exc:
+            self._on_upload_failed(str(exc) or "업로드 작업을 시작하지 못했습니다.")
 
     def _pause_upload(self) -> None:
         if self.upload_worker is not None:

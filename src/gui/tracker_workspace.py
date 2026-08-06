@@ -429,6 +429,7 @@ class TrackerWorkspacePage(QWidget):
         bulk_request_provider: Callable[..., BulkUpdateRequest | None] | None = None,
         busy_started: Callable[[str], object] | None = None,
         busy_finished: Callable[[object], None] | None = None,
+        error_notifier: Callable[[str, str], None] | None = None,
         task_factory=BackgroundTask,
         synchronous: bool = False,
         parent=None,
@@ -450,6 +451,7 @@ class TrackerWorkspacePage(QWidget):
         self.bulk_request_provider = bulk_request_provider
         self.busy_started = busy_started
         self.busy_finished = busy_finished
+        self.error_notifier = error_notifier
         self.task_factory = task_factory
         self.synchronous = bool(synchronous)
 
@@ -1316,11 +1318,9 @@ class TrackerWorkspacePage(QWidget):
         task.finished.connect(cleanup)
         try:
             task.start()
-        except Exception:
-            self._tasks.discard(task)
-            self._finish_request_busy(busy_token)
-            task.deleteLater()
-            raise
+        except Exception as exc:
+            cleanup()
+            failure(exc)
         return token
 
     def _start_request_busy(self, key: str) -> object | None:
@@ -1346,7 +1346,10 @@ class TrackerWorkspacePage(QWidget):
             pass
 
     def _show_error(self, exc: Exception, *, prefix: str = "") -> None:
-        if isinstance(exc, (TrackerQueryServiceError, TrackerItemWriteError)):
+        if isinstance(
+            exc,
+            (TrackerQueryServiceError, TrackerItemWriteError, BaselineExportError),
+        ):
             message = str(exc)
         elif isinstance(exc, ValueError):
             message = str(exc)
@@ -1355,6 +1358,8 @@ class TrackerWorkspacePage(QWidget):
         if prefix:
             message = f"{prefix}: {message}"
         self._set_workspace_status(message, tone="error")
+        if callable(self.error_notifier):
+            self.error_notifier(prefix or "트래커 작업 실패", message)
 
     def _load_projects(self, *, force: bool = False) -> None:
         del force
@@ -1727,6 +1732,7 @@ class TrackerWorkspacePage(QWidget):
             item.addChild(self._placeholder_item("하위 조회 실패 · 다시 펼쳐 재시도"))
             item.setData(0, CHILDREN_LOADED_ROLE, False)
             self.baseline_comparison_panel.set_error(str(exc))
+            self._show_error(exc, prefix=f"#{summary.item_id} 하위 조회 실패")
 
         self._submit(
             f"baseline_children:{summary.item_id}",
@@ -2340,6 +2346,7 @@ class TrackerWorkspacePage(QWidget):
             if self._baseline_loading_tracker_id == tracker.tracker_id:
                 self._baseline_loading_tracker_id = None
             self.baseline_comparison_panel.set_error(f"Baseline 목록 조회 실패: {exc}")
+            self._show_error(exc, prefix="Baseline 목록 조회 실패")
 
         self._submit(
             "baseline_list",
@@ -2401,6 +2408,7 @@ class TrackerWorkspacePage(QWidget):
             if self._baseline_comparison_loading_key == key:
                 self._baseline_comparison_loading_key = None
             self.baseline_comparison_panel.set_error(str(exc))
+            self._show_error(exc, prefix="Baseline 전체 비교 실패")
 
         self._submit(
             "baseline_compare",
@@ -2452,6 +2460,7 @@ class TrackerWorkspacePage(QWidget):
             )
         except BaselineExportError as exc:
             self.baseline_comparison_panel.set_error(str(exc))
+            self._show_error(exc, prefix="Baseline Excel 내보내기 실패")
             self._record_activity(
                 ActivityRecord.create(
                     ActivityOperation.BASELINE_EXPORT,
@@ -2796,7 +2805,13 @@ class TrackerWorkspacePage(QWidget):
         worker.failed.connect(self._fail_bulk_update)
         worker.finished.connect(self._cleanup_bulk_worker)
         progress.show()
-        worker.start()
+        try:
+            worker.start()
+        except Exception as exc:
+            progress.reject()
+            self._bulk_progress_dialog = None
+            self._cleanup_bulk_worker()
+            self._show_error(exc, prefix="일괄 수정 시작 실패")
 
     def _finish_bulk_update(self, result) -> None:
         progress = self._bulk_progress_dialog

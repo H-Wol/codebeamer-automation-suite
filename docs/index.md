@@ -44,6 +44,8 @@
 
 - [GUI 사용 가이드](./gui-plan.md)
   최상위 앱 셸, 배치 작업의 실제 단계별 사용 흐름, 테스트 모드, 다중 파일 업로드, 상단 데이터 설정, 현재 구현 범위를 정리합니다.
+- [GUI 오류 처리 감사](./gui-error-handling.md)
+  Qt 슬롯, 백그라운드 worker, 사용자 입력과 보조 저장 경로의 오류 표시·정리 계약을 정리합니다.
 - [트래커 조회 서비스 계약](./tracker-query-service.md)
   tracker 범위 검색, 계층·상세·ID 경로 모델, pagination 차이와 익명 조회 fixture 계약을 정리합니다.
 - [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)

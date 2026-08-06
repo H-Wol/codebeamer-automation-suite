@@ -690,6 +690,48 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         finally:
             page.close()
 
+    def test_workspace_error_updates_status_and_calls_user_notifier(self) -> None:
+        alerts = []
+        self.page.error_notifier = lambda title, message: alerts.append((title, message))
+
+        self.page._show_error(ValueError("잘못된 조건"), prefix="검색 실패")
+
+        self.assertEqual(
+            alerts,
+            [("검색 실패", "검색 실패: 잘못된 조건")],
+        )
+        self.assertEqual(self.page.workspace_status_label.property("tone"), "error")
+        self.assertIn("잘못된 조건", self.page.workspace_status_label.text())
+
+    def test_background_task_start_failure_uses_failure_callback(self) -> None:
+        class SignalStub:
+            def connect(self, callback) -> None:
+                self.callback = callback
+
+        class FailingTask:
+            def __init__(self) -> None:
+                self.completed = SignalStub()
+                self.failed = SignalStub()
+                self.finished = SignalStub()
+                self.deleted = False
+
+            def start(self) -> None:
+                raise RuntimeError("thread start failed")
+
+            def deleteLater(self) -> None:
+                self.deleted = True
+
+        task = FailingTask()
+        failures = []
+        self.page.synchronous = False
+        self.page.task_factory = lambda *_args, **_kwargs: task
+
+        self.page._submit("direct", lambda: None, lambda _result: None, failures.append)
+
+        self.assertEqual(str(failures[0]), "thread start failed")
+        self.assertTrue(task.deleted)
+        self.assertFalse(self.page._tasks)
+
     def test_request_tokens_reject_stale_results(self) -> None:
         first = self.page._next_token("detail")
         second = self.page._next_token("detail")

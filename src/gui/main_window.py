@@ -12,6 +12,7 @@ from .activity_history import default_activity_history_path
 from .activity_history_page import ActivityHistoryPage
 from .api_monitor_window import ApiMonitorWindow
 from .batch_window import BatchUploadWindow
+from .error_reporting import notify_user_error
 from .loading_overlay import LoadingOverlay
 from .settings_center import SettingsCenterPage
 from .settings_store import GuiSettings
@@ -203,6 +204,7 @@ class MainWindow(QMainWindow):
             bulk_chunk_size_saver=self.settings_store.save_bulk_update_chunk_size,
             busy_started=self._begin_busy,
             busy_finished=self._end_busy,
+            error_notifier=self._show_error_dialog,
             parent=content,
         )
 
@@ -366,6 +368,9 @@ class MainWindow(QMainWindow):
             )
             return
         self.activity_page.on_activity_recorded(record)
+
+    def _show_error_dialog(self, title: str, message: str) -> None:
+        notify_user_error(title, message, parent=self)
 
     def _open_global_settings(self) -> None:
         self._show_route(ROUTE_SETTINGS)

@@ -272,9 +272,9 @@ class WindowShellMixin:
         task.failed.connect(_on_failed)
         self.busy_task = task
         self._set_busy(True, message)
-        task.start()
 
         try:
+            task.start()
             loop.exec()
         finally:
             task.wait()
