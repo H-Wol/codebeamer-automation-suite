@@ -41,6 +41,10 @@ class CountingTrackerQueryService(TrackerQueryService):
         self.baseline_compare_count += 1
         return super().compare_item_at_sources(*args, **kwargs)
 
+    def compare_tracker_at_sources(self, *args, **kwargs):
+        self.baseline_compare_count += 1
+        return super().compare_tracker_at_sources(*args, **kwargs)
+
     def load_tracker_baselines(self, *args, **kwargs):
         self.baseline_load_count += 1
         return super().load_tracker_baselines(*args, **kwargs)
@@ -328,6 +332,44 @@ class TrackerWorkspacePageTest(unittest.TestCase):
             sorted_labels,
             sorted(sorted_labels, key=str.casefold, reverse=True),
         )
+
+    def test_baseline_sources_auto_load_full_result_and_selection_reuses_cache(self) -> None:
+        self.page.activate()
+        panel = self.page.baseline_comparison_panel
+        comparison = TrackerItemSummary.from_raw(
+            {"id": 9001001, "name": "Earlier", "status": {"id": 1, "name": "Draft"}}
+        )
+        reference = TrackerItemSummary.from_raw(
+            {"id": 9001001, "name": "Current", "status": {"id": 2, "name": "Open"}}
+        )
+        result = compare_tracker_items(
+            (comparison,),
+            (reference,),
+            before_source=BaselineComparisonSource(11),
+            after_source=BaselineComparisonSource(None),
+        )
+        calls = []
+
+        def compare_all(*args, **kwargs):
+            calls.append((args, kwargs))
+            return result
+
+        self.service.compare_tracker_at_sources = compare_all
+        panel.after_combo.addItem("R1", 11)
+        panel.after_combo.setCurrentIndex(panel.after_combo.count() - 1)
+        self._app.processEvents()
+
+        self.assertEqual(len(calls), 1)
+        self.assertIs(self.page._baseline_comparison_result, result)
+        self.assertEqual(self.page.baseline_result_table.rowCount(), 1)
+        self.assertTrue(panel.export_button.isEnabled())
+
+        self.page.baseline_result_table.selectRow(0)
+        self._app.processEvents()
+
+        self.assertEqual(self.page._baseline_selected_item_id, 9001001)
+        self.assertGreater(panel.detail.rowCount(), 0)
+        self.assertEqual(len(calls), 1)
 
     def test_baseline_state_survives_tab_navigation_until_explicit_reload(self) -> None:
         self.page.activate()

@@ -54,12 +54,40 @@ class TrackerFieldDifference:
     before: Any
     after: Any
     is_changed: bool
+    is_table: bool = False
+    table_columns: tuple["TrackerTableColumn", ...] = ()
 
     def before_text(self) -> str:
+        if self.is_table:
+            return _display_table(self.before, self.table_columns)
         return _display_value(self.before, field_key=self.field_key)
 
     def after_text(self) -> str:
+        if self.is_table:
+            return _display_table(self.after, self.table_columns)
         return _display_value(self.after, field_key=self.field_key)
+
+    @property
+    def reference(self) -> Any:
+        """사용자가 선택한 기준 값. 내부 비교 모델의 after에 대응한다."""
+        return self.after
+
+    @property
+    def comparison(self) -> Any:
+        """사용자가 선택한 비교 값. 내부 비교 모델의 before에 대응한다."""
+        return self.before
+
+    def reference_text(self) -> str:
+        return self.after_text()
+
+    def comparison_text(self) -> str:
+        return self.before_text()
+
+
+@dataclass(frozen=True)
+class TrackerTableColumn:
+    column_key: str
+    label: str
 
 
 @dataclass(frozen=True)
@@ -75,6 +103,14 @@ class TrackerItemComparison:
         item = self.after or self.before
         return item.name if item is not None else str(self.item_id)
 
+    @property
+    def reference(self) -> TrackerItemSummary | None:
+        return self.after
+
+    @property
+    def comparison(self) -> TrackerItemSummary | None:
+        return self.before
+
 
 @dataclass(frozen=True)
 class BaselineComparisonResult:
@@ -84,6 +120,14 @@ class BaselineComparisonResult:
 
     def count(self, kind: BaselineComparisonKind) -> int:
         return sum(item.kind == kind for item in self.items)
+
+    @property
+    def reference_source(self) -> BaselineComparisonSource:
+        return self.after_source
+
+    @property
+    def comparison_source(self) -> BaselineComparisonSource:
+        return self.before_source
 
 
 def compare_tracker_items(
@@ -146,12 +190,17 @@ def _field_comparisons(
     for key in dict.fromkeys((*after_fields, *before_fields)):
         before_entry = before_fields.get(key)
         after_entry = after_fields.get(key)
-        before_label, before_compare, before_value = (
-            before_entry if before_entry is not None else (key, missing, None)
+        before_label, before_compare, before_value, before_table, before_columns = (
+            before_entry
+            if before_entry is not None
+            else (key, missing, None, False, ())
         )
-        after_label, after_compare, after_value = (
-            after_entry if after_entry is not None else (key, missing, None)
+        after_label, after_compare, after_value, after_table, after_columns = (
+            after_entry
+            if after_entry is not None
+            else (key, missing, None, False, ())
         )
+        table_columns = _merge_table_columns(after_columns, before_columns)
         comparisons.append(
             TrackerFieldDifference(
                 key,
@@ -159,6 +208,8 @@ def _field_comparisons(
                 before_value,
                 after_value,
                 before_compare != after_compare,
+                before_table or after_table,
+                table_columns,
             )
         )
     return tuple(comparisons)
@@ -190,15 +241,32 @@ _FIELD_LABELS = {
 _FIELD_ORDER = tuple(_FIELD_LABELS)
 
 
-def _comparison_fields(raw: dict[str, Any]) -> dict[str, tuple[str, Any, Any]]:
+def _comparison_fields(
+    raw: dict[str, Any],
+) -> dict[str, tuple[str, Any, Any, bool, tuple[TrackerTableColumn, ...]]]:
     if not isinstance(raw, dict):
         return {}
 
-    def normalize_field(label: str, value: Any) -> tuple[str, Any, Any]:
-        return label, _canonical(value), value
+    def normalize_field(
+        label: str,
+        value: Any,
+        *,
+        raw_field: dict[str, Any] | None = None,
+    ) -> tuple[str, Any, Any, bool, tuple[TrackerTableColumn, ...]]:
+        field_payload = raw_field or {}
+        type_name = " ".join(
+            str(field_payload.get(key) or "")
+            for key in ("type", "valueModel")
+        ).casefold()
+        is_table = "tablefield" in type_name
+        columns = _table_columns(field_payload, value) if is_table else ()
+        return label, _canonical(value), value, is_table, columns
 
     safe_raw = mask_sensitive_payload(raw)
-    fields: dict[str, tuple[str, Any, Any]] = {}
+    fields: dict[
+        str,
+        tuple[str, Any, Any, bool, tuple[TrackerTableColumn, ...]],
+    ] = {}
     ordered_keys = (
         *(key for key in _FIELD_ORDER if key in safe_raw),
         *(key for key in safe_raw if key not in _FIELD_LABELS and key != "customFields"),
@@ -215,10 +283,136 @@ def _comparison_fields(raw: dict[str, Any]) -> dict[str, tuple[str, Any, Any]]:
             name = str(field.get("name") or field_id or f"custom-{index}")
             key = f"custom:{field_id if field_id is not None else name}"
             value = field.get("values") if "values" in field else field.get("value")
-            fields[key] = normalize_field(name, value)
+            fields[key] = normalize_field(name, value, raw_field=field)
     elif "customFields" in safe_raw:
         fields["customFields"] = normalize_field("사용자 정의 필드", custom_fields)
     return fields
+
+
+def _optional_column_id(value: dict[str, Any]) -> int | None:
+    raw_id = value.get("fieldId")
+    if raw_id is None:
+        raw_id = value.get("id")
+    if raw_id is None or isinstance(raw_id, bool):
+        return None
+    try:
+        return int(raw_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _table_column(value: Any, index: int) -> TrackerTableColumn:
+    if isinstance(value, dict):
+        field_id = _optional_column_id(value)
+        if field_id is not None:
+            key = f"id:{field_id}"
+        else:
+            name = str(value.get("name") or value.get("label") or "").strip()
+            key = f"name:{name.casefold()}" if name else f"index:{index}"
+        label = str(
+            value.get("name")
+            or value.get("label")
+            or (f"열 {index + 1}")
+        )
+        return TrackerTableColumn(key, label)
+    return TrackerTableColumn(f"index:{index}", f"열 {index + 1}")
+
+
+def _table_row_values(value: Any) -> list[Any] | dict[str, Any]:
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    if isinstance(value, dict):
+        nested = value.get("values")
+        if isinstance(nested, list):
+            return nested
+        return value
+    return []
+
+
+def _raw_table_rows(value: Any) -> list[Any]:
+    if isinstance(value, dict) and isinstance(value.get("values"), list):
+        value = value.get("values")
+    if not isinstance(value, (list, tuple)):
+        return []
+    return list(value)
+
+
+def _table_columns(
+    raw_field: dict[str, Any],
+    value: Any,
+) -> tuple[TrackerTableColumn, ...]:
+    columns: list[TrackerTableColumn] = []
+    seen: set[str] = set()
+
+    def add(candidate: Any, index: int) -> None:
+        column = _table_column(candidate, index)
+        if column.column_key in seen:
+            return
+        seen.add(column.column_key)
+        columns.append(column)
+
+    schema_columns = raw_field.get("columns")
+    if isinstance(schema_columns, list):
+        for index, candidate in enumerate(schema_columns):
+            add(candidate, index)
+    for raw_row in _raw_table_rows(value):
+        row = _table_row_values(raw_row)
+        if isinstance(row, dict):
+            for index, (name, cell_value) in enumerate(row.items()):
+                candidate = cell_value if isinstance(cell_value, dict) else {"name": name}
+                add(candidate, index)
+            continue
+        for index, candidate in enumerate(row):
+            add(candidate, index)
+    return tuple(columns)
+
+
+def _merge_table_columns(
+    *groups: tuple[TrackerTableColumn, ...],
+) -> tuple[TrackerTableColumn, ...]:
+    columns: list[TrackerTableColumn] = []
+    seen: set[str] = set()
+    for group in groups:
+        for column in group:
+            if column.column_key in seen:
+                continue
+            seen.add(column.column_key)
+            columns.append(column)
+    return tuple(columns)
+
+
+def _table_cell_value(cell: Any) -> Any:
+    if not isinstance(cell, dict):
+        return cell
+    if "value" in cell:
+        return cell.get("value")
+    if "values" in cell:
+        return cell.get("values")
+    return cell
+
+
+def table_field_rows(value: Any) -> tuple[dict[str, Any], ...]:
+    """TableField 값을 열 식별자 기반 행 목록으로 정규화한다."""
+    rows: list[dict[str, Any]] = []
+    for raw_row in _raw_table_rows(value):
+        row_payload = _table_row_values(raw_row)
+        normalized: dict[str, Any] = {}
+        if isinstance(row_payload, dict):
+            for index, (name, cell) in enumerate(row_payload.items()):
+                candidate = cell if isinstance(cell, dict) else {"name": name}
+                column = _table_column(candidate, index)
+                normalized[column.column_key] = _table_cell_value(cell)
+        else:
+            for index, cell in enumerate(row_payload):
+                column = _table_column(cell, index)
+                normalized[column.column_key] = _table_cell_value(cell)
+        rows.append(normalized)
+    return tuple(rows)
+
+
+def comparison_value_key(value: Any) -> Any:
+    """표시명 변경을 제외한 비교용 canonical 값을 반환한다."""
+    return _canonical(value)
 
 
 def _canonical(value: Any) -> Any:
@@ -325,6 +519,34 @@ def _display_list(value: list[Any] | tuple[Any, ...]) -> str:
     return "\n".join(lines)
 
 
+def _display_table(
+    value: Any,
+    columns: tuple[TrackerTableColumn, ...],
+) -> str:
+    rows = table_field_rows(value)
+    if not rows:
+        return "-"
+    effective_columns = columns
+    if not effective_columns:
+        discovered: list[TrackerTableColumn] = []
+        seen: set[str] = set()
+        for row in rows:
+            for index, key in enumerate(row):
+                if key in seen:
+                    continue
+                seen.add(key)
+                discovered.append(TrackerTableColumn(key, f"열 {index + 1}"))
+        effective_columns = tuple(discovered)
+    rendered: list[str] = []
+    for row_index, row in enumerate(rows, start=1):
+        cells = []
+        for column in effective_columns:
+            cell_text = _display_value(row.get(column.column_key)).replace("\n", " / ")
+            cells.append(f"{column.label}={cell_text}")
+        rendered.append(f"행 {row_index}: {' | '.join(cells)}")
+    return "\n".join(rendered)
+
+
 def _labeled_lines(label: str, value: str) -> list[str]:
     lines = value.splitlines() or ["-"]
     if len(lines) == 1:
@@ -339,5 +561,8 @@ __all__ = [
     "TrackerBaseline",
     "TrackerFieldDifference",
     "TrackerItemComparison",
+    "TrackerTableColumn",
+    "comparison_value_key",
     "compare_tracker_items",
+    "table_field_rows",
 ]

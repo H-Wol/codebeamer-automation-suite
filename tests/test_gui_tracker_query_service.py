@@ -617,6 +617,30 @@ class OfflineTrackerQueryServiceIntegrationTest(unittest.TestCase):
         self.assertEqual(items[0].item_id, 1)
         self.assertEqual(items[-1].item_id, 1201)
 
+    def test_full_comparison_rejects_reference_only_query_response(self) -> None:
+        class ReferenceOnlyClient(QueryFakeClient):
+            def search_items(self, **kwargs):
+                payload = super().search_items(**kwargs)
+                payload["itemRefs"] = payload.pop("items")
+                return payload
+
+        service = TrackerQueryService(client_factory=ReferenceOnlyClient)
+        settings = GuiSettings(
+            base_url="https://example.test/cb",
+            username="sample",
+            password="placeholder",
+        )
+
+        with self.assertRaises(TrackerQueryServiceError) as raised:
+            service.load_all_search_items(
+                settings,
+                TrackerQuery(tracker_id=20),
+                require_full_items=True,
+            )
+
+        self.assertEqual(raised.exception.kind, TrackerQueryErrorKind.SERVER)
+        self.assertIn("items", str(raised.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

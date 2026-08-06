@@ -29,6 +29,8 @@ def _summary(item_id: int, *, status: str = "Open", rows=None) -> TrackerItemSum
 
 
 class _ComparisonClient:
+    search_calls: list[tuple] = []
+
     def __init__(self, *args, **kwargs):
         del args, kwargs
 
@@ -53,6 +55,32 @@ class _ComparisonClient:
         if item_id not in items:
             raise KeyError(item_id)
         return items[item_id]
+
+    def search_items(
+        self,
+        *,
+        query_string,
+        baseline_id=None,
+        page=1,
+        page_size=500,
+    ):
+        self.__class__.search_calls.append(
+            (query_string, baseline_id, page, page_size)
+        )
+        items = {
+            None: [_summary(1).raw_reference, _summary(2).raw_reference],
+            11: [
+                _summary(1, status="Draft").raw_reference,
+                _summary(3).raw_reference,
+            ],
+        }[baseline_id]
+        start = (page - 1) * page_size
+        return {
+            "page": page,
+            "pageSize": page_size,
+            "total": len(items),
+            "items": items[start : start + page_size],
+        }
 
 
 class TrackerBaselineComparisonTest(unittest.TestCase):
@@ -123,6 +151,31 @@ class TrackerBaselineComparisonTest(unittest.TestCase):
         self.assertEqual(status_field.before, {"id": "Draft", "name": "Draft", "type": "ChoiceOptionReference"})
         self.assertEqual(status_field.after, {"id": "Open", "name": "Open", "type": "ChoiceOptionReference"})
         self.assertTrue(status_field.is_changed)
+
+    def test_service_compares_entire_tracker_with_query_sources(self):
+        _ComparisonClient.search_calls = []
+        settings = GuiSettings(base_url="https://example.invalid", username="sample", password="sample")
+        service = TrackerQueryService(client_factory=_ComparisonClient)
+
+        result = service.compare_tracker_at_sources(
+            settings,
+            20,
+            reference_source=BaselineComparisonSource(None),
+            comparison_source=BaselineComparisonSource(11),
+        )
+
+        self.assertEqual(
+            [item.kind for item in result.items],
+            [
+                BaselineComparisonKind.CHANGED,
+                BaselineComparisonKind.ADDED,
+                BaselineComparisonKind.REMOVED,
+            ],
+        )
+        self.assertEqual(
+            [(call[1], call[2], call[3]) for call in _ComparisonClient.search_calls],
+            [(None, 1, 500), (11, 1, 500)],
+        )
 
     def test_reference_only_item_is_classified_as_added(self):
         settings = GuiSettings(base_url="https://example.invalid", username="sample", password="sample")
@@ -253,7 +306,7 @@ class TrackerBaselineComparisonTest(unittest.TestCase):
         self.assertEqual(fields["assignedTo"].after_text(), "• Sample User (ID 7)")
         self.assertEqual(
             fields["custom:10"].after_text(),
-            "행 1: 조건 A | 예\n행 2: 조건 B | 예",
+            "행 1: 열 1=조건 A | 열 2=예\n행 2: 열 1=조건 B | 열 2=예",
         )
         self.assertNotIn("TrackerReference", fields["tracker"].after_text())
         self.assertNotIn("{", fields["assignedTo"].after_text())

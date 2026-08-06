@@ -7,12 +7,15 @@ from typing import Any
 from typing import Callable
 
 try:
+    from PySide6.QtCore import QTimer
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QBrush
     from PySide6.QtGui import QColor
     from PySide6.QtWidgets import QAbstractItemView
     from PySide6.QtWidgets import QApplication
     from PySide6.QtWidgets import QComboBox
+    from PySide6.QtWidgets import QDialog
+    from PySide6.QtWidgets import QFileDialog
     from PySide6.QtWidgets import QFrame
     from PySide6.QtWidgets import QHBoxLayout
     from PySide6.QtWidgets import QHeaderView
@@ -67,6 +70,10 @@ from .tracker_baseline_compare import BaselineComparisonKind
 from .tracker_baseline_compare import BaselineComparisonResult
 from .tracker_baseline_compare import BaselineComparisonSource
 from .tracker_baseline_compare import TrackerBaseline
+from .tracker_baseline_export import BaselineExportError
+from .tracker_baseline_export import baseline_export_fields
+from .tracker_baseline_export import export_baseline_comparison_xlsx
+from .tracker_baseline_export_dialog import BaselineExportFieldDialog
 from .tracker_table_field_dialog import TrackerTableFieldDialog
 from .tracker_table_field_dialog import is_table_field
 from .tracker_table_field_dialog import table_field_summary
@@ -80,6 +87,7 @@ from .wiki_renderer import payload_uses_wiki
 ITEM_SUMMARY_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 PLACEHOLDER_ROLE = int(Qt.ItemDataRole.UserRole) + 2
 CHILDREN_LOADED_ROLE = int(Qt.ItemDataRole.UserRole) + 3
+BASELINE_COMPARISON_ROLE = int(Qt.ItemDataRole.UserRole) + 4
 HIERARCHY_FETCH_PAGE_SIZE = 500
 DEFAULT_SEARCH_PAGE_SIZE = 50
 
@@ -94,7 +102,7 @@ REQUEST_BUSY_MESSAGES = {
     "search_schema": "상세 검색에 사용할 필드를 확인하는 중입니다.",
     "search_all": "검색 결과 전체 대상을 확인하는 중입니다.",
     "baseline_list": "비교 가능한 baseline 목록을 불러오는 중입니다.",
-    "baseline_compare": "선택한 아이템을 두 기준에서 비교하는 중입니다.",
+    "baseline_compare": "트래커 전체 아이템을 두 기준에서 비교하는 중입니다.",
     "direct": "아이템 ID의 위치와 계층을 확인하는 중입니다.",
     "editor_schema": "수정 가능한 필드를 확인하는 중입니다.",
     "item_write": "트래커 아이템 변경 사항을 반영하는 중입니다.",
@@ -129,7 +137,7 @@ def _blend_colors(base: QColor, accent: QColor, ratio: float) -> QColor:
 
 
 class _BaselineComparisonPanel(QWidget):
-    """선택한 단일 아이템을 두 읽기 전용 기준에서 비교한다."""
+    """전체 비교 기준 선택과 선택 아이템 상세를 함께 표시한다."""
 
     _KIND_BADGES = {
         BaselineComparisonKind.ADDED: "＋ 추가",
@@ -148,10 +156,14 @@ class _BaselineComparisonPanel(QWidget):
     def __init__(
         self,
         run_comparison: Callable[[BaselineComparisonSource, BaselineComparisonSource], None],
+        sources_changed: Callable[[], None],
+        export_comparison: Callable[[], None],
         parent=None,
     ) -> None:
         super().__init__(parent)
         self._run_comparison = run_comparison
+        self._sources_changed = sources_changed
+        self._export_comparison = export_comparison
         self._result: BaselineComparisonResult | None = None
 
         layout = QVBoxLayout(self)
@@ -165,13 +177,21 @@ class _BaselineComparisonPanel(QWidget):
         self.after_combo.addItem("선택하세요", "")
         self.after_combo.addItem("현재 상태", None)
         source_row.addWidget(self.after_combo, 1)
-        self.run_button = QPushButton("선택 아이템 비교", self)
+        self.run_button = QPushButton("전체 비교 다시 불러오기", self)
         self.run_button.setObjectName("primary_button")
         self.run_button.clicked.connect(self._run)
         source_row.addWidget(self.run_button)
+        self.export_button = QPushButton("Excel 내보내기", self)
+        self.export_button.setObjectName("baseline_export_button")
+        self.export_button.setEnabled(False)
+        self.export_button.clicked.connect(self._export_comparison)
+        source_row.addWidget(self.export_button)
         layout.addLayout(source_row)
 
-        self.status_label = QLabel("왼쪽 현재 계층에서 아이템을 선택하세요.", self)
+        self.before_combo.currentIndexChanged.connect(self._on_source_changed)
+        self.after_combo.currentIndexChanged.connect(self._on_source_changed)
+
+        self.status_label = QLabel("비교할 두 기준을 선택하세요.", self)
         self.status_label.setObjectName("tracker_panel_status")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
@@ -211,11 +231,15 @@ class _BaselineComparisonPanel(QWidget):
         if before == after:
             self.status_label.setText("서로 다른 두 비교 기준을 선택하세요.")
             return
-        self.run_button.setEnabled(False)
-        self.status_label.setText("선택한 아이템을 두 기준에서 조회하는 중입니다.")
+        self.set_loading("트래커 전체 비교 데이터를 다시 불러오는 중입니다.")
         self._run_comparison(before, after)
 
+    def _on_source_changed(self, *_args) -> None:
+        self._sources_changed()
+
     def set_baselines(self, baselines: tuple[TrackerBaseline, ...]) -> None:
+        self.before_combo.blockSignals(True)
+        self.after_combo.blockSignals(True)
         self.before_combo.clear()
         self.after_combo.clear()
         self.before_combo.addItem("현재 상태", None)
@@ -227,6 +251,8 @@ class _BaselineComparisonPanel(QWidget):
                 label = f"{label} ({baseline.created_at})"
             self.before_combo.addItem(label, baseline.baseline_id)
             self.after_combo.addItem(label, baseline.baseline_id)
+        self.before_combo.blockSignals(False)
+        self.after_combo.blockSignals(False)
         self.status_label.setText(
             f"현재 트래커에서 비교 가능한 baseline {len(baselines)}개를 불러왔습니다."
         )
@@ -234,9 +260,58 @@ class _BaselineComparisonPanel(QWidget):
     def sources(self) -> tuple[BaselineComparisonSource | None, BaselineComparisonSource | None]:
         return self._source(self.before_combo), self._source(self.after_combo)
 
-    def set_result(self, result: BaselineComparisonResult) -> None:
+    def source_labels(self) -> tuple[str, str]:
+        return self.before_combo.currentText(), self.after_combo.currentText()
+
+    def set_loading(self, message: str) -> None:
+        self.run_button.setEnabled(False)
+        self.export_button.setEnabled(False)
+        self.status_label.setText(message)
+
+    def set_result(
+        self,
+        result: BaselineComparisonResult,
+        *,
+        selected_item_id: int | None = None,
+    ) -> None:
         self._result = result
         self.run_button.setEnabled(True)
+        self.export_button.setEnabled(bool(result.items))
+        if selected_item_id is None and len(result.items) == 1:
+            selected_item_id = result.items[0].item_id
+        if selected_item_id is None:
+            self.detail.setRowCount(0)
+            self._show_result_summary(result)
+            return
+        self.select_item(selected_item_id)
+
+    def _show_result_summary(self, result: BaselineComparisonResult) -> None:
+        self.status_label.setText(
+            f"전체 {len(result.items)}개 · "
+            f"추가 {result.count(BaselineComparisonKind.ADDED)} · "
+            f"삭제 {result.count(BaselineComparisonKind.REMOVED)} · "
+            f"변경 {result.count(BaselineComparisonKind.CHANGED)} · "
+            f"동일 {result.count(BaselineComparisonKind.UNCHANGED)} · "
+            "왼쪽에서 아이템을 선택하면 상세 비교를 표시합니다."
+        )
+
+    def select_item(self, item_id: int) -> None:
+        result = self._result
+        if result is None:
+            self.detail.setRowCount(0)
+            self.status_label.setText("전체 비교 데이터를 먼저 불러오세요.")
+            return
+        comparison = next(
+            (item for item in result.items if item.item_id == int(item_id)),
+            None,
+        )
+        if comparison is None:
+            self.detail.setRowCount(0)
+            self.status_label.setText(f"#{item_id}은(는) 전체 비교 결과에 없습니다.")
+            return
+        self._render_comparison(comparison)
+
+    def _render_comparison(self, comparison) -> None:
         header = self.detail.horizontalHeader()
         sort_column = header.sortIndicatorSection()
         sort_order = header.sortIndicatorOrder()
@@ -245,11 +320,6 @@ class _BaselineComparisonPanel(QWidget):
             sort_order = Qt.SortOrder.AscendingOrder
         self.detail.setSortingEnabled(False)
         self.detail.setRowCount(0)
-        if not result.items:
-            self.status_label.setText("선택한 아이템을 두 기준에서 찾지 못했습니다.")
-            self.detail.setSortingEnabled(True)
-            return
-        comparison = result.items[0]
         changed_count = sum(field.is_changed for field in comparison.fields)
         self.status_label.setText(
             f"#{comparison.item_id} · {self._KIND_BADGES[comparison.kind]} · "
@@ -313,20 +383,26 @@ class _BaselineComparisonPanel(QWidget):
 
     def set_error(self, message: str) -> None:
         self.run_button.setEnabled(True)
+        self.export_button.setEnabled(self._result is not None and bool(self._result.items))
         self.status_label.setText(message)
 
     def clear_result(self, message: str) -> None:
         self._result = None
         self.run_button.setEnabled(True)
+        self.export_button.setEnabled(False)
         self.detail.setRowCount(0)
         self.status_label.setText(message)
 
     def reset_state(self, message: str) -> None:
+        self.before_combo.blockSignals(True)
+        self.after_combo.blockSignals(True)
         self.before_combo.clear()
         self.after_combo.clear()
         self.before_combo.addItem("현재 상태", None)
         self.after_combo.addItem("선택하세요", "")
         self.after_combo.addItem("현재 상태", None)
+        self.before_combo.blockSignals(False)
+        self.after_combo.blockSignals(False)
         self.clear_result(message)
 
 
@@ -398,6 +474,13 @@ class TrackerWorkspacePage(QWidget):
         self._baseline_selected_item_id: int | None = None
         self._baseline_loaded_tracker_id: int | None = None
         self._baseline_loading_tracker_id: int | None = None
+        self._baseline_comparison_result: BaselineComparisonResult | None = None
+        self._baseline_comparison_cache_key: tuple[int, int | None, int | None] | None = None
+        self._baseline_comparison_loading_key: tuple[int, int | None, int | None] | None = None
+        self._baseline_compare_timer = QTimer(self)
+        self._baseline_compare_timer.setSingleShot(True)
+        self._baseline_compare_timer.setInterval(250)
+        self._baseline_compare_timer.timeout.connect(self._run_queued_baseline_comparison)
         self._current_detail: TrackerItemDetail | None = None
         self._description_text = ""
         self._description_uses_wiki = False
@@ -788,16 +871,22 @@ class TrackerWorkspacePage(QWidget):
         splitter = QSplitter(Qt.Orientation.Horizontal, page)
         splitter.setChildrenCollapsible(False)
 
-        tree_panel = QFrame(splitter)
-        tree_layout = QVBoxLayout(tree_panel)
+        browser_panel = QFrame(splitter)
+        browser_layout = QVBoxLayout(browser_panel)
         tree_toolbar = QHBoxLayout()
-        self.baseline_tree_status_label = QLabel("트래커를 선택하세요.", tree_panel)
+        self.baseline_tree_status_label = QLabel("트래커를 선택하세요.", browser_panel)
         tree_toolbar.addWidget(self.baseline_tree_status_label, 1)
-        self.baseline_reload_button = QPushButton("다시 불러오기", tree_panel)
+        self.baseline_reload_button = QPushButton("다시 불러오기", browser_panel)
         self.baseline_reload_button.clicked.connect(self._reload_baseline_workspace)
         tree_toolbar.addWidget(self.baseline_reload_button)
-        tree_layout.addLayout(tree_toolbar)
-        self.baseline_item_tree = QTreeWidget(tree_panel)
+        browser_layout.addLayout(tree_toolbar)
+
+        self.baseline_browser_tabs = QTabWidget(browser_panel)
+        self.baseline_browser_tabs.setObjectName("baseline_browser_tabs")
+        hierarchy_tab = QWidget(self.baseline_browser_tabs)
+        hierarchy_layout = QVBoxLayout(hierarchy_tab)
+        hierarchy_layout.setContentsMargins(0, 0, 0, 0)
+        self.baseline_item_tree = QTreeWidget(hierarchy_tab)
         self.baseline_item_tree.setColumnCount(2)
         self.baseline_item_tree.setHeaderLabels(["ID", "요약"])
         self.baseline_item_tree.setAlternatingRowColors(True)
@@ -806,12 +895,82 @@ class TrackerWorkspacePage(QWidget):
         self.baseline_item_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.baseline_item_tree.itemExpanded.connect(self._on_baseline_tree_item_expanded)
         self.baseline_item_tree.itemSelectionChanged.connect(self._on_baseline_tree_selection_changed)
-        tree_layout.addWidget(self.baseline_item_tree, 1)
+        hierarchy_layout.addWidget(self.baseline_item_tree, 1)
+        self.baseline_browser_tabs.addTab(hierarchy_tab, "현재 계층")
 
-        panel = _BaselineComparisonPanel(self._run_baseline_comparison, splitter)
+        results_tab = QWidget(self.baseline_browser_tabs)
+        results_layout = QVBoxLayout(results_tab)
+        results_layout.setContentsMargins(0, 0, 0, 0)
+        filter_row = QHBoxLayout()
+        self.baseline_result_filter = QComboBox(results_tab)
+        self.baseline_result_filter.setObjectName("baseline_result_filter")
+        self.baseline_result_filter.addItem("전체 결과", "")
+        self.baseline_result_filter.addItem("추가", BaselineComparisonKind.ADDED.value)
+        self.baseline_result_filter.addItem("삭제", BaselineComparisonKind.REMOVED.value)
+        self.baseline_result_filter.addItem("변경", BaselineComparisonKind.CHANGED.value)
+        self.baseline_result_filter.addItem("변경 없음", BaselineComparisonKind.UNCHANGED.value)
+        self.baseline_result_filter.currentIndexChanged.connect(
+            self._render_baseline_comparison_results
+        )
+        filter_row.addWidget(self.baseline_result_filter)
+        self.baseline_result_search = QLineEdit(results_tab)
+        self.baseline_result_search.setObjectName("baseline_result_search")
+        self.baseline_result_search.setPlaceholderText("ID 또는 아이템명 검색")
+        self.baseline_result_search.textChanged.connect(
+            self._render_baseline_comparison_results
+        )
+        filter_row.addWidget(self.baseline_result_search, 1)
+        results_layout.addLayout(filter_row)
+        self.baseline_result_table = QTableWidget(0, 5, results_tab)
+        self.baseline_result_table.setObjectName("baseline_result_table")
+        self.baseline_result_table.setHorizontalHeaderLabels(
+            ["결과", "ID", "요약", "변경 필드", "전체 필드"]
+        )
+        self.baseline_result_table.setAlternatingRowColors(True)
+        self.baseline_result_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.baseline_result_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self.baseline_result_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.baseline_result_table.verticalHeader().setVisible(False)
+        self.baseline_result_table.setSortingEnabled(True)
+        self.baseline_result_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.baseline_result_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.baseline_result_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.Stretch
+        )
+        self.baseline_result_table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.baseline_result_table.horizontalHeader().setSectionResizeMode(
+            4, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.baseline_result_table.itemSelectionChanged.connect(
+            self._on_baseline_result_selection_changed
+        )
+        results_layout.addWidget(self.baseline_result_table, 1)
+        self.baseline_browser_tabs.addTab(results_tab, "전체 비교 결과")
+        browser_layout.addWidget(self.baseline_browser_tabs, 1)
+
+        panel = _BaselineComparisonPanel(
+            lambda reference, comparison: self._run_baseline_comparison(
+                reference, comparison, force=True
+            ),
+            self._on_baseline_sources_changed,
+            self._export_baseline_comparison,
+            splitter,
+        )
         panel.setObjectName("tracker_baseline_comparison_panel")
         self.baseline_comparison_panel = panel
-        splitter.addWidget(tree_panel)
+        splitter.addWidget(browser_panel)
         splitter.addWidget(panel)
         splitter.setStretchFactor(0, 4)
         splitter.setStretchFactor(1, 6)
@@ -962,11 +1121,18 @@ class TrackerWorkspacePage(QWidget):
         self._reset_workspace("프로젝트와 트래커를 불러오는 중입니다.")
 
     def _reset_workspace(self, message: str) -> None:
+        self._baseline_compare_timer.stop()
         self.item_tree.clear()
         self.baseline_item_tree.clear()
+        self.baseline_result_table.setRowCount(0)
+        self.baseline_result_filter.setCurrentIndex(0)
+        self.baseline_result_search.clear()
         self._baseline_selected_item_id = None
         self._baseline_loaded_tracker_id = None
         self._baseline_loading_tracker_id = None
+        self._baseline_comparison_result = None
+        self._baseline_comparison_cache_key = None
+        self._baseline_comparison_loading_key = None
         self.tree_status_label.setText(message)
         self.baseline_tree_status_label.setText(message)
         self.baseline_comparison_panel.reset_state(message)
@@ -975,10 +1141,17 @@ class TrackerWorkspacePage(QWidget):
         self.search_next_button.setEnabled(False)
 
     def _reset_baseline_state(self, message: str) -> None:
+        self._baseline_compare_timer.stop()
         self._baseline_selected_item_id = None
         self._baseline_loaded_tracker_id = None
         self._baseline_loading_tracker_id = None
+        self._baseline_comparison_result = None
+        self._baseline_comparison_cache_key = None
+        self._baseline_comparison_loading_key = None
         self.baseline_item_tree.clear()
+        self.baseline_result_table.setRowCount(0)
+        self.baseline_result_filter.setCurrentIndex(0)
+        self.baseline_result_search.clear()
         self.baseline_tree_status_label.setText(message)
         self.baseline_comparison_panel.reset_state(message)
 
@@ -1596,13 +1769,75 @@ class TrackerWorkspacePage(QWidget):
         if not isinstance(summary, TrackerItemSummary):
             return
         self._baseline_selected_item_id = summary.item_id
-        before, after = self.baseline_comparison_panel.sources()
-        if before is not None and after is not None and before != after:
-            self._run_baseline_comparison(before, after)
+        if self._baseline_comparison_result is not None:
+            self.baseline_comparison_panel.select_item(summary.item_id)
         else:
             self.baseline_comparison_panel.set_error(
-                f"#{summary.item_id}을(를) 선택했습니다. 비교할 두 기준을 선택하세요."
+                f"#{summary.item_id}을(를) 선택했습니다. 전체 비교 데이터를 먼저 불러오세요."
             )
+
+    def _on_baseline_result_selection_changed(self) -> None:
+        selected = self.baseline_result_table.selectedItems()
+        if not selected:
+            return
+        id_cell = self.baseline_result_table.item(selected[0].row(), 1)
+        comparison = (
+            id_cell.data(BASELINE_COMPARISON_ROLE) if id_cell is not None else None
+        )
+        if comparison is None:
+            return
+        self._baseline_selected_item_id = int(comparison.item_id)
+        self.baseline_comparison_panel.select_item(comparison.item_id)
+
+    def _render_baseline_comparison_results(self, *_args) -> None:
+        result = self._baseline_comparison_result
+        self.baseline_result_table.setSortingEnabled(False)
+        self.baseline_result_table.setRowCount(0)
+        if result is None:
+            self.baseline_result_table.setSortingEnabled(True)
+            return
+        kind_filter = str(self.baseline_result_filter.currentData() or "")
+        needle = self.baseline_result_search.text().strip().casefold()
+        visible = []
+        for comparison in result.items:
+            if kind_filter and comparison.kind.value != kind_filter:
+                continue
+            if needle and needle not in str(comparison.item_id) and needle not in comparison.name.casefold():
+                continue
+            visible.append(comparison)
+        self.baseline_result_table.setRowCount(len(visible))
+        palette = self.baseline_result_table.palette()
+        base_color = palette.base().color()
+        for row, comparison in enumerate(visible):
+            changed_count = sum(field.is_changed for field in comparison.fields)
+            values = (
+                _BaselineComparisonPanel._KIND_BADGES[comparison.kind],
+                str(comparison.item_id),
+                comparison.name,
+                str(changed_count),
+                str(len(comparison.fields)),
+            )
+            sort_values = (
+                comparison.kind.value,
+                comparison.item_id,
+                comparison.name.casefold(),
+                changed_count,
+                len(comparison.fields),
+            )
+            accent = _BaselineComparisonPanel._KIND_ACCENTS[comparison.kind]
+            background = QBrush(_blend_colors(base_color, accent, 0.16))
+            for column, value in enumerate(values):
+                cell = _SortableTableItem(value, sort_values[column])
+                cell.setToolTip(value)
+                cell.setBackground(background)
+                if column == 1:
+                    cell.setData(BASELINE_COMPARISON_ROLE, comparison)
+                self.baseline_result_table.setItem(row, column, cell)
+        self.baseline_result_table.setSortingEnabled(True)
+        self.baseline_result_table.sortItems(1, Qt.SortOrder.AscendingOrder)
+        self.baseline_tree_status_label.setText(
+            f"전체 비교 {len(result.items)}개 · 현재 표시 {len(visible)}개"
+        )
 
     def _on_search_selection_changed(self) -> None:
         selected = self.search_table.selectedItems()
@@ -2027,6 +2262,49 @@ class TrackerWorkspacePage(QWidget):
         if int(index) == self.baseline_mode_index:
             self._refresh_baseline_comparison()
 
+    def _baseline_comparison_key(
+        self,
+        reference_source: BaselineComparisonSource,
+        comparison_source: BaselineComparisonSource,
+    ) -> tuple[int, int | None, int | None] | None:
+        tracker = self._current_tracker
+        if tracker is None:
+            return None
+        return (
+            tracker.tracker_id,
+            reference_source.baseline_id,
+            comparison_source.baseline_id,
+        )
+
+    def _on_baseline_sources_changed(self) -> None:
+        self._baseline_compare_timer.stop()
+        self._baseline_comparison_result = None
+        self._baseline_comparison_cache_key = None
+        self._baseline_comparison_loading_key = None
+        self.baseline_result_table.setRowCount(0)
+        self.baseline_comparison_panel.clear_result(
+            "비교 기준이 변경되었습니다. 전체 비교 데이터를 불러오는 중입니다."
+        )
+        reference, comparison = self.baseline_comparison_panel.sources()
+        if reference is None or comparison is None:
+            self.baseline_comparison_panel.clear_result("비교할 두 기준을 선택하세요.")
+            return
+        if reference == comparison:
+            self.baseline_comparison_panel.clear_result(
+                "서로 다른 두 비교 기준을 선택하세요."
+            )
+            return
+        if self.synchronous:
+            self._run_baseline_comparison(reference, comparison)
+        else:
+            self._baseline_compare_timer.start()
+
+    def _run_queued_baseline_comparison(self) -> None:
+        reference, comparison = self.baseline_comparison_panel.sources()
+        if reference is None or comparison is None or reference == comparison:
+            return
+        self._run_baseline_comparison(reference, comparison)
+
     def _reload_baseline_workspace(self) -> None:
         tracker = self._current_tracker
         if tracker is None:
@@ -2074,28 +2352,60 @@ class TrackerWorkspacePage(QWidget):
         self,
         reference_source: BaselineComparisonSource,
         comparison_source: BaselineComparisonSource,
+        *,
+        force: bool = False,
     ) -> None:
         tracker = self._current_tracker
         if tracker is None:
             self.baseline_comparison_panel.set_error("비교할 트래커를 먼저 선택하세요.")
             return
-        item_id = self._baseline_selected_item_id
-        if item_id is None:
-            self.baseline_comparison_panel.set_error("왼쪽 현재 계층에서 비교할 아이템을 선택하세요.")
+        key = self._baseline_comparison_key(reference_source, comparison_source)
+        if key is None:
+            return
+        if not force and self._baseline_comparison_cache_key == key:
+            result = self._baseline_comparison_result
+            if result is not None:
+                self.baseline_comparison_panel.set_result(
+                    result,
+                    selected_item_id=self._baseline_selected_item_id,
+                )
+                self._render_baseline_comparison_results()
+                return
+        if not force and self._baseline_comparison_loading_key == key:
             return
         settings = self.settings_provider()
+        self._baseline_comparison_loading_key = key
+        self.baseline_comparison_panel.set_loading(
+            "트래커 전체 아이템을 두 기준에서 조회하는 중입니다."
+        )
 
         def loaded(result: BaselineComparisonResult) -> None:
-            self.baseline_comparison_panel.set_result(result)
+            current_reference, current_comparison = self.baseline_comparison_panel.sources()
+            current_key = (
+                self._baseline_comparison_key(current_reference, current_comparison)
+                if current_reference is not None and current_comparison is not None
+                else None
+            )
+            if current_key != key:
+                return
+            self._baseline_comparison_loading_key = None
+            self._baseline_comparison_result = result
+            self._baseline_comparison_cache_key = key
+            self.baseline_comparison_panel.set_result(
+                result,
+                selected_item_id=self._baseline_selected_item_id,
+            )
+            self._render_baseline_comparison_results()
 
         def failed(exc: Exception) -> None:
+            if self._baseline_comparison_loading_key == key:
+                self._baseline_comparison_loading_key = None
             self.baseline_comparison_panel.set_error(str(exc))
 
         self._submit(
             "baseline_compare",
-            lambda: self.service.compare_item_at_sources(
+            lambda: self.service.compare_tracker_at_sources(
                 settings,
-                item_id,
                 tracker.tracker_id,
                 reference_source=reference_source,
                 comparison_source=comparison_source,
@@ -2103,6 +2413,86 @@ class TrackerWorkspacePage(QWidget):
             loaded,
             failed,
         )
+
+    def _export_baseline_comparison(self) -> None:
+        result = self._baseline_comparison_result
+        tracker = self._current_tracker
+        if result is None or tracker is None or self._baseline_comparison_cache_key is None:
+            self.baseline_comparison_panel.set_error(
+                "전체 비교 데이터를 불러온 뒤 Excel로 내보낼 수 있습니다."
+            )
+            return
+        fields = baseline_export_fields(result)
+        if not fields:
+            self.baseline_comparison_panel.set_error("내보낼 비교 필드가 없습니다.")
+            return
+        field_dialog = BaselineExportFieldDialog(fields, self)
+        if field_dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        selected_keys = field_dialog.selected_field_keys()
+        default_name = f"baseline_comparison_{tracker.tracker_id}.xlsx"
+        output_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Baseline 비교 Excel 저장",
+            default_name,
+            "Excel 통합 문서 (*.xlsx)",
+        )
+        if not output_path:
+            return
+        reference_label, comparison_label = self.baseline_comparison_panel.source_labels()
+        project = self._current_project
+        try:
+            summary = export_baseline_comparison_xlsx(
+                result,
+                output_path,
+                tracker_name=f"{tracker.name} (ID {tracker.tracker_id})",
+                reference_label=reference_label,
+                comparison_label=comparison_label,
+                selected_field_keys=selected_keys,
+            )
+        except BaselineExportError as exc:
+            self.baseline_comparison_panel.set_error(str(exc))
+            self._record_activity(
+                ActivityRecord.create(
+                    ActivityOperation.BASELINE_EXPORT,
+                    ActivityResult.FAILED,
+                    source="tracker_workspace",
+                    summary="Baseline 비교 Excel 내보내기 실패",
+                    project_id=project.project_id if project else tracker.project_id,
+                    project_name=project.name if project else tracker.project_name,
+                    tracker_id=tracker.tracker_id,
+                    tracker_name=tracker.name,
+                    details={
+                        "selectedFieldCount": len(selected_keys),
+                        "itemCount": len(result.items),
+                    },
+                )
+            )
+            return
+        self._record_activity(
+            ActivityRecord.create(
+                ActivityOperation.BASELINE_EXPORT,
+                ActivityResult.SUCCESS,
+                source="tracker_workspace",
+                summary=(
+                    f"Baseline 비교 {summary.item_count}개 아이템을 Excel로 내보냈습니다."
+                ),
+                project_id=project.project_id if project else tracker.project_id,
+                project_name=project.name if project else tracker.project_name,
+                tracker_id=tracker.tracker_id,
+                tracker_name=tracker.name,
+                details={
+                    "selectedFieldCount": summary.selected_field_count,
+                    "itemCount": summary.item_count,
+                    "dataRowCount": summary.data_row_count,
+                },
+            )
+        )
+        self.baseline_comparison_panel.status_label.setText(
+            f"Excel 내보내기 완료 · 아이템 {summary.item_count}개 · "
+            f"데이터 행 {summary.data_row_count}개"
+        )
+        self._set_workspace_status("Baseline 비교 Excel 파일을 저장했습니다.")
 
     def _render_search_results(self, result: PageResult[TrackerItemSummary]) -> None:
         self.search_table.blockSignals(True)

@@ -451,7 +451,13 @@ class TrackerQueryService:
             normalize=normalize,
         )
 
-    def search(self, settings, query: TrackerQuery) -> PageResult[TrackerItemSummary]:
+    def search(
+        self,
+        settings,
+        query: TrackerQuery,
+        *,
+        require_full_items: bool = False,
+    ) -> PageResult[TrackerItemSummary]:
         scoped_cbql = self._run("build_query", query.build_cbql)
         client = self._client(settings, "search_items")
         payload = self._run(
@@ -463,6 +469,14 @@ class TrackerQueryService:
                 page_size=query.page_size,
             ),
         )
+        if require_full_items and not (
+            isinstance(payload, dict) and isinstance(payload.get("items"), list)
+        ):
+            raise TrackerQueryServiceError(
+                TrackerQueryErrorKind.SERVER,
+                "전체 비교에는 items가 포함된 query 응답이 필요합니다.",
+                operation="search_items",
+            )
         raw_items = self._extract_list(payload, "items", "itemRefs")
         normalized_items: list[TrackerItemSummary] = []
         for item in raw_items:
@@ -528,6 +542,7 @@ class TrackerQueryService:
         query: TrackerQuery,
         *,
         page_size: int = 500,
+        require_full_items: bool = False,
     ) -> tuple[TrackerItemSummary, ...]:
         """검색 조건에 맞는 전체 ID를 서버 페이지 단위로 빠짐없이 수집한다."""
         normalized_page_size = min(max(int(page_size), 1), 500)
@@ -538,6 +553,7 @@ class TrackerQueryService:
             result = self.search(
                 settings,
                 replace(query, page=page, page_size=normalized_page_size),
+                require_full_items=require_full_items,
             )
             added = 0
             for summary in result.items:
@@ -556,6 +572,50 @@ class TrackerQueryService:
                 )
             page += 1
         return tuple(collected)
+
+    def compare_tracker_at_sources(
+        self,
+        settings,
+        tracker_id: int,
+        *,
+        reference_source: BaselineComparisonSource,
+        comparison_source: BaselineComparisonSource,
+        page_size: int = 500,
+    ) -> BaselineComparisonResult:
+        """두 기준의 트래커 전체 아이템을 query로 조회해 한 번에 비교한다."""
+        if reference_source == comparison_source:
+            raise TrackerQueryServiceError(
+                TrackerQueryErrorKind.INVALID_QUERY,
+                "서로 다른 두 비교 기준을 선택하세요.",
+                operation="compare_tracker_at_sources",
+            )
+        normalized_tracker_id = int(tracker_id)
+
+        def load_source(
+            source: BaselineComparisonSource,
+        ) -> tuple[TrackerItemSummary, ...]:
+            return self.load_all_search_items(
+                settings,
+                TrackerQuery(
+                    tracker_id=normalized_tracker_id,
+                    page=1,
+                    page_size=page_size,
+                    sort="item.id ASC",
+                    baseline_id=source.baseline_id,
+                ),
+                page_size=page_size,
+                require_full_items=True,
+            )
+
+        reference = load_source(reference_source)
+        comparison = load_source(comparison_source)
+        # 내부 before/after는 비교 대상에서 기준으로 이동한 변화 방향을 나타낸다.
+        return compare_tracker_items(
+            comparison,
+            reference,
+            before_source=comparison_source,
+            after_source=reference_source,
+        )
 
     def compare_item_at_sources(
         self,

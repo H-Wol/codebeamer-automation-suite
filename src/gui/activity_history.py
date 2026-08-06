@@ -23,6 +23,7 @@ class ActivityOperation(str, Enum):
     TRACKER_DELETE = "tracker_delete"
     BULK_UPDATE = "bulk_update"
     BATCH_UPLOAD = "batch_upload"
+    BASELINE_EXPORT = "baseline_export"
 
 
 class ActivityResult(str, Enum):
@@ -39,6 +40,7 @@ ACTIVITY_OPERATION_LABELS = {
     ActivityOperation.TRACKER_DELETE: "아이템 삭제",
     ActivityOperation.BULK_UPDATE: "일괄 수정",
     ActivityOperation.BATCH_UPLOAD: "배치 작업",
+    ActivityOperation.BASELINE_EXPORT: "Baseline Excel 내보내기",
 }
 
 ACTIVITY_RESULT_LABELS = {
