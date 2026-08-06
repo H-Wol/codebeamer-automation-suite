@@ -47,7 +47,6 @@ class BaselineExportFieldDialog(QDialog):
 
         self.field_list = QListWidget(self)
         self.field_list.setObjectName("baseline_export_field_list")
-        self.field_list.itemChanged.connect(self._update_status)
         for field in self.fields:
             suffix = (
                 f" · TableField {len(field.table_columns)}열"
@@ -82,6 +81,7 @@ class BaselineExportFieldDialog(QDialog):
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
+        self.field_list.itemChanged.connect(self._update_status)
         self._update_status()
 
     def selected_field_keys(self) -> tuple[str, ...]:
