@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import tempfile
 from typing import Any
 
 from openpyxl import Workbook
 from openpyxl.cell import Cell
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment
 from openpyxl.styles import Border
 from openpyxl.styles import Font
@@ -24,8 +26,14 @@ from .tracker_baseline_compare import table_field_rows
 
 
 EXCEL_MAX_CELL_TEXT = 32767
+EXCEL_MAX_CELL_LINE_FEEDS = 253
 EXCEL_MAX_COLUMNS = 16384
 EXCEL_MAX_ROWS = 1048576
+LONG_VALUE_CELL_TEXT = 30000
+LONG_VALUE_CELL_LINE_FEEDS = 200
+LONG_VALUE_PREVIEW_TEXT = 180
+LONG_VALUE_PREVIEW_LINE_FEEDS = 3
+LONG_VALUE_SHEET_TITLE = "긴 값 전체보기"
 
 
 class BaselineExportError(RuntimeError):
@@ -49,7 +57,104 @@ class BaselineExportSummary:
     item_count: int
     data_row_count: int
     selected_field_count: int
+    long_value_count: int = 0
+    long_value_part_count: int = 0
     output_path: str = ""
+
+
+@dataclass(frozen=True)
+class _LongValueRecord:
+    kind: BaselineComparisonKind
+    item_id: int
+    item_name: str
+    field_label: str
+    table_row: int | None
+    table_column: str
+    reference_parts: tuple[str, ...]
+    comparison_parts: tuple[str, ...]
+    reference_is_long: bool
+    comparison_is_long: bool
+    reference_source: str
+    comparison_source: str
+    is_changed: bool
+    reference_empty: bool
+    comparison_empty: bool
+    start_row: int
+
+    @property
+    def row_count(self) -> int:
+        return max(len(self.reference_parts), len(self.comparison_parts), 1)
+
+
+@dataclass(frozen=True)
+class _LongValueTarget:
+    start_row: int
+    reference_is_long: bool
+    comparison_is_long: bool
+
+
+class _LongValueCollector:
+    def __init__(self) -> None:
+        self.records: list[_LongValueRecord] = []
+        self.data_row_count = 0
+        self.value_count = 0
+
+    def add_if_needed(
+        self,
+        *,
+        kind: BaselineComparisonKind,
+        item_id: int,
+        item_name: str,
+        field_label: str,
+        reference_text: str,
+        comparison_text: str,
+        reference_source: str,
+        comparison_source: str,
+        is_changed: bool,
+        reference_empty: bool,
+        comparison_empty: bool,
+        table_row: int | None = None,
+        table_column: str = "",
+    ) -> _LongValueTarget | None:
+        normalized_reference = _normalize_excel_text(reference_text)
+        normalized_comparison = _normalize_excel_text(comparison_text)
+        reference_is_long = _requires_long_value_sheet(normalized_reference)
+        comparison_is_long = _requires_long_value_sheet(normalized_comparison)
+        if not reference_is_long and not comparison_is_long:
+            return None
+
+        reference_parts = _split_long_value(normalized_reference)
+        comparison_parts = _split_long_value(normalized_comparison)
+        start_row = 3 + self.data_row_count
+        row_count = max(len(reference_parts), len(comparison_parts), 1)
+        if start_row + row_count - 1 > EXCEL_MAX_ROWS:
+            raise BaselineExportError(
+                f"아이템 #{item_id}의 긴 값을 분할하는 중 Excel 행 한도"
+                f"({EXCEL_MAX_ROWS:,}행)를 초과합니다."
+            )
+        self.records.append(
+            _LongValueRecord(
+                kind=kind,
+                item_id=item_id,
+                item_name=item_name,
+                field_label=field_label,
+                table_row=table_row,
+                table_column=table_column,
+                reference_parts=reference_parts,
+                comparison_parts=comparison_parts,
+                reference_is_long=reference_is_long,
+                comparison_is_long=comparison_is_long,
+                reference_source=reference_source,
+                comparison_source=comparison_source,
+                is_changed=is_changed,
+                reference_empty=reference_empty,
+                comparison_empty=comparison_empty,
+                start_row=start_row,
+            )
+        )
+        self.data_row_count += row_count
+        self.value_count += int(reference_is_long) + int(comparison_is_long)
+        return _LongValueTarget(start_row, reference_is_long, comparison_is_long)
 
 
 _KIND_LABELS = {
@@ -144,6 +249,23 @@ def create_baseline_comparison_workbook(
 
     filtered_items = tuple(result.items)
     counts = _selected_counts(filtered_items, selected_fields)
+    long_values = _LongValueCollector()
+    data_row_count = _populate_comparison_sheet(
+        comparison_sheet,
+        items=filtered_items,
+        selected_fields=selected_fields,
+        reference_label=reference_label,
+        comparison_label=comparison_label,
+        long_values=long_values,
+    )
+    if long_values.records:
+        long_value_sheet = workbook.create_sheet(LONG_VALUE_SHEET_TITLE)
+        _populate_long_value_sheet(
+            long_value_sheet,
+            records=tuple(long_values.records),
+            reference_label=reference_label,
+            comparison_label=comparison_label,
+        )
     _populate_summary_sheet(
         summary_sheet,
         tracker_name=tracker_name,
@@ -153,13 +275,8 @@ def create_baseline_comparison_workbook(
         selected_fields=selected_fields,
         item_count=len(filtered_items),
         counts=counts,
-    )
-    data_row_count = _populate_comparison_sheet(
-        comparison_sheet,
-        items=filtered_items,
-        selected_fields=selected_fields,
-        reference_label=reference_label,
-        comparison_label=comparison_label,
+        long_value_count=long_values.value_count,
+        long_value_part_count=long_values.data_row_count,
     )
     workbook.properties.title = "Codebeamer Baseline 비교 결과"
     workbook.properties.subject = str(tracker_name or "Tracker")
@@ -168,6 +285,8 @@ def create_baseline_comparison_workbook(
         item_count=len(filtered_items),
         data_row_count=data_row_count,
         selected_field_count=len(selected_fields),
+        long_value_count=long_values.value_count,
+        long_value_part_count=long_values.data_row_count,
     )
 
 
@@ -191,14 +310,27 @@ def export_baseline_comparison_xlsx(
         comparison_label=comparison_label,
         selected_field_keys=selected_field_keys,
     )
+    temporary_path: Path | None = None
     try:
-        workbook.save(path)
+        with tempfile.NamedTemporaryFile(
+            prefix=f".{path.stem}-",
+            suffix=".xlsx",
+            dir=path.parent,
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+        workbook.save(temporary_path)
+        temporary_path.replace(path)
     except Exception as exc:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
         raise BaselineExportError("Excel 파일을 저장하지 못했습니다.") from exc
     return BaselineExportSummary(
         item_count=summary.item_count,
         data_row_count=summary.data_row_count,
         selected_field_count=summary.selected_field_count,
+        long_value_count=summary.long_value_count,
+        long_value_part_count=summary.long_value_part_count,
         output_path=str(path),
     )
 
@@ -254,6 +386,8 @@ def _populate_summary_sheet(
     selected_fields: tuple[BaselineExportField, ...],
     item_count: int,
     counts: dict[BaselineComparisonKind, int],
+    long_value_count: int,
+    long_value_part_count: int,
 ) -> None:
     sheet["A1"] = "Baseline 비교 내보내기"
     sheet["A1"].font = Font(
@@ -269,16 +403,38 @@ def _populate_summary_sheet(
         ("기준", reference_label),
         ("비교", comparison_label),
         ("생성 시각", generated_at.isoformat(timespec="seconds")),
-        ("선택 필드", "\n".join(field.label for field in selected_fields)),
+        (
+            "선택 필드",
+            _cell_preview(
+                "\n".join(field.label for field in selected_fields),
+                max_text_units=LONG_VALUE_CELL_TEXT,
+                max_line_feeds=LONG_VALUE_CELL_LINE_FEEDS,
+                suffix=f"\n… 총 {len(selected_fields):,}개 필드",
+            ),
+        ),
         ("전체 아이템", item_count),
         ("추가", counts[BaselineComparisonKind.ADDED]),
         ("삭제", counts[BaselineComparisonKind.REMOVED]),
         ("변경", counts[BaselineComparisonKind.CHANGED]),
         ("변경 없음", counts[BaselineComparisonKind.UNCHANGED]),
+        (
+            "긴 값 분할",
+            (
+                f"{long_value_count:,}개 값 · {long_value_part_count:,}개 분할 행"
+                if long_value_count
+                else "없음"
+            ),
+        ),
     )
     for row_index, (label, value) in enumerate(rows, start=3):
         sheet.cell(row_index, 1, label)
         _set_safe_value(sheet.cell(row_index, 2), value, context=label)
+        if label == "긴 값 분할" and long_value_count:
+            _set_internal_link(
+                sheet.cell(row_index, 2),
+                LONG_VALUE_SHEET_TITLE,
+                "A1",
+            )
         sheet.cell(row_index, 1).font = _HEADER_FONT
         sheet.cell(row_index, 1).fill = _HEADER_FILL
         for column in (1, 2):
@@ -310,6 +466,7 @@ def _populate_comparison_sheet(
     selected_fields: tuple[BaselineExportField, ...],
     reference_label: str,
     comparison_label: str,
+    long_values: _LongValueCollector,
 ) -> int:
     headers = _flattened_headers(selected_fields)
     reference_start = 4
@@ -362,7 +519,42 @@ def _populate_comparison_sheet(
         kind = _selected_item_kind(item, selected_keys)
         _merge_item_value(sheet, start_row, end_row, 1, _KIND_LABELS[kind])
         _merge_item_value(sheet, start_row, end_row, 2, item.item_id)
-        _merge_item_value(sheet, start_row, end_row, 3, item.name)
+        reference_name = item.reference.name if item.reference is not None else ""
+        comparison_name = item.comparison.name if item.comparison is not None else ""
+        name_target = long_values.add_if_needed(
+            kind=kind,
+            item_id=item.item_id,
+            item_name=item.name,
+            field_label="아이템명",
+            reference_text=reference_name,
+            comparison_text=comparison_name,
+            reference_source=sheet.cell(start_row, 3).coordinate,
+            comparison_source=sheet.cell(start_row, 3).coordinate,
+            is_changed=reference_name != comparison_name,
+            reference_empty=item.reference is None,
+            comparison_empty=item.comparison is None,
+        )
+        item_name_value = item.name
+        item_name_link_column = 8
+        if name_target is not None:
+            sheet.row_dimensions[start_row].height = max(
+                sheet.row_dimensions[start_row].height or 0,
+                72,
+            )
+            if item.reference is not None and name_target.reference_is_long:
+                item_name_value = _long_value_preview(reference_name)
+                item_name_link_column = 8
+            elif name_target.comparison_is_long:
+                item_name_value = _long_value_preview(comparison_name)
+                item_name_link_column = 9
+        _merge_item_value(sheet, start_row, end_row, 3, item_name_value)
+        if name_target is not None:
+            _set_internal_link(
+                sheet.cell(start_row, 3),
+                LONG_VALUE_SHEET_TITLE,
+                name_target.start_row,
+                item_name_link_column,
+            )
         sheet.cell(start_row, 1).fill = _kind_fill(kind)
         sheet.cell(start_row, 1).font = Font(name=_FONT_NAME, bold=True)
 
@@ -375,12 +567,36 @@ def _populate_comparison_sheet(
                 _merge_item_value(sheet, start_row, end_row, comparison_column, "-")
                 continue
             if not export_field.is_table or table_column is None:
+                reference_text = difference.reference_text()
+                comparison_text = difference.comparison_text()
+                long_target = long_values.add_if_needed(
+                    kind=kind,
+                    item_id=item.item_id,
+                    item_name=item.name,
+                    field_label=difference.label,
+                    reference_text=reference_text,
+                    comparison_text=comparison_text,
+                    reference_source=sheet.cell(start_row, reference_column).coordinate,
+                    comparison_source=sheet.cell(start_row, comparison_column).coordinate,
+                    is_changed=difference.is_changed,
+                    reference_empty=_is_empty(difference.reference),
+                    comparison_empty=_is_empty(difference.comparison),
+                )
+                if long_target is not None:
+                    sheet.row_dimensions[start_row].height = max(
+                        sheet.row_dimensions[start_row].height or 0,
+                        72,
+                    )
                 _merge_item_value(
                     sheet,
                     start_row,
                     end_row,
                     reference_column,
-                    difference.reference_text(),
+                    (
+                        _long_value_preview(reference_text)
+                        if long_target is not None and long_target.reference_is_long
+                        else reference_text
+                    ),
                     context=f"#{item.item_id} {difference.label} 기준",
                 )
                 _merge_item_value(
@@ -388,9 +604,27 @@ def _populate_comparison_sheet(
                     start_row,
                     end_row,
                     comparison_column,
-                    difference.comparison_text(),
+                    (
+                        _long_value_preview(comparison_text)
+                        if long_target is not None and long_target.comparison_is_long
+                        else comparison_text
+                    ),
                     context=f"#{item.item_id} {difference.label} 비교",
                 )
+                if long_target is not None and long_target.reference_is_long:
+                    _set_internal_link(
+                        sheet.cell(start_row, reference_column),
+                        LONG_VALUE_SHEET_TITLE,
+                        long_target.start_row,
+                        8,
+                    )
+                if long_target is not None and long_target.comparison_is_long:
+                    _set_internal_link(
+                        sheet.cell(start_row, comparison_column),
+                        LONG_VALUE_SHEET_TITLE,
+                        long_target.start_row,
+                        9,
+                    )
                 _style_scalar_difference(
                     sheet.cell(start_row, reference_column),
                     sheet.cell(start_row, comparison_column),
@@ -404,8 +638,11 @@ def _populate_comparison_sheet(
                 reference_column=reference_column,
                 comparison_column=comparison_column,
                 item_id=item.item_id,
+                item_name=item.name,
+                kind=kind,
                 difference=difference,
                 table_column=table_column,
+                long_values=long_values,
             )
 
         for row in range(start_row, end_row + 1):
@@ -491,8 +728,11 @@ def _write_table_column(
     reference_column: int,
     comparison_column: int,
     item_id: int,
+    item_name: str,
+    kind: BaselineComparisonKind,
     difference: TrackerFieldDifference,
     table_column: TrackerTableColumn,
+    long_values: _LongValueCollector,
 ) -> None:
     reference_rows = table_field_rows(difference.reference)
     comparison_rows = table_field_rows(difference.comparison)
@@ -510,16 +750,70 @@ def _write_table_column(
         )
         reference_cell = sheet.cell(start_row + offset, reference_column)
         comparison_cell = sheet.cell(start_row + offset, comparison_column)
+        reference_text = (
+            "" if reference_value is missing else _display_cell_value(reference_value)
+        )
+        comparison_text = (
+            "" if comparison_value is missing else _display_cell_value(comparison_value)
+        )
+        long_target = long_values.add_if_needed(
+            kind=kind,
+            item_id=item_id,
+            item_name=item_name,
+            field_label=difference.label,
+            table_row=offset + 1,
+            table_column=table_column.label,
+            reference_text=reference_text,
+            comparison_text=comparison_text,
+            reference_source=reference_cell.coordinate,
+            comparison_source=comparison_cell.coordinate,
+            is_changed=(
+                reference_value is missing
+                or comparison_value is missing
+                or comparison_value_key(reference_value)
+                != comparison_value_key(comparison_value)
+            ),
+            reference_empty=(reference_value is missing or _is_empty(reference_value)),
+            comparison_empty=(comparison_value is missing or _is_empty(comparison_value)),
+        )
+        if long_target is not None:
+            target_row = start_row + offset
+            sheet.row_dimensions[target_row].height = max(
+                sheet.row_dimensions[target_row].height or 0,
+                72,
+            )
         _set_safe_value(
             reference_cell,
-            "" if reference_value is missing else _display_cell_value(reference_value),
+            (
+                _long_value_preview(reference_text)
+                if long_target is not None and long_target.reference_is_long
+                else reference_text
+            ),
             context=f"#{item_id} {difference.label}.{table_column.label} 기준",
         )
         _set_safe_value(
             comparison_cell,
-            "" if comparison_value is missing else _display_cell_value(comparison_value),
+            (
+                _long_value_preview(comparison_text)
+                if long_target is not None and long_target.comparison_is_long
+                else comparison_text
+            ),
             context=f"#{item_id} {difference.label}.{table_column.label} 비교",
         )
+        if long_target is not None and long_target.reference_is_long:
+            _set_internal_link(
+                reference_cell,
+                LONG_VALUE_SHEET_TITLE,
+                long_target.start_row,
+                8,
+            )
+        if long_target is not None and long_target.comparison_is_long:
+            _set_internal_link(
+                comparison_cell,
+                LONG_VALUE_SHEET_TITLE,
+                long_target.start_row,
+                9,
+            )
         reference_cell.alignment = _TOP_WRAP
         comparison_cell.alignment = _TOP_WRAP
         if reference_value is missing and comparison_value is missing:
@@ -555,6 +849,310 @@ def _display_cell_value(value: Any) -> str:
     return str(value)
 
 
+def _populate_long_value_sheet(
+    sheet,
+    *,
+    records: tuple[_LongValueRecord, ...],
+    reference_label: str,
+    comparison_label: str,
+) -> None:
+    sheet.merge_cells("A1:G1")
+    title_cell = sheet["A1"]
+    title_cell.value = LONG_VALUE_SHEET_TITLE
+    _style_group_header(title_cell)
+    reference_header = sheet["H1"]
+    comparison_header = sheet["I1"]
+    _set_safe_value(
+        reference_header,
+        _cell_preview(
+            f"기준 · {reference_label}",
+            max_text_units=1000,
+            max_line_feeds=4,
+            suffix="\n…",
+        ),
+        context="긴 값 기준 제목",
+    )
+    _set_safe_value(
+        comparison_header,
+        _cell_preview(
+            f"비교 · {comparison_label}",
+            max_text_units=1000,
+            max_line_feeds=4,
+            suffix="\n…",
+        ),
+        context="긴 값 비교 제목",
+    )
+    _style_group_header(reference_header)
+    _style_group_header(comparison_header)
+    sheet.merge_cells("J1:J2")
+    navigation_header = sheet["J1"]
+    navigation_header.value = "이동"
+    _style_group_header(navigation_header)
+
+    headers = (
+        "결과",
+        "아이템 ID",
+        "아이템명",
+        "필드",
+        "Table 행",
+        "Table 열",
+        "부분",
+        "전체 내용",
+        "전체 내용",
+    )
+    for column, label in enumerate(headers, start=1):
+        cell = sheet.cell(2, column, label)
+        cell.fill = _HEADER_FILL
+        cell.font = _HEADER_FONT
+        cell.alignment = _CENTER_WRAP
+        cell.border = _BORDER
+
+    for record in records:
+        for offset in range(record.row_count):
+            row = record.start_row + offset
+            reference_part = (
+                record.reference_parts[offset]
+                if offset < len(record.reference_parts)
+                else ""
+            )
+            comparison_part = (
+                record.comparison_parts[offset]
+                if offset < len(record.comparison_parts)
+                else ""
+            )
+            values = (
+                _KIND_LABELS[record.kind],
+                record.item_id,
+                _cell_preview(
+                    record.item_name,
+                    max_text_units=1000,
+                    max_line_feeds=12,
+                    suffix="\n…",
+                ),
+                _cell_preview(
+                    record.field_label,
+                    max_text_units=1000,
+                    max_line_feeds=12,
+                    suffix="\n…",
+                ),
+                record.table_row or "",
+                _cell_preview(
+                    record.table_column,
+                    max_text_units=1000,
+                    max_line_feeds=12,
+                    suffix="\n…",
+                ),
+                f"{offset + 1}/{record.row_count}",
+                reference_part,
+                comparison_part,
+                "비교 결과로 이동",
+            )
+            for column, value in enumerate(values, start=1):
+                cell = sheet.cell(row, column)
+                _set_safe_value(
+                    cell,
+                    value,
+                    context=f"#{record.item_id} 긴 값 {offset + 1}/{record.row_count}",
+                )
+                cell.alignment = _TOP_WRAP
+                cell.border = _BORDER
+            sheet.cell(row, 1).fill = _kind_fill(record.kind)
+            sheet.cell(row, 1).font = Font(name=_FONT_NAME, bold=True)
+            _style_long_value_pair(
+                sheet.cell(row, 8),
+                sheet.cell(row, 9),
+                record,
+            )
+            source = (
+                record.reference_source
+                if record.reference_is_long
+                else record.comparison_source
+            )
+            _set_internal_link(sheet.cell(row, 10), "비교 결과", source)
+            sheet.row_dimensions[row].height = 90
+
+    last_row = max((record.start_row + record.row_count - 1 for record in records), default=2)
+    sheet.auto_filter.ref = f"A2:J{last_row}"
+    sheet.freeze_panes = "A3"
+    widths = {
+        1: 13,
+        2: 13,
+        3: 30,
+        4: 26,
+        5: 10,
+        6: 22,
+        7: 10,
+        8: 60,
+        9: 60,
+        10: 18,
+    }
+    for column, width in widths.items():
+        sheet.column_dimensions[get_column_letter(column)].width = width
+    sheet.row_dimensions[1].height = 28
+    sheet.row_dimensions[2].height = 36
+    sheet.sheet_view.showGridLines = False
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.paperSize = sheet.PAPERSIZE_A3
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.print_title_rows = "1:2"
+
+
+def _normalize_excel_text(value: Any) -> str:
+    return ILLEGAL_CHARACTERS_RE.sub("", str(value or ""))
+
+
+def _excel_text_units(value: str) -> int:
+    return len(value.encode("utf-16-le")) // 2
+
+
+def _exceeds_text_limits(
+    value: str,
+    *,
+    max_text_units: int,
+    max_line_feeds: int,
+) -> bool:
+    return (
+        _excel_text_units(value) > max_text_units
+        or value.count("\n") > max_line_feeds
+    )
+
+
+def _requires_long_value_sheet(value: str) -> bool:
+    return _exceeds_text_limits(
+        value,
+        max_text_units=LONG_VALUE_CELL_TEXT,
+        max_line_feeds=LONG_VALUE_CELL_LINE_FEEDS,
+    )
+
+
+def _split_long_value(value: str) -> tuple[str, ...]:
+    return _split_excel_text(
+        value,
+        max_text_units=LONG_VALUE_CELL_TEXT,
+        max_line_feeds=LONG_VALUE_CELL_LINE_FEEDS,
+    )
+
+
+def _split_excel_text(
+    value: str,
+    *,
+    max_text_units: int,
+    max_line_feeds: int,
+) -> tuple[str, ...]:
+    normalized = _normalize_excel_text(value)
+    if not normalized:
+        return ("",)
+    parts: list[str] = []
+    start = 0
+    while start < len(normalized):
+        units = 0
+        line_feeds = 0
+        cursor = start
+        last_newline = -1
+        last_whitespace = -1
+        while cursor < len(normalized):
+            character = normalized[cursor]
+            character_units = 2 if ord(character) > 0xFFFF else 1
+            character_line_feeds = 1 if character == "\n" else 0
+            if (
+                units + character_units > max_text_units
+                or line_feeds + character_line_feeds > max_line_feeds
+            ):
+                break
+            units += character_units
+            line_feeds += character_line_feeds
+            if character == "\n":
+                last_newline = cursor
+            elif character.isspace():
+                last_whitespace = cursor
+            cursor += 1
+
+        if cursor >= len(normalized):
+            end = len(normalized)
+        else:
+            minimum_preferred = start + max((cursor - start) // 2, 1)
+            if last_newline >= minimum_preferred:
+                end = last_newline + 1
+            elif last_whitespace >= minimum_preferred:
+                end = last_whitespace + 1
+            else:
+                end = cursor
+        if end <= start:
+            end = start + 1
+        parts.append(normalized[start:end])
+        start = end
+    return tuple(parts)
+
+
+def _cell_preview(
+    value: Any,
+    *,
+    max_text_units: int,
+    max_line_feeds: int,
+    suffix: str,
+) -> str:
+    normalized = _normalize_excel_text(value)
+    if not _exceeds_text_limits(
+        normalized,
+        max_text_units=max_text_units,
+        max_line_feeds=max_line_feeds,
+    ):
+        return normalized
+    normalized_suffix = _normalize_excel_text(suffix)
+    text_budget = max(max_text_units - _excel_text_units(normalized_suffix), 1)
+    line_feed_budget = max(max_line_feeds - normalized_suffix.count("\n"), 0)
+    prefix = _split_excel_text(
+        normalized,
+        max_text_units=text_budget,
+        max_line_feeds=line_feed_budget,
+    )[0]
+    return f"{prefix}{normalized_suffix}"
+
+
+def _long_value_preview(value: str) -> str:
+    return _cell_preview(
+        value,
+        max_text_units=LONG_VALUE_PREVIEW_TEXT,
+        max_line_feeds=LONG_VALUE_PREVIEW_LINE_FEEDS,
+        suffix=f"\n\n[전체 내용은 '{LONG_VALUE_SHEET_TITLE}' 시트에서 확인]",
+    )
+
+
+def _set_internal_link(
+    cell: Cell,
+    sheet_title: str,
+    row_or_coordinate: int | str,
+    column: int | None = None,
+) -> None:
+    if isinstance(row_or_coordinate, int):
+        if column is None:
+            raise ValueError("내부 링크 열 번호가 필요합니다.")
+        coordinate = f"{get_column_letter(column)}{row_or_coordinate}"
+    else:
+        coordinate = row_or_coordinate
+    escaped_title = sheet_title.replace("'", "''")
+    cell.hyperlink = f"#'{escaped_title}'!{coordinate}"
+    cell.font = Font(name=_FONT_NAME, color="0563C1", underline="single")
+
+
+def _style_long_value_pair(
+    reference_cell: Cell,
+    comparison_cell: Cell,
+    record: _LongValueRecord,
+) -> None:
+    if not record.is_changed:
+        return
+    if record.comparison_empty and not record.reference_empty:
+        reference_cell.fill = _ADDED_FILL
+    elif record.reference_empty and not record.comparison_empty:
+        comparison_cell.fill = _REMOVED_FILL
+    else:
+        reference_cell.fill = _CHANGED_FILL
+        comparison_cell.fill = _CHANGED_FILL
+
+
 def _style_scalar_difference(
     reference_cell: Cell,
     comparison_cell: Cell,
@@ -587,10 +1185,19 @@ def _kind_fill(kind: BaselineComparisonKind) -> PatternFill:
 def _set_safe_value(cell: Cell, value: Any, *, context: str) -> None:
     cell.font = _BODY_FONT
     if isinstance(value, str):
-        normalized = value.replace("\x00", "")
-        if len(normalized) > EXCEL_MAX_CELL_TEXT:
+        normalized = _normalize_excel_text(value)
+        text_units = _excel_text_units(normalized)
+        if text_units > EXCEL_MAX_CELL_TEXT:
             raise BaselineExportError(
-                f"{context} 내용이 Excel 셀 길이 한도({EXCEL_MAX_CELL_TEXT:,}자)를 초과합니다."
+                f"{context} 내용이 Excel 셀 길이 한도({EXCEL_MAX_CELL_TEXT:,}자)를 "
+                f"초과합니다(현재 {text_units:,}자)."
+            )
+        line_feeds = normalized.count("\n")
+        if line_feeds > EXCEL_MAX_CELL_LINE_FEEDS:
+            raise BaselineExportError(
+                f"{context} 내용이 Excel 셀 줄바꿈 한도"
+                f"({EXCEL_MAX_CELL_LINE_FEEDS:,}개)를 초과합니다"
+                f"(현재 {line_feeds:,}개)."
             )
         if normalized.startswith(("=", "+", "@")) or (
             normalized.startswith("-") and normalized != "-"
@@ -605,6 +1212,11 @@ __all__ = [
     "BaselineExportError",
     "BaselineExportField",
     "BaselineExportSummary",
+    "EXCEL_MAX_CELL_LINE_FEEDS",
+    "EXCEL_MAX_CELL_TEXT",
+    "LONG_VALUE_CELL_LINE_FEEDS",
+    "LONG_VALUE_CELL_TEXT",
+    "LONG_VALUE_SHEET_TITLE",
     "baseline_export_fields",
     "create_baseline_comparison_workbook",
     "export_baseline_comparison_xlsx",

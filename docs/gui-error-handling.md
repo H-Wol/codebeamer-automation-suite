@@ -43,6 +43,7 @@ PySide6 signal/slot에서 처리되지 않은 Python 예외는 기본적으로 �
 - Baseline 내보내기 필드 목록은 모든 상태 widget을 만든 뒤 `itemChanged`를 연결합니다.
 - 트래커 작업공간의 서비스 실패는 기존 상단 상태와 최상위 오류 알림을 함께 사용합니다.
 - Baseline 목록·전체 비교·하위 조회·Excel 저장 실패도 같은 알림 경로를 사용합니다.
+- Baseline Excel은 임시 파일 저장이 끝난 뒤 대상 파일을 교체하므로 저장 실패 시 기존 파일과 불완전한 임시 파일을 구분해 정리합니다.
 - 배치 업로드와 일괄 수정 worker가 시작되지 못하면 비활성화한 버튼과 진행 창을 복구합니다.
 - 동기식 busy helper도 worker 시작 실패를 포함해 항상 overlay를 해제합니다.
 - 범용 트래커 background task 시작 실패는 지정된 failure callback으로 전달합니다.

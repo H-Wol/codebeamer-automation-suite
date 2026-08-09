@@ -2494,12 +2494,19 @@ class TrackerWorkspacePage(QWidget):
                     "selectedFieldCount": summary.selected_field_count,
                     "itemCount": summary.item_count,
                     "dataRowCount": summary.data_row_count,
+                    "longValueCount": summary.long_value_count,
+                    "longValuePartCount": summary.long_value_part_count,
                 },
             )
         )
+        long_value_status = (
+            f" · 긴 값 {summary.long_value_count}개 별도 시트 분할"
+            if summary.long_value_count
+            else ""
+        )
         self.baseline_comparison_panel.status_label.setText(
             f"Excel 내보내기 완료 · 아이템 {summary.item_count}개 · "
-            f"데이터 행 {summary.data_row_count}개"
+            f"데이터 행 {summary.data_row_count}개{long_value_status}"
         )
         self._set_workspace_status("Baseline 비교 Excel 파일을 저장했습니다.")
 
