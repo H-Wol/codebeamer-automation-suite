@@ -335,26 +335,94 @@ class CodebeamerClient:
         return self._get(f"/v3/trackers/{tracker_id}/fields/{field_id}/permissions")
 
     def get_tracker_baselines(self, tracker_id: int) -> list[dict]:
-        """트래커에 정의된 baseline 목록을 반환한다."""
-        data = self._run_rate_limited_request(
-            "get_tracker_baselines",
-            lambda: self._get(f"/v3/trackers/{int(tracker_id)}/baselines"),
-        )
+        """트래커에 정의된 baseline을 서버 페이지 끝까지 수집한다."""
+        normalized_tracker_id = int(tracker_id)
+        page_size = 500
+        page = 1
+        baselines: list[dict] = []
+        seen_ids: set[str] = set()
+
+        while True:
+            data = self._run_rate_limited_request(
+                "get_tracker_baselines",
+                lambda current_page=page: self._get(
+                    f"/v3/trackers/{normalized_tracker_id}/baselines",
+                    params={"page": current_page, "pageSize": page_size},
+                ),
+            )
+            references = self._extract_baseline_references(data)
+            added = 0
+            for reference in references:
+                raw_id = reference.get("id")
+                if raw_id in (None, "") or isinstance(raw_id, bool):
+                    continue
+                try:
+                    baseline_id = str(int(raw_id))
+                except (TypeError, ValueError):
+                    baseline_id = str(raw_id).strip()
+                if not baseline_id or baseline_id in seen_ids:
+                    continue
+                seen_ids.add(baseline_id)
+                baselines.append(reference)
+                added += 1
+
+            if isinstance(data, list):
+                break
+
+            raw_total = data.get("total") if isinstance(data, dict) else None
+            try:
+                total = int(raw_total) if raw_total is not None else None
+            except (TypeError, ValueError):
+                total = None
+            if total is not None and len(baselines) >= max(total, 0):
+                break
+            if not references:
+                if total is not None and len(baselines) < total:
+                    raise RuntimeError(
+                        "서버가 baseline 목록의 다음 페이지를 반환하지 않았습니다."
+                    )
+                break
+            if added == 0:
+                if total is not None and len(baselines) < total:
+                    raise RuntimeError(
+                        "서버가 baseline 목록의 다음 페이지를 적용하지 않았습니다."
+                    )
+                break
+
+            raw_response_page_size = (
+                data.get("pageSize") if isinstance(data, dict) else None
+            )
+            try:
+                response_page_size = int(raw_response_page_size)
+            except (TypeError, ValueError):
+                response_page_size = page_size
+            if total is None and len(references) < max(response_page_size, 1):
+                break
+            page += 1
+
+        return baselines
+
+    @classmethod
+    def _extract_baseline_references(cls, data: Any) -> list[dict]:
         if isinstance(data, list):
-            return data
-        if isinstance(data, dict):
-            for key in (
-                "references",
-                "baselines",
-                "trackerBaselines",
-                "baselineList",
-                "items",
-                "results",
-                "content",
-                "data",
-            ):
-                if isinstance(data.get(key), list):
-                    return data[key]
+            return [item for item in data if isinstance(item, dict)]
+        if not isinstance(data, dict):
+            return []
+        for key in (
+            "references",
+            "baselines",
+            "trackerBaselines",
+            "baselineList",
+            "items",
+            "results",
+            "content",
+        ):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        nested = data.get("data")
+        if isinstance(nested, (dict, list)):
+            return cls._extract_baseline_references(nested)
         return []
 
     def get_field_options(self, item_id: int, field_id: int) -> list[dict]:

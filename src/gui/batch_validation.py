@@ -193,6 +193,11 @@ class BatchValidationService:
             return None
         if str(preview_data.summary_column).strip() != str(summary_column).strip():
             return None
+        if getattr(preview_data, "file_signatures", None) and not preview_data.files_are_current():
+            raise ValueError(
+                "선택한 Excel 파일이 전체 데이터 로드 후 변경되었습니다. "
+                "파일 단계에서 전체 데이터를 다시 불러오세요."
+            )
         return preview_data
 
     @staticmethod
@@ -775,6 +780,7 @@ class BatchValidationService:
             comparison_df=comparison_df,
             option_check_df=option_check_df,
             converted_upload_df=row_context_df,
+            payload_df=payload_df,
             issue_df=issue_df,
             has_blocking_issues=has_blocking,
             summary_stats=summary_stats,
@@ -784,4 +790,3 @@ class BatchValidationService:
     def _build_row_label(cls, row: pd.Series) -> str:
         """중복 update 이슈에서 사용할 Excel 행 표시를 만든다."""
         return ValidationPresenter.build_row_label(row)
-

@@ -166,7 +166,7 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - 전용 설정 센터에서 다중 연결 profile과 활성 profile 관리
 - 로컬 암호화 또는 OS 자격증명 저장소 선택과 안전한 저장소 전환
 - 연결·snapshot 검증, 명시적 저장·적용과 legacy 설정 migration
-- 전역 설정과 배치 workflow preset 분리
+- 전역 설정과 연결(또는 테스트 모드)·프로젝트·트래커 범위의 이름 있는 배치 workflow preset 분리
 - 테마 전환과 전역 테스트 모드 제어
 - 연결 테스트와 프로젝트/트래커 조회
 - 현재 tracker 범위를 강제하는 CbQL 변환과 서버 pagination 메타데이터 보존
@@ -179,12 +179,15 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - schema 기반 단건 생성, 선택 필드 부분 수정, version 충돌 확인, 단건 상태 전환과 삭제
 - Codebeamer Bulk fields API 기반 상태·일반 필드·TableField 청크 수정, atomic 롤백 구분과 값 비저장 재시도
 - 단건 쓰기와 배치 최종 결과의 제한된 로컬 실행 기록 및 필터 화면
-- 공통 HTTP 계층의 메타데이터 전용 API 모니터와 별도 실시간 통계 창
+- 공통 HTTP 계층의 메타데이터 전용 API 모니터와 개발자 도구의 실시간 통계 탭
+- 논리 작업·오류를 진단 ID로 연결하는 세션 진단 로그와 안전한 진단 ZIP 내보내기
 - 테스트 모드 UI·서비스 이중 쓰기 차단
-- 다중 Excel 파일 선택과 대표 파일 미리보기 표시
+- 다중 Excel 파일 선택과 `시트 메타데이터 → 제한 행 미리보기 → 전체 파일 데이터` 단계형 로드 및 signature cache
 - 파일명 정규식 기반 상단 데이터 preview/payload 구성
 - 매핑/검증/업로드/결과 화면 구성
 - upload worker를 통한 백그라운드 실행과 진행률 갱신
+- 중단·취소 시 완료 결과와 준비 완료 미실행 행의 세션 재시도 context 보존
+- 로컬 상태 저장 실패와 서버 처리 결과를 분리해 안전한 경고만 남기는 결과 집계
 - 항목별 로그/시간/총 건수 표시와 오류 다이얼로그 제공
 - 1080 높이 기준 내부 스크롤과 페이지 높이 상한 적용
 
@@ -205,6 +208,8 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - `src/gui/activity_history.py`
 - `src/gui/activity_history_page.py`
 - `src/gui/api_monitor_window.py`
+- `src/diagnostics.py`
+- `src/gui/developer_tools_window.py`
 - `src/gui/offline_query.py`
 - `src/gui/worker.py`
 
@@ -229,7 +234,9 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - 실행 기록 모델·민감정보 제한·영속 저장: `src/gui/activity_history.py`
 - 실행 기록 필터·상세·비우기 화면: `src/gui/activity_history_page.py`
 - API 모니터 thread-safe 버퍼·통계: `src/api_monitor.py`
-- API 모니터 별도 실시간 창: `src/gui/api_monitor_window.py`
+- API 모니터 재사용 panel과 기존 window wrapper: `src/gui/api_monitor_window.py`
+- 세션 진단 이벤트·마스킹·진단 ZIP: `src/diagnostics.py`
+- 진단 로그와 API 모니터를 묶는 확장형 개발자 창: `src/gui/developer_tools_window.py`
 - 테스트 모드 CbQL subset 평가: `src/gui/offline_query.py`
 - 업로드 context 모델: `src/gui/upload_context.py`
 - TRACKER configuration 해석: `src/gui/tracker_config.py`

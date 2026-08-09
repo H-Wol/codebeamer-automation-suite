@@ -135,6 +135,9 @@ class TrackerBaselineExportTest(unittest.TestCase):
         self.assertEqual(sheet["M4"].value, "아니요")
         self.assertIn("• 홍길동 (ID 7)", sheet["F3"].value)
         self.assertIn("• 김영희 (ID 9)", sheet["F3"].value)
+        self.assertEqual(sheet["A5"].value, "신규")
+        self.assertEqual(workbook["요약"]["A9"].value, "신규")
+        self.assertEqual(workbook["요약"]["B9"].value, 1)
         self.assertEqual(sheet.freeze_panes, "D3")
         self.assertIsNone(sheet.auto_filter.ref)
         self.assertEqual(summary.item_count, 3)
@@ -161,6 +164,7 @@ class TrackerBaselineExportTest(unittest.TestCase):
             workbook = load_workbook(path, data_only=False)
 
         self.assertEqual(workbook.sheetnames, ["요약", "비교 결과"])
+        self.assertEqual(workbook["비교 결과"]["A3"].value, "신규")
         self.assertEqual(workbook["비교 결과"]["D3"].value, "'=HYPERLINK('unsafe')")
 
     def test_export_rejects_empty_selection(self) -> None:

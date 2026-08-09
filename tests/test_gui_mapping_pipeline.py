@@ -580,6 +580,62 @@ class GuiMappingPipelineServiceTest(unittest.TestCase):
             self.assertIsNotNone(mapping_context.preview_data)
             self.assertEqual(mapping_context.preview_data.file_path, str(path))
 
+    def test_prepare_mapping_context_rejects_full_data_when_source_file_changed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "sample.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary", "담당자"])
+            sheet.append(["REQ-001", "홍길동"])
+            workbook.save(path)
+            workbook.close()
+
+            excel_service = GuiExcelService(reader_cls=FakeExcelReader)
+            preview = excel_service.load_full_data(
+                str(path),
+                sheet_name="Main",
+                header_row=1,
+                summary_column="Summary",
+            )
+
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Main"
+            sheet.append(["Summary", "담당자"])
+            sheet.append(["REQ-001-수정", "홍길동"])
+            workbook.save(path)
+            workbook.close()
+
+            service = GuiUploadPipelineService(
+                client_factory=FakeClient,
+                excel_service=excel_service,
+                reader_cls=FakeExcelReader,
+            )
+            settings = GuiSettings(
+                base_url="https://example.com/cb",
+                username="user",
+                password="secret",
+                default_project_id="10",
+                default_tracker_id="1000",
+                excel_header_row=1,
+                summary_column="Summary",
+                excel_sheet_name="Main",
+            )
+
+            with self.assertRaisesRegex(ValueError, "전체 데이터를 다시 불러오세요"):
+                service.prepare_mapping_context(
+                    settings,
+                    {
+                        "file_path": str(path),
+                        "preview_file_path": str(path),
+                        "sheet_name": "Main",
+                        "header_row": 1,
+                        "summary_column": "Summary",
+                        "preview_data": preview,
+                    },
+                )
+
     def test_prepare_mapping_context_supports_offline_schema_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             schema_path = Path(tmp_dir) / "offline-schema.json"
@@ -685,4 +741,3 @@ class GuiMappingPipelineServiceTest(unittest.TestCase):
 
             self.assertEqual(len(result["success_df"]), 1)
             self.assertEqual(result["success_df"].iloc[0]["created_item_id"], "DRYRUN-0")
-

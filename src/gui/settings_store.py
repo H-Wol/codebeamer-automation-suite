@@ -31,6 +31,8 @@ SETTINGS_FILE_NAME = "gui_settings.json"
 APP_SETTINGS_FILE_NAME = "gui_app_settings.json"
 KEY_FILE_NAME = "gui_settings.key"
 WORKFLOW_PRESET_FILE_NAME = "gui_workflow_preset.json"
+WORKFLOW_PRESET_COLLECTION_FILE_NAME = "gui_workflow_presets.json"
+WORKFLOW_PRESET_COLLECTION_VERSION = 2
 APP_SETTINGS_VERSION = 3
 
 CREDENTIAL_STORAGE_NONE = "none"
@@ -125,6 +127,12 @@ class AppSettings:
 @dataclass
 class GuiWorkflowPreset:
     version: int = 1
+    preset_id: str = field(default_factory=lambda: uuid4().hex)
+    name: str = "기본 설정"
+    connection_scope: str = ""
+    project_id: str = ""
+    tracker_id: str = ""
+    is_default: bool = False
     settings: GuiSettings = field(default_factory=GuiSettings)
     file_options: dict[str, Any] = field(default_factory=dict)
     root_item_config: dict[str, Any] = field(default_factory=dict)
@@ -283,6 +291,9 @@ class GuiSettingsStore:
         self.app_settings_path = self.root_dir / APP_SETTINGS_FILE_NAME
         self.key_path = self.root_dir / KEY_FILE_NAME
         self.workflow_preset_path = self.root_dir / WORKFLOW_PRESET_FILE_NAME
+        self.workflow_preset_collection_path = (
+            self.root_dir / WORKFLOW_PRESET_COLLECTION_FILE_NAME
+        )
         self.credential_store = credential_store or KeyringCredentialStore()
 
     @property
@@ -292,6 +303,34 @@ class GuiSettingsStore:
     @property
     def os_credential_availability_error(self) -> str:
         return str(getattr(self.credential_store, "availability_error", "") or "")
+
+    def workflow_connection_scope(self, settings: GuiSettings | None = None) -> str:
+        """민감한 연결 값을 저장하지 않는 workflow preset 범위를 만든다."""
+        current = settings or self.load()
+        if bool(getattr(current, "offline_mode", False)):
+            return "offline"
+        if self.app_settings_path.exists():
+            app_settings = self.load_app_settings()
+            if bool(app_settings.offline_mode):
+                return "offline"
+            profile_id = str(app_settings.active_profile_id or "").strip()
+            if profile_id:
+                return f"profile:{profile_id}"
+
+        legacy_identity = {
+            "base_url": str(getattr(current, "base_url", "") or "").strip().rstrip("/"),
+            "username": str(getattr(current, "username", "") or "").strip(),
+        }
+        if not legacy_identity["base_url"] and not legacy_identity["username"]:
+            return ""
+        serialized = json.dumps(
+            legacy_identity,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        return f"legacy:{digest}"
 
     def load(self) -> GuiSettings:
         legacy_settings = self._load_legacy_settings()
@@ -544,10 +583,24 @@ class GuiSettingsStore:
             return None
 
         payload = json.loads(self.workflow_preset_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("전체 설정 파일 형식이 올바르지 않습니다.")
+        return self._workflow_preset_from_payload(payload)
+
+    def _workflow_preset_from_payload(
+        self,
+        payload: dict[str, Any],
+    ) -> GuiWorkflowPreset:
         raw_settings = payload.get("settings")
         settings_payload = raw_settings if isinstance(raw_settings, dict) else {}
         return GuiWorkflowPreset(
             version=int(payload.get("version") or 1),
+            preset_id=str(payload.get("preset_id") or uuid4().hex),
+            name=str(payload.get("name") or "기본 설정").strip() or "기본 설정",
+            connection_scope=str(payload.get("connection_scope") or "").strip(),
+            project_id=str(payload.get("project_id") or "").strip(),
+            tracker_id=str(payload.get("tracker_id") or "").strip(),
+            is_default=bool(payload.get("is_default", False)),
             settings=self._settings_from_payload(settings_payload),
             file_options=self._dict_payload(payload.get("file_options")),
             root_item_config=self._dict_payload(payload.get("root_item_config")),
@@ -578,8 +631,7 @@ class GuiSettingsStore:
             },
         )
 
-    def save_workflow_preset(self, preset: GuiWorkflowPreset) -> None:
-        self.root_dir.mkdir(parents=True, exist_ok=True)
+    def _workflow_preset_payload(self, preset: GuiWorkflowPreset) -> dict[str, Any]:
         settings_payload = self._settings_payload(preset.settings)
         if self.app_settings_path.exists():
             settings_payload = {
@@ -591,8 +643,14 @@ class GuiSettingsStore:
                 "password_encrypted": "",
                 "save_password": False,
             }
-        payload = {
+        return {
             "version": APP_SETTINGS_VERSION if self.app_settings_path.exists() else int(preset.version or 1),
+            "preset_id": str(preset.preset_id or uuid4().hex),
+            "name": str(preset.name or "기본 설정").strip() or "기본 설정",
+            "connection_scope": str(preset.connection_scope or "").strip(),
+            "project_id": str(preset.project_id or "").strip(),
+            "tracker_id": str(preset.tracker_id or "").strip(),
+            "is_default": bool(preset.is_default),
             "settings": settings_payload,
             "file_options": self._dict_payload(preset.file_options),
             "root_item_config": self._dict_payload(preset.root_item_config),
@@ -622,7 +680,263 @@ class GuiSettingsStore:
                 if str(key).strip() and isinstance(value, dict)
             },
         }
+
+    def _tracker_workflow_preset_payload(
+        self,
+        preset: GuiWorkflowPreset,
+    ) -> dict[str, Any]:
+        """Named collection에는 배치 설정과 비밀 없는 scope만 저장한다."""
+        file_options = dict(preset.file_options or {})
+        return {
+            "version": WORKFLOW_PRESET_COLLECTION_VERSION,
+            "preset_id": str(preset.preset_id or uuid4().hex),
+            "name": str(preset.name or "기본 설정").strip() or "기본 설정",
+            "connection_scope": str(preset.connection_scope or "").strip(),
+            "project_id": str(preset.project_id or "").strip(),
+            "tracker_id": str(preset.tracker_id or "").strip(),
+            "is_default": bool(preset.is_default),
+            "settings": {
+                "upload_mode": normalize_gui_upload_mode(preset.settings.upload_mode),
+                "excel_header_row": max(int(preset.settings.excel_header_row or 1), 1),
+                "summary_column": str(preset.settings.summary_column or "Summary"),
+                "excel_sheet_name": str(preset.settings.excel_sheet_name or "0"),
+            },
+            "file_options": {
+                "sheet_name": str(file_options.get("sheet_name") or "0"),
+                "header_row": max(int(file_options.get("header_row") or 1), 1),
+                "summary_column": str(file_options.get("summary_column") or "Summary"),
+            },
+            "root_item_config": self._dict_payload(preset.root_item_config),
+            "selected_mapping": {
+                str(key): str(value)
+                for key, value in dict(preset.selected_mapping or {}).items()
+                if str(key).strip() and str(value).strip()
+            },
+            "selected_mapping_modes": {
+                str(key): self._operation_scope_payload(value)
+                for key, value in dict(preset.selected_mapping_modes or {}).items()
+                if str(key).strip() and isinstance(value, dict)
+            },
+            "selected_default_values": {
+                str(key): str(value)
+                for key, value in dict(preset.selected_default_values or {}).items()
+                if str(key).strip() and str(value).strip()
+            },
+            "selected_default_value_modes": {
+                str(key): self._operation_scope_payload(value)
+                for key, value in dict(preset.selected_default_value_modes or {}).items()
+                if str(key).strip() and isinstance(value, dict)
+            },
+            "selected_tracker_item_settings": {
+                str(key): dict(value)
+                for key, value in dict(preset.selected_tracker_item_settings or {}).items()
+                if str(key).strip() and isinstance(value, dict)
+            },
+        }
+
+    def save_workflow_preset(self, preset: GuiWorkflowPreset) -> None:
+        """기존 단일 전체 설정 파일 계약을 유지한다."""
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+        payload = self._workflow_preset_payload(preset)
         self._write_json_atomic(self.workflow_preset_path, payload)
+
+    def list_tracker_workflow_presets(
+        self,
+        *,
+        connection_scope: str | None = None,
+        project_id: str | int | None = None,
+        tracker_id: str | int | None = None,
+    ) -> list[GuiWorkflowPreset]:
+        payload = self._read_json_object(self.workflow_preset_collection_path)
+        raw_presets = payload.get("presets")
+        if not isinstance(raw_presets, list):
+            return []
+        normalized_connection = str(connection_scope or "").strip()
+        normalized_project = str(project_id or "").strip()
+        normalized_tracker = str(tracker_id or "").strip()
+        presets: list[GuiWorkflowPreset] = []
+        for raw_preset in raw_presets:
+            if not isinstance(raw_preset, dict):
+                continue
+            preset = self._workflow_preset_from_payload(raw_preset)
+            if normalized_connection and preset.connection_scope != normalized_connection:
+                continue
+            if normalized_project and preset.project_id != normalized_project:
+                continue
+            if normalized_tracker and preset.tracker_id != normalized_tracker:
+                continue
+            presets.append(preset)
+        return sorted(presets, key=lambda item: (item.name.casefold(), item.preset_id))
+
+    def get_default_tracker_workflow_preset(
+        self,
+        *,
+        connection_scope: str,
+        project_id: str | int,
+        tracker_id: str | int,
+    ) -> GuiWorkflowPreset | None:
+        if not str(connection_scope or "").strip():
+            return None
+        presets = self.list_tracker_workflow_presets(
+            connection_scope=connection_scope,
+            project_id=project_id,
+            tracker_id=tracker_id,
+        )
+        return next((preset for preset in presets if preset.is_default), None)
+
+    def get_tracker_workflow_preset(self, preset_id: str) -> GuiWorkflowPreset | None:
+        normalized_id = str(preset_id or "").strip()
+        if not normalized_id:
+            return None
+        for preset in self.list_tracker_workflow_presets():
+            if preset.preset_id == normalized_id:
+                return preset
+        return None
+
+    def save_tracker_workflow_preset(
+        self,
+        preset: GuiWorkflowPreset,
+    ) -> GuiWorkflowPreset:
+        connection_scope = str(preset.connection_scope or "").strip()
+        project_id = str(preset.project_id or preset.settings.default_project_id or "").strip()
+        tracker_id = str(preset.tracker_id or preset.settings.default_tracker_id or "").strip()
+        name = str(preset.name or "").strip()
+        if not connection_scope:
+            raise ValueError("전체 설정을 저장할 연결 범위를 확인할 수 없습니다.")
+        if not project_id or not tracker_id:
+            raise ValueError("트래커별 설정을 저장하려면 프로젝트와 트래커를 선택해야 합니다.")
+        if not name:
+            raise ValueError("저장 설정 이름을 입력해야 합니다.")
+
+        normalized = replace(
+            preset,
+            preset_id=str(preset.preset_id or uuid4().hex),
+            name=name,
+            connection_scope=connection_scope,
+            project_id=project_id,
+            tracker_id=tracker_id,
+            settings=replace(
+                preset.settings,
+                default_project_id=project_id,
+                default_tracker_id=tracker_id,
+            ),
+        )
+        presets = self.list_tracker_workflow_presets()
+        for existing in presets:
+            if (
+                existing.preset_id != normalized.preset_id
+                and existing.connection_scope == connection_scope
+                and existing.project_id == project_id
+                and existing.tracker_id == tracker_id
+                and existing.name.casefold() == name.casefold()
+            ):
+                raise ValueError(f"같은 트래커에 '{name}' 이름의 저장 설정이 이미 있습니다.")
+
+        updated: list[GuiWorkflowPreset] = []
+        replaced_existing = False
+        for existing in presets:
+            if existing.preset_id == normalized.preset_id:
+                updated.append(normalized)
+                replaced_existing = True
+            else:
+                updated.append(existing)
+        if not replaced_existing:
+            updated.append(normalized)
+
+        target_presets = [
+            item
+            for item in updated
+            if item.connection_scope == connection_scope
+            and item.project_id == project_id
+            and item.tracker_id == tracker_id
+        ]
+        existing_default_id = next(
+            (
+                item.preset_id
+                for item in target_presets
+                if item.is_default and item.preset_id != normalized.preset_id
+            ),
+            "",
+        )
+        preferred_default_id = (
+            normalized.preset_id
+            if normalized.is_default or not existing_default_id
+            else existing_default_id
+        )
+        updated = [
+            replace(item, is_default=item.preset_id == preferred_default_id)
+            if item.connection_scope == connection_scope
+            and item.project_id == project_id
+            and item.tracker_id == tracker_id
+            else item
+            for item in updated
+        ]
+        normalized = next(
+            item for item in updated if item.preset_id == normalized.preset_id
+        )
+        payload = {
+            "version": WORKFLOW_PRESET_COLLECTION_VERSION,
+            "presets": [
+                self._tracker_workflow_preset_payload(item)
+                for item in sorted(
+                    updated,
+                    key=lambda item: (
+                        item.connection_scope,
+                        item.project_id,
+                        item.tracker_id,
+                        item.name.casefold(),
+                        item.preset_id,
+                    ),
+                )
+            ],
+        }
+        self._write_json_atomic(self.workflow_preset_collection_path, payload)
+        return normalized
+
+    def delete_tracker_workflow_preset(self, preset_id: str) -> bool:
+        normalized_id = str(preset_id or "").strip()
+        if not normalized_id:
+            return False
+        presets = self.list_tracker_workflow_presets()
+        deleted = next(
+            (preset for preset in presets if preset.preset_id == normalized_id),
+            None,
+        )
+        remaining = [preset for preset in presets if preset.preset_id != normalized_id]
+        if len(remaining) == len(presets):
+            return False
+        if deleted is not None and deleted.is_default:
+            successor = next(
+                (
+                    preset
+                    for preset in sorted(
+                        remaining,
+                        key=lambda item: (item.name.casefold(), item.preset_id),
+                    )
+                    if preset.connection_scope == deleted.connection_scope
+                    and preset.project_id == deleted.project_id
+                    and preset.tracker_id == deleted.tracker_id
+                ),
+                None,
+            )
+            if successor is not None:
+                remaining = [
+                    replace(preset, is_default=preset.preset_id == successor.preset_id)
+                    if preset.connection_scope == deleted.connection_scope
+                    and preset.project_id == deleted.project_id
+                    and preset.tracker_id == deleted.tracker_id
+                    else preset
+                    for preset in remaining
+                ]
+        payload = {
+            "version": WORKFLOW_PRESET_COLLECTION_VERSION,
+            "presets": [
+                self._tracker_workflow_preset_payload(item)
+                for item in remaining
+            ],
+        }
+        self._write_json_atomic(self.workflow_preset_collection_path, payload)
+        return True
 
     @staticmethod
     def _dict_payload(value: Any) -> dict[str, Any]:

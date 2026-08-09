@@ -654,7 +654,7 @@ class TrackerQueryService:
         comparison = self._run(
             "compare_item_at_sources", lambda: load_source(comparison_source)
         )
-        # 추가/삭제는 비교 대상에서 기준으로 이동했을 때의 변화로 판정한다.
+        # 신규/삭제는 비교 대상에서 기준으로 이동했을 때의 변화로 판정한다.
         return compare_tracker_items(
             comparison,
             reference,

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from .service_core import GuiCodebeamerService
 from .service_core import GuiExcelService
+from .service_core import FileSignature
 from .service_core import OfflineGuiClient
 from .service_core import OfflineQueryDataUnavailable
 from .service_core import PreviewData
+from .service_core import SheetPreviewData
+from .service_core import WorkbookMetadata
 from .service_core import gui_display_text
 from .upload_service import DEFAULT_TRACKER_ITEM_ID_REGEX
 from .upload_service import ROOT_ASSIGNMENT_MODE_FILE_SOURCE
@@ -21,6 +24,7 @@ from .tracker_item_editor import TrackerItemEditorService
 
 __all__ = [
     "DEFAULT_TRACKER_ITEM_ID_REGEX",
+    "FileSignature",
     "GuiCodebeamerService",
     "GuiExcelService",
     "GuiUploadPipelineService",
@@ -28,6 +32,7 @@ __all__ = [
     "OfflineGuiClient",
     "OfflineQueryDataUnavailable",
     "PreviewData",
+    "SheetPreviewData",
     "ROOT_ASSIGNMENT_MODE_FILE_SOURCE",
     "ROOT_ASSIGNMENT_MODE_FIXED_VALUE",
     "ROOT_ITEM_MODE_FILE",
@@ -37,5 +42,6 @@ __all__ = [
     "TrackerQueryService",
     "TrackerItemEditorService",
     "ValidationContext",
+    "WorkbookMetadata",
     "gui_display_text",
 ]

@@ -171,11 +171,20 @@ class TrackerQueryModelTest(unittest.TestCase):
         self.assertEqual(empty.child_count, 0)
 
     def test_sensitive_masking_is_recursive_and_does_not_mutate_source(self) -> None:
-        source = {"nested": [{"token": "value", "name": "safe"}]}
+        source = {
+            "nested": [
+                {
+                    "token": "value",
+                    "accessToken": "camel-secret",
+                    "name": "safe",
+                }
+            ]
+        }
 
         masked = mask_sensitive_payload(source)
 
         self.assertEqual(masked["nested"][0]["token"], "***")
+        self.assertEqual(masked["nested"][0]["accessToken"], "***")
         self.assertEqual(masked["nested"][0]["name"], "safe")
         self.assertEqual(source["nested"][0]["token"], "value")
 

@@ -810,6 +810,24 @@ class GuiUploadPipelineService:
             pause_requested=pause_requested,
         )
 
+    def run_failed_upload_retry(
+        self,
+        retry_context,
+        *,
+        continue_on_error: bool,
+        event_callback=None,
+        cancel_requested=None,
+        pause_requested=None,
+    ) -> dict[str, Any]:
+        """현재 세션에 캐시된 실패/미해결 항목만 다시 실행한다."""
+        return self.batch_upload.run_failed_upload_retry(
+            retry_context,
+            continue_on_error=continue_on_error,
+            event_callback=event_callback,
+            cancel_requested=cancel_requested,
+            pause_requested=pause_requested,
+        )
+
     def _build_summary_stats(
         self,
         issue_df: pd.DataFrame,

@@ -464,8 +464,8 @@ class SettingsCenterPage(QWidget):
     def _build_developer_page(self) -> QWidget:
         page, layout = self._new_category_page(
             "개발자",
-            "Codebeamer API 호출의 종류, 상태 코드와 종단 간 응답 시간을 별도 창에서 "
-            "확인합니다. 인증 정보와 요청·응답 본문은 수집하지 않습니다.",
+            "세션 진단 로그와 Codebeamer API 호출 메타데이터를 별도 개발자 도구 "
+            "창에서 확인합니다. 인증 정보와 요청·응답 본문은 수집하지 않습니다.",
         )
         card, card_layout = self._new_card(page)
         self.api_monitor_checkbox = QCheckBox("API 모니터 사용")
@@ -484,16 +484,16 @@ class SettingsCenterPage(QWidget):
         card_layout.addLayout(form)
 
         help_label = QLabel(
-            "최근 최대 500건의 메타데이터만 메모리에 보관합니다. 창을 닫아도 수집은 "
-            "계속되며, 설정을 끄면 새 요청 수집만 중지됩니다. 표시 시간은 네트워크와 "
-            "서버 처리를 포함한 응답 지연 시간입니다."
+            "진단 로그는 현재 세션에서 최대 2,000건, API 모니터는 최근 최대 500건을 "
+            "메모리에만 보관합니다. API 모니터 설정을 꺼도 진단 로그는 계속 사용할 수 "
+            "있으며, 원본 서버 응답과 Excel 값은 수집하지 않습니다."
         )
         help_label.setObjectName("section_label")
         help_label.setWordWrap(True)
         card_layout.addWidget(help_label)
 
         action_row = QHBoxLayout()
-        self.api_monitor_open_button = QPushButton("API 모니터 열기")
+        self.api_monitor_open_button = QPushButton("개발자 도구 열기")
         self.api_monitor_open_button.setObjectName("primary_button")
         action_row.addWidget(self.api_monitor_open_button)
         action_row.addStretch(1)
@@ -795,7 +795,7 @@ class SettingsCenterPage(QWidget):
     def _sync_developer_controls(self) -> None:
         enabled = bool(self.api_monitor_checkbox.isChecked())
         self.api_monitor_slow_threshold_spin.setEnabled(enabled)
-        self.api_monitor_open_button.setEnabled(enabled)
+        self.api_monitor_open_button.setEnabled(True)
 
     def _request_api_monitor(self) -> None:
         if callable(self.api_monitor_requested):

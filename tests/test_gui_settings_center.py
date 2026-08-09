@@ -90,7 +90,8 @@ class GuiSettingsCenterTest(unittest.TestCase):
             )
             page.show_category(SETTINGS_CATEGORY_DEVELOPER)
 
-            self.assertFalse(page.api_monitor_open_button.isEnabled())
+            self.assertTrue(page.api_monitor_open_button.isEnabled())
+            self.assertEqual(page.api_monitor_open_button.text(), "개발자 도구 열기")
             page.api_monitor_checkbox.setChecked(True)
             page.api_monitor_slow_threshold_spin.setValue(2500)
             page.api_monitor_open_button.click()

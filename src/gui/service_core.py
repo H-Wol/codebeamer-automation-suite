@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 import json
 from pathlib import Path
 import re
@@ -35,6 +36,49 @@ from src.wizard import CodebeamerUploadWizard
 
 
 @dataclass
+class FileSignature:
+    path: str
+    size: int
+    modified_ns: int
+
+    @classmethod
+    def capture(cls, file_path: str) -> "FileSignature":
+        path = Path(str(file_path)).expanduser()
+        stat = path.stat()
+        return cls(
+            path=str(file_path),
+            size=int(stat.st_size),
+            modified_ns=int(stat.st_mtime_ns),
+        )
+
+    def matches_current_file(self) -> bool:
+        try:
+            current = self.capture(self.path)
+        except OSError:
+            return False
+        return self.size == current.size and self.modified_ns == current.modified_ns
+
+
+@dataclass
+class WorkbookMetadata:
+    file_path: str
+    sheet_names: list[str]
+    signature: FileSignature
+
+
+@dataclass
+class SheetPreviewData:
+    file_path: str
+    sheet_name: str
+    header_row: int
+    summary_column: str
+    headers: list[str]
+    rows: list[list[str]]
+    suggested_summary: str
+    signature: FileSignature
+
+
+@dataclass
 class PreviewData:
     file_path: str
     sheet_name: str
@@ -46,6 +90,11 @@ class PreviewData:
     suggested_summary: str
     raw_df: pd.DataFrame
     raw_df_by_file: dict[str, pd.DataFrame] = field(default_factory=dict)
+    file_signatures: dict[str, FileSignature] = field(default_factory=dict)
+    cache_hit: bool = False
+
+    def files_are_current(self) -> bool:
+        return all(signature.matches_current_file() for signature in self.file_signatures.values())
 
 
 def gui_display_text(value: Any) -> str:
@@ -753,6 +802,8 @@ class GuiExcelService:
         """필요한 의존성과 상태를 초기화한다."""
         self.logger = logger
         self.reader_cls = reader_cls
+        self._full_data_cache: dict[tuple[Any, ...], PreviewData] = {}
+        self._raw_data_cache: dict[tuple[Any, ...], pd.DataFrame] = {}
 
     @staticmethod
     def _normalize_headers(values: list[Any]) -> list[str]:
@@ -774,6 +825,270 @@ class GuiExcelService:
                 return header
         return headers[0] if headers else "Summary"
 
+    @staticmethod
+    def _normalized_file_paths(file_path: str, file_paths: list[str] | None) -> list[str]:
+        normalized: list[str] = []
+        for candidate in [file_path, *(file_paths or [])]:
+            text = str(candidate or "").strip()
+            if text and text not in normalized:
+                normalized.append(text)
+        return normalized
+
+    @staticmethod
+    def _capture_signatures(file_paths: list[str]) -> dict[str, FileSignature]:
+        return {
+            file_path: FileSignature.capture(file_path)
+            for file_path in file_paths
+        }
+
+    @staticmethod
+    def _cache_key(
+        signatures: dict[str, FileSignature],
+        *,
+        sheet_name: str,
+        header_row: int,
+        summary_column: str,
+    ) -> tuple[Any, ...]:
+        signature_key = tuple(
+            (
+                file_path,
+                int(signature.size),
+                int(signature.modified_ns),
+            )
+            for file_path, signature in signatures.items()
+        )
+        return (
+            signature_key,
+            str(sheet_name),
+            int(header_row),
+            str(summary_column),
+        )
+
+    @staticmethod
+    def _raw_cache_key(
+        signature: FileSignature,
+        *,
+        sheet_name: str,
+        header_row: int,
+        summary_column: str,
+    ) -> tuple[Any, ...]:
+        return (
+            signature.path,
+            int(signature.size),
+            int(signature.modified_ns),
+            str(sheet_name),
+            int(header_row),
+            str(summary_column),
+        )
+
+    @staticmethod
+    def _assert_signatures_unchanged(signatures: dict[str, FileSignature]) -> None:
+        changed = [
+            Path(file_path).name
+            for file_path, signature in signatures.items()
+            if not signature.matches_current_file()
+        ]
+        if changed:
+            raise ValueError(
+                "데이터를 읽는 동안 파일이 변경되었습니다: " + ", ".join(changed)
+            )
+
+    def load_metadata(self, file_path: str) -> WorkbookMetadata:
+        """대표 파일의 시트 목록만 읽는다."""
+        normalized_path = str(file_path or "").strip()
+        if not normalized_path:
+            raise ValueError("Excel 파일을 먼저 선택해야 합니다.")
+        signature = FileSignature.capture(normalized_path)
+        reader = self.reader_cls(header_row=1, summary_col="Summary", logger=self.logger)
+        sheet_names = reader.list_sheet_names(normalized_path)
+        if not sheet_names:
+            raise ValueError("시트가 없는 Excel 파일입니다.")
+        if not signature.matches_current_file():
+            raise ValueError("시트 정보를 읽는 동안 파일이 변경되었습니다.")
+        return WorkbookMetadata(
+            file_path=normalized_path,
+            sheet_names=list(sheet_names),
+            signature=signature,
+        )
+
+    def load_sheet_preview(
+        self,
+        file_path: str,
+        *,
+        sheet_name: str,
+        header_row: int = 1,
+        summary_column: str | None = None,
+        max_preview_rows: int = 10,
+    ) -> SheetPreviewData:
+        """선택한 시트의 헤더와 제한된 행만 읽는다."""
+        if header_row < 1:
+            raise ValueError("header_row 는 1 이상이어야 합니다.")
+        normalized_path = str(file_path or "").strip()
+        if not normalized_path:
+            raise ValueError("Excel 파일을 먼저 선택해야 합니다.")
+        normalized_sheet = str(sheet_name or "").strip()
+        if not normalized_sheet:
+            raise ValueError("미리볼 시트를 선택해야 합니다.")
+
+        signature = FileSignature.capture(normalized_path)
+        reader = self.reader_cls(
+            header_row=int(header_row),
+            summary_col="Summary",
+            logger=self.logger,
+        )
+        preview_reader = getattr(reader, "read_preview_rows", None)
+        if callable(preview_reader):
+            headers, raw_rows = preview_reader(
+                normalized_path,
+                normalized_sheet,
+                max_rows=max_preview_rows,
+            )
+        else:  # 기존 custom reader 호환
+            headers = reader.read_headers(normalized_path, normalized_sheet)
+            fallback_summary = self._suggest_summary(headers)
+            reader.summary_col = fallback_summary
+            raw_df = reader.read_excel(normalized_path, sheet_name=normalized_sheet)
+            raw_rows = raw_df[headers].head(max_preview_rows).values.tolist()
+        headers = self._normalize_headers(list(headers))
+        suggested_summary = self._suggest_summary(headers)
+        target_summary = str(summary_column or "").strip() or suggested_summary
+        if target_summary not in headers:
+            target_summary = suggested_summary
+        if not signature.matches_current_file():
+            raise ValueError("미리보기를 읽는 동안 파일이 변경되었습니다.")
+        return SheetPreviewData(
+            file_path=normalized_path,
+            sheet_name=normalized_sheet,
+            header_row=int(header_row),
+            summary_column=target_summary,
+            headers=headers,
+            rows=[
+                [gui_display_text(value) for value in row]
+                for row in raw_rows
+            ],
+            suggested_summary=suggested_summary,
+            signature=signature,
+        )
+
+    def load_full_data(
+        self,
+        file_path: str,
+        *,
+        file_paths: list[str] | None = None,
+        sheet_name: str,
+        header_row: int = 1,
+        summary_column: str,
+        sheet_preview: SheetPreviewData | None = None,
+        max_preview_rows: int = 10,
+    ) -> PreviewData:
+        """명시적 호출에서만 선택된 모든 파일의 전체 데이터를 읽고 cache한다."""
+        if header_row < 1:
+            raise ValueError("header_row 는 1 이상이어야 합니다.")
+        normalized_paths = self._normalized_file_paths(file_path, file_paths)
+        if not normalized_paths:
+            raise ValueError("Excel 파일을 먼저 선택해야 합니다.")
+        normalized_sheet = str(sheet_name or "").strip()
+        normalized_summary = str(summary_column or "").strip()
+        if not normalized_sheet:
+            raise ValueError("전체 데이터를 읽을 시트를 선택해야 합니다.")
+        if not normalized_summary:
+            raise ValueError("Summary 컬럼을 선택해야 합니다.")
+
+        signatures = self._capture_signatures(normalized_paths)
+        cache_key = self._cache_key(
+            signatures,
+            sheet_name=normalized_sheet,
+            header_row=header_row,
+            summary_column=normalized_summary,
+        )
+        cached = self._full_data_cache.get(cache_key)
+        if cached is not None and cached.files_are_current():
+            return replace(cached, cache_hit=True)
+
+        reader = self.reader_cls(
+            header_row=int(header_row),
+            summary_col=normalized_summary,
+            logger=self.logger,
+        )
+        raw_df_by_file: dict[str, pd.DataFrame] = {}
+        active_raw_cache_keys: set[tuple[Any, ...]] = set()
+        expected_headers: list[str] | None = None
+        for current_path in normalized_paths:
+            raw_cache_key = self._raw_cache_key(
+                signatures[current_path],
+                sheet_name=normalized_sheet,
+                header_row=header_row,
+                summary_column=normalized_summary,
+            )
+            active_raw_cache_keys.add(raw_cache_key)
+            raw_df = self._raw_data_cache.get(raw_cache_key)
+            if raw_df is None:
+                raw_df = reader.read_excel(
+                    file_path=current_path,
+                    sheet_name=normalized_sheet,
+                )
+                self._raw_data_cache[raw_cache_key] = raw_df
+            visible_headers = [
+                str(column)
+                for column in raw_df.columns
+                if not str(column).startswith("_")
+            ]
+            if expected_headers is None:
+                expected_headers = visible_headers
+            elif visible_headers != expected_headers:
+                raise ValueError(
+                    f"{Path(current_path).name} 파일의 헤더가 기준 파일과 다릅니다."
+                )
+            raw_df_by_file[current_path] = raw_df
+        self._assert_signatures_unchanged(signatures)
+        active_source_keys = {key[:-1] for key in active_raw_cache_keys}
+        self._raw_data_cache = {
+            key: value
+            for key, value in self._raw_data_cache.items()
+            if key[:-1] in active_source_keys
+        }
+
+        representative_path = normalized_paths[0]
+        raw_df = raw_df_by_file[representative_path]
+        headers = list(expected_headers or [])
+        if normalized_summary not in headers:
+            raise ValueError(f"'{normalized_summary}' 컬럼을 찾을 수 없습니다.")
+        suggested_summary = self._suggest_summary(headers)
+        if (
+            sheet_preview is not None
+            and sheet_preview.file_path == representative_path
+            and sheet_preview.sheet_name == normalized_sheet
+            and int(sheet_preview.header_row) == int(header_row)
+            and sheet_preview.signature == signatures[representative_path]
+        ):
+            preview_rows = [list(row) for row in sheet_preview.rows]
+        else:
+            visible_df = raw_df[headers].head(max_preview_rows)
+            preview_rows = [
+                [gui_display_text(value) for value in row.tolist()]
+                for _, row in visible_df.iterrows()
+            ]
+
+        result = PreviewData(
+            file_path=representative_path,
+            sheet_name=normalized_sheet,
+            header_row=int(header_row),
+            summary_column=normalized_summary,
+            sheet_names=[],
+            headers=headers,
+            rows=preview_rows,
+            suggested_summary=suggested_summary,
+            raw_df=raw_df,
+            raw_df_by_file=raw_df_by_file,
+            file_signatures=signatures,
+            cache_hit=False,
+        )
+        self._full_data_cache[cache_key] = result
+        while len(self._full_data_cache) > 8:
+            oldest_key = next(iter(self._full_data_cache))
+            self._full_data_cache.pop(oldest_key, None)
+        return result
+
     def load_preview(
         self,
         file_path: str,
@@ -784,7 +1099,7 @@ class GuiExcelService:
         summary_column: str | None = None,
         max_preview_rows: int = 10,
     ) -> PreviewData:
-        """`load_preview` 데이터를 불러온다."""
+        """기존 호출 호환: 메타데이터와 전체 데이터를 한 번에 불러온다."""
         if header_row < 1:
             raise ValueError("header_row 는 1 이상이어야 합니다.")
 
@@ -802,40 +1117,13 @@ class GuiExcelService:
         target_summary = str(summary_column or "").strip() or suggested_summary
         if target_summary not in headers:
             target_summary = suggested_summary
-        data_reader = self.reader_cls(
-            header_row=header_row,
-            summary_col=target_summary,
-            logger=self.logger,
-        )
-        raw_df = data_reader.read_excel(file_path=file_path, sheet_name=target_sheet_name)
-        raw_df_by_file: dict[str, pd.DataFrame] = {
-            str(file_path).strip(): raw_df,
-        }
-        for other_file_path in file_paths or []:
-            normalized_file_path = str(other_file_path).strip()
-            if not normalized_file_path or normalized_file_path in raw_df_by_file:
-                continue
-            raw_df_by_file[normalized_file_path] = data_reader.read_excel(
-                file_path=normalized_file_path,
-                sheet_name=target_sheet_name,
-            )
-
-        preview_headers = [header for header in headers if not str(header).startswith("_")]
-        preview_rows: list[list[str]] = []
-        if not raw_df.empty:
-            visible_df = raw_df[preview_headers].head(max_preview_rows)
-            for _, row in visible_df.iterrows():
-                preview_rows.append([gui_display_text(value) for value in row.tolist()])
-
-        return PreviewData(
-            file_path=str(file_path),
+        result = self.load_full_data(
+            file_path,
+            file_paths=file_paths,
             sheet_name=str(target_sheet_name),
-            header_row=int(header_row),
+            header_row=header_row,
             summary_column=target_summary,
-            sheet_names=sheet_names,
-            headers=preview_headers,
-            rows=preview_rows,
-            suggested_summary=suggested_summary,
-            raw_df=raw_df,
-            raw_df_by_file=raw_df_by_file,
+            max_preview_rows=max_preview_rows,
         )
+        result.sheet_names = list(sheet_names)
+        return result

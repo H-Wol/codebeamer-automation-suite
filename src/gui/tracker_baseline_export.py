@@ -158,7 +158,7 @@ class _LongValueCollector:
 
 
 _KIND_LABELS = {
-    BaselineComparisonKind.ADDED: "추가",
+    BaselineComparisonKind.ADDED: "신규",
     BaselineComparisonKind.REMOVED: "삭제",
     BaselineComparisonKind.CHANGED: "변경",
     BaselineComparisonKind.UNCHANGED: "변경 없음",
@@ -413,7 +413,7 @@ def _populate_summary_sheet(
             ),
         ),
         ("전체 아이템", item_count),
-        ("추가", counts[BaselineComparisonKind.ADDED]),
+        ("신규", counts[BaselineComparisonKind.ADDED]),
         ("삭제", counts[BaselineComparisonKind.REMOVED]),
         ("변경", counts[BaselineComparisonKind.CHANGED]),
         ("변경 없음", counts[BaselineComparisonKind.UNCHANGED]),

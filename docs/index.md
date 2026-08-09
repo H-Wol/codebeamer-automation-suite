@@ -16,11 +16,12 @@
 10. [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)
 11. [통합 실행 기록](./activity-history.md)
 12. [Codebeamer API 모니터](./api-monitor.md)
-13. [트러블슈팅](./troubleshooting.md)
-14. [호환 경로 감사](./compatibility.md)
-15. [샘플 데이터 및 자격증명 감사](./security-audit.md)
-16. [GUI 리팩토링 진행 및 검증 기록](./refactoring-progress.md)
-17. [v2 변경 사항](./v2-changes.md)
+13. [개발자 도구와 진단 패키지](./developer-tools.md)
+14. [트러블슈팅](./troubleshooting.md)
+15. [호환 경로 감사](./compatibility.md)
+16. [샘플 데이터 및 자격증명 감사](./security-audit.md)
+17. [GUI 리팩토링 진행 및 검증 기록](./refactoring-progress.md)
+18. [v2 변경 사항](./v2-changes.md)
 
 ## 문서별 역할
 
@@ -54,6 +55,8 @@
   단건 쓰기와 배치 결과의 로컬 저장 범위, 필터, 보안 경계와 현재 제한을 정리합니다.
 - [Codebeamer API 모니터](./api-monitor.md)
   개발자용 실시간 호출 통계, 표 사용법, 재시도 표시와 메타데이터 수집 보안 경계를 정리합니다.
+- [개발자 도구와 진단 패키지](./developer-tools.md)
+  세션 진단 로그, 진단 ID, API 모니터 재사용, ZIP 내보내기와 개인정보 제외 계약을 정리합니다.
 - [Wiki 형식 조회 렌더링](./wiki-rendering.md)
   설명과 TableField에서 명시적 Wiki 메타데이터만 렌더링하는 판정 규칙, 지원 문법과 보안 경계를 정리합니다.
 
@@ -93,6 +96,8 @@
   다중 연결 profile, 화면, 네트워크·저장소, 테스트 모드, 개발자 기능과 설정 데이터 관리를 담당합니다.
 - `src/api_monitor.py`, `src/gui/api_monitor_window.py`
   API 호출 메타데이터의 제한된 메모리 수집과 실시간 통계·필터 창을 담당합니다.
+- `src/diagnostics.py`, `src/gui/developer_tools_window.py`
+  구조화 진단 이벤트, 안전한 ZIP 내보내기와 확장 가능한 개발자 도구 탭 창을 담당합니다.
 - `src/gui/tracker_query_models.py`, `src/gui/tracker_query_service.py`
   tracker 범위 검색, pagination, 계층·상세·ID 경로의 UI 독립 조회 계약을 담당합니다.
 - `src/gui/tracker_workspace.py`

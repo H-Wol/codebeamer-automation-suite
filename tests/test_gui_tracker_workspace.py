@@ -3,11 +3,15 @@ from __future__ import annotations
 from copy import deepcopy
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QDialog
+from PySide6.QtWidgets import QMessageBox
 
 from src.gui.settings_store import GuiSettings
 from src.gui.tracker_baseline_compare import BaselineComparisonSource
@@ -24,6 +28,51 @@ from src.gui.tracker_workspace import TrackerWorkspacePage
 
 
 SAMPLE_DIR = Path(__file__).resolve().parent.parent / "data" / "gui-offline-sample"
+
+
+class _SignalStub:
+    def __init__(self) -> None:
+        self._callbacks = []
+
+    def connect(self, callback) -> None:
+        self._callbacks.append(callback)
+
+    def emit(self, value=None) -> None:
+        for callback in tuple(self._callbacks):
+            if value is None:
+                callback()
+            else:
+                callback(value)
+
+
+class _DeferredTask:
+    def __init__(self, operation) -> None:
+        self.operation = operation
+        self.completed = _SignalStub()
+        self.failed = _SignalStub()
+        self.finished = _SignalStub()
+        self.started = False
+        self.deleted = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def finish(self) -> None:
+        try:
+            result = self.operation()
+        except Exception as exc:
+            self.failed.emit(exc)
+        else:
+            self.completed.emit(result)
+        finally:
+            self.finished.emit()
+
+    def emit_failure(self, exc: Exception) -> None:
+        self.failed.emit(exc)
+        self.finished.emit()
+
+    def deleteLater(self) -> None:
+        self.deleted = True
 
 
 class CountingTrackerQueryService(TrackerQueryService):
@@ -215,9 +264,16 @@ class TrackerWorkspacePageTest(unittest.TestCase):
             offline_query_data_path=str(SAMPLE_DIR / "offline_tracker_items.json"),
         )
         self.service = CountingTrackerQueryService()
+        self.baseline_compare_confirmations = []
+
+        def confirm_baseline_compare(reference, comparison) -> bool:
+            self.baseline_compare_confirmations.append((reference, comparison))
+            return True
+
         self.page = TrackerWorkspacePage(
             settings_provider=lambda: self.settings,
             service=self.service,
+            baseline_compare_confirmer=confirm_baseline_compare,
             synchronous=True,
         )
         self.page.show()
@@ -333,7 +389,7 @@ class TrackerWorkspacePageTest(unittest.TestCase):
             sorted(sorted_labels, key=str.casefold, reverse=True),
         )
 
-    def test_baseline_sources_auto_load_full_result_and_selection_reuses_cache(self) -> None:
+    def test_baseline_sources_require_explicit_confirmation_and_selection_reuses_cache(self) -> None:
         self.page.activate()
         panel = self.page.baseline_comparison_panel
         comparison = TrackerItemSummary.from_raw(
@@ -359,10 +415,20 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         panel.after_combo.setCurrentIndex(panel.after_combo.count() - 1)
         self._app.processEvents()
 
+        self.assertEqual(len(calls), 0)
+        self.assertEqual(len(self.baseline_compare_confirmations), 0)
+        self.assertIsNone(self.page._baseline_comparison_result)
+        self.assertIn("전체 비교 실행", panel.status_label.text())
+
+        panel.run_button.click()
+        self._app.processEvents()
+
         self.assertEqual(len(calls), 1)
+        self.assertEqual(len(self.baseline_compare_confirmations), 1)
         self.assertIs(self.page._baseline_comparison_result, result)
         self.assertEqual(self.page.baseline_result_table.rowCount(), 1)
         self.assertTrue(panel.export_button.isEnabled())
+        self.assertEqual(panel.run_button.text(), "전체 비교 다시 불러오기")
 
         self.page.baseline_result_table.selectRow(0)
         self._app.processEvents()
@@ -370,6 +436,256 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.assertEqual(self.page._baseline_selected_item_id, 9001001)
         self.assertGreater(panel.detail.rowCount(), 0)
         self.assertEqual(len(calls), 1)
+
+    def test_baseline_confirmation_cancel_does_not_call_full_compare(self) -> None:
+        self.page.activate()
+        panel = self.page.baseline_comparison_panel
+        calls = []
+        self.service.compare_tracker_at_sources = lambda *args, **kwargs: calls.append(
+            (args, kwargs)
+        )
+        self.page.baseline_compare_confirmer = None
+        panel.after_combo.addItem("R1", 11)
+        panel.after_combo.setCurrentIndex(panel.after_combo.count() - 1)
+
+        with patch(
+            "src.gui.tracker_workspace.QMessageBox.warning",
+            return_value=QMessageBox.StandardButton.Cancel,
+        ) as warning:
+            panel.run_button.click()
+            self._app.processEvents()
+
+        warning.assert_called_once()
+        self.assertEqual(calls, [])
+        self.assertIsNone(self.page._baseline_comparison_result)
+        self.assertTrue(panel.run_button.isEnabled())
+        self.assertEqual(panel.run_button.text(), "전체 비교 실행")
+
+    def test_failed_same_source_reload_preserves_cached_baseline_result(self) -> None:
+        self.page.activate()
+        panel = self.page.baseline_comparison_panel
+        result = compare_tracker_items(
+            (TrackerItemSummary.from_raw({"id": 9001001, "name": "Earlier"}),),
+            (TrackerItemSummary.from_raw({"id": 9001001, "name": "Current"}),),
+            before_source=BaselineComparisonSource(11),
+            after_source=BaselineComparisonSource(None),
+        )
+        self.service.compare_tracker_at_sources = lambda *args, **kwargs: result
+        panel.after_combo.addItem("R1", 11)
+        panel.after_combo.setCurrentIndex(panel.after_combo.count() - 1)
+        panel.run_button.click()
+        self._app.processEvents()
+        cached_key = self.page._baseline_comparison_cache_key
+        detail_rows = panel.detail.rowCount()
+
+        def fail_reload(*_args, **_kwargs):
+            raise RuntimeError("reload failed")
+
+        self.service.compare_tracker_at_sources = fail_reload
+        panel.run_button.click()
+        self._app.processEvents()
+
+        self.assertIs(self.page._baseline_comparison_result, result)
+        self.assertEqual(self.page._baseline_comparison_cache_key, cached_key)
+        self.assertIs(panel._result, result)
+        self.assertEqual(panel.detail.rowCount(), detail_rows)
+        self.assertTrue(panel.export_button.isEnabled())
+        self.assertEqual(panel.run_button.text(), "전체 비교 다시 불러오기")
+        self.assertIn("reload failed", panel.status_label.text())
+        self.assertEqual(len(self.baseline_compare_confirmations), 2)
+
+    def test_stale_baseline_compare_failure_does_not_overwrite_new_sources(self) -> None:
+        self.page.activate()
+        panel = self.page.baseline_comparison_panel
+        tasks = []
+        alerts = []
+        self.page.synchronous = False
+        self.page.task_factory = lambda operation: tasks.append(
+            _DeferredTask(operation)
+        ) or tasks[-1]
+        self.page.error_notifier = lambda title, message: alerts.append((title, message))
+        panel.after_combo.addItem("R1", 11)
+        panel.after_combo.setCurrentIndex(panel.after_combo.count() - 1)
+
+        panel.run_button.click()
+
+        self.assertEqual(len(tasks), 1)
+        self.assertTrue(tasks[0].started)
+        self.assertIsNotNone(self.page._baseline_comparison_loading_key)
+
+        panel.after_combo.setCurrentIndex(panel.after_combo.findData(None))
+        expected_status = panel.status_label.text()
+        tasks[0].emit_failure(RuntimeError("stale failure"))
+
+        self.assertEqual(panel.status_label.text(), expected_status)
+        self.assertIn("서로 다른", panel.status_label.text())
+        self.assertEqual(alerts, [])
+        self.assertIsNone(self.page._baseline_comparison_loading_key)
+
+    def test_baseline_export_runs_in_background_and_restores_success_ui(self) -> None:
+        self.page.activate()
+        panel = self.page.baseline_comparison_panel
+        result = compare_tracker_items(
+            (TrackerItemSummary.from_raw({"id": 9001001, "name": "Earlier"}),),
+            (TrackerItemSummary.from_raw({"id": 9001001, "name": "Current"}),),
+            before_source=BaselineComparisonSource(11),
+            after_source=BaselineComparisonSource(None),
+        )
+        cache_key = (self.page._current_tracker.tracker_id, 11, None)
+        self.page._baseline_comparison_result = result
+        self.page._baseline_comparison_cache_key = cache_key
+        panel.set_result(result)
+        tasks = []
+        self.page.synchronous = False
+        self.page.task_factory = lambda operation: tasks.append(
+            _DeferredTask(operation)
+        ) or tasks[-1]
+        summary = SimpleNamespace(
+            item_count=1,
+            selected_field_count=1,
+            data_row_count=1,
+            long_value_count=0,
+            long_value_part_count=0,
+        )
+
+        with (
+            patch(
+                "src.gui.tracker_workspace.baseline_export_fields",
+                return_value=(object(),),
+            ),
+            patch("src.gui.tracker_workspace.BaselineExportFieldDialog") as dialog_cls,
+            patch(
+                "src.gui.tracker_workspace.QFileDialog.getSaveFileName",
+                return_value=("baseline.xlsx", "Excel 통합 문서 (*.xlsx)"),
+            ),
+            patch(
+                "src.gui.tracker_workspace.export_baseline_comparison_xlsx",
+                return_value=summary,
+            ) as export_mock,
+        ):
+            dialog_cls.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            dialog_cls.return_value.selected_field_keys.return_value = ("name",)
+
+            self.page._export_baseline_comparison()
+
+            self.assertEqual(len(tasks), 1)
+            self.assertTrue(tasks[0].started)
+            export_mock.assert_not_called()
+            self.assertTrue(self.page._baseline_export_in_progress)
+            self.assertFalse(panel.export_button.isEnabled())
+            self.assertIn("생성하는 중", panel.status_label.text())
+
+            self.page._export_baseline_comparison()
+            self.assertEqual(len(tasks), 1)
+
+            tasks[0].finish()
+
+        export_mock.assert_called_once()
+        self.assertFalse(self.page._baseline_export_in_progress)
+        self.assertTrue(panel.export_button.isEnabled())
+        self.assertIn("Excel 내보내기 완료", panel.status_label.text())
+        self.assertTrue(tasks[0].deleted)
+
+    def test_baseline_export_failure_restores_cached_result_actions(self) -> None:
+        self.page.activate()
+        panel = self.page.baseline_comparison_panel
+        result = compare_tracker_items(
+            (TrackerItemSummary.from_raw({"id": 9001001, "name": "Earlier"}),),
+            (TrackerItemSummary.from_raw({"id": 9001001, "name": "Current"}),),
+            before_source=BaselineComparisonSource(11),
+            after_source=BaselineComparisonSource(None),
+        )
+        self.page._baseline_comparison_result = result
+        self.page._baseline_comparison_cache_key = (
+            self.page._current_tracker.tracker_id,
+            11,
+            None,
+        )
+        panel.set_result(result)
+        tasks = []
+        alerts = []
+        self.page.synchronous = False
+        self.page.task_factory = lambda operation: tasks.append(
+            _DeferredTask(operation)
+        ) or tasks[-1]
+        self.page.error_notifier = lambda title, message: alerts.append((title, message))
+
+        with (
+            patch(
+                "src.gui.tracker_workspace.baseline_export_fields",
+                return_value=(object(),),
+            ),
+            patch("src.gui.tracker_workspace.BaselineExportFieldDialog") as dialog_cls,
+            patch(
+                "src.gui.tracker_workspace.QFileDialog.getSaveFileName",
+                return_value=("baseline.xlsx", "Excel 통합 문서 (*.xlsx)"),
+            ),
+            patch(
+                "src.gui.tracker_workspace.export_baseline_comparison_xlsx",
+                side_effect=RuntimeError("save failed"),
+            ),
+        ):
+            dialog_cls.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            dialog_cls.return_value.selected_field_keys.return_value = ("name",)
+
+            self.page._export_baseline_comparison()
+            tasks[0].finish()
+
+        self.assertFalse(self.page._baseline_export_in_progress)
+        self.assertTrue(panel.export_button.isEnabled())
+        self.assertIn("save failed", panel.status_label.text())
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("Baseline Excel 내보내기 실패", alerts[0][0])
+
+    def test_new_and_deleted_items_do_not_show_fields_as_changed(self) -> None:
+        self.page.activate()
+        panel = self.page.baseline_comparison_panel
+        result = compare_tracker_items(
+            (TrackerItemSummary.from_raw({"id": 9001002, "name": "Deleted"}),),
+            (TrackerItemSummary.from_raw({"id": 9001001, "name": "New"}),),
+            before_source=BaselineComparisonSource(11),
+            after_source=BaselineComparisonSource(None),
+        )
+
+        panel.set_result(result, selected_item_id=9001001)
+
+        self.assertIn("신규 아이템", panel.status_label.text())
+        self.assertNotIn("변경 필드", panel.status_label.text())
+        self.assertTrue(
+            all(
+                panel.detail.item(row, 3).text() == "＋ 신규"
+                for row in range(panel.detail.rowCount())
+            )
+        )
+
+        panel.select_item(9001002)
+
+        self.assertIn("삭제 아이템", panel.status_label.text())
+        self.assertNotIn("변경 필드", panel.status_label.text())
+        self.assertTrue(
+            all(
+                panel.detail.item(row, 3).text() == "－ 삭제"
+                for row in range(panel.detail.rowCount())
+            )
+        )
+
+        self.page._baseline_comparison_result = result
+        self.page._render_baseline_comparison_results()
+        result_rows = {
+            self.page.baseline_result_table.item(row, 1).text(): row
+            for row in range(self.page.baseline_result_table.rowCount())
+        }
+        new_row = result_rows["9001001"]
+        deleted_row = result_rows["9001002"]
+        self.assertIn(
+            "신규", self.page.baseline_result_table.item(new_row, 0).text()
+        )
+        self.assertEqual(
+            self.page.baseline_result_table.item(new_row, 3).text(), "—"
+        )
+        self.assertEqual(
+            self.page.baseline_result_table.item(deleted_row, 3).text(), "—"
+        )
 
     def test_baseline_state_survives_tab_navigation_until_explicit_reload(self) -> None:
         self.page.activate()

@@ -5,13 +5,22 @@ from dataclasses import replace
 from PySide6.QtCore import QTimer
 
 from src.api_monitor import API_MONITOR
+from src.diagnostics import DIAGNOSTICS
+from src.diagnostics import DiagnosticLevel
+from src.diagnostics import DiagnosticService
+from src.diagnostics import DiagnosticSource
+from src.diagnostics import operation_context
 
 from .activity_history import ActivityHistoryStore
 from .activity_history import ActivityRecord
 from .activity_history import default_activity_history_path
 from .activity_history_page import ActivityHistoryPage
-from .api_monitor_window import ApiMonitorWindow
 from .batch_window import BatchUploadWindow
+from .developer_tools_window import DeveloperToolsWindow
+from .developer_tool_panels import ExcelToolPanel
+from .developer_tool_panels import PayloadToolPanel
+from .developer_tool_panels import ReadOnlyQueryToolPanel
+from .developer_tool_panels import SchemaCacheToolPanel
 from .error_reporting import notify_user_error
 from .loading_overlay import LoadingOverlay
 from .settings_center import SettingsCenterPage
@@ -60,10 +69,16 @@ QMainWindow = _QT["QMainWindow"]
 class MainWindow(QMainWindow):
     """조회·배치·기록·설정을 전환하는 최상위 애플리케이션 셸."""
 
-    def __init__(self, settings_store: GuiSettingsStore) -> None:
+    def __init__(
+        self,
+        settings_store: GuiSettingsStore,
+        *,
+        diagnostics: DiagnosticService = DIAGNOSTICS,
+    ) -> None:
         super().__init__()
         self.qt = _QT
         self.settings_store = settings_store
+        self.diagnostics = diagnostics
         settings_store.ensure_app_settings()
         initial_settings = settings_store.load()
         API_MONITOR.reset(
@@ -76,7 +91,8 @@ class MainWindow(QMainWindow):
         self.navigation_collapsed = bool(initial_settings.navigation_collapsed)
         self.route_widgets: dict[str, object] = {}
         self.nav_buttons: dict[str, object] = {}
-        self.api_monitor_window: ApiMonitorWindow | None = None
+        self.developer_tools_window: DeveloperToolsWindow | None = None
+        self.api_monitor_window: DeveloperToolsWindow | None = None
         self._busy_tokens: set[int] = set()
 
         self._build_application_shell(initial_settings)
@@ -84,6 +100,13 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(860, 620)
         self.resize(*_window_size_from_settings(initial_settings))
         self._show_route(ROUTE_TRACKER_WORKSPACE)
+        self.diagnostics.record(
+            level=DiagnosticLevel.INFO,
+            source=DiagnosticSource.APPLICATION,
+            event_kind="application_started",
+            message="GUI 작업공간을 시작했습니다.",
+            details={"offline_mode": bool(initial_settings.offline_mode)},
+        )
 
         if bool(getattr(initial_settings, "window_is_fullscreen", False)):
             self.showFullScreen()
@@ -230,7 +253,7 @@ class MainWindow(QMainWindow):
             connection_tester=(
                 self.batch_window.codebeamer_service.test_connection_and_load_projects
             ),
-            api_monitor_requested=self._show_api_monitor,
+            api_monitor_requested=self._show_developer_tools,
             busy_started=self._begin_busy,
             busy_finished=self._end_busy,
             parent=content,
@@ -429,32 +452,136 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"왼쪽 메뉴를 {state_text}.")
 
     def _on_global_settings_applied(self, settings: GuiSettings) -> None:
-        was_monitor_enabled = API_MONITOR.enabled
-        applied = self.batch_window.apply_global_settings(settings)
-        API_MONITOR.configure(
-            enabled=bool(applied.api_monitor_enabled),
-            slow_threshold_ms=int(applied.api_monitor_slow_threshold_ms),
+        operation_id = self.diagnostics.start_operation(
+            source=DiagnosticSource.SETTINGS,
+            event_kind="settings_apply",
+            message="전역 설정 적용을 시작했습니다.",
         )
-        self._update_mode_badge(applied)
-        self.batch_window._apply_theme(applied.theme_name)
-        self.tracker_workspace_page.on_settings_applied(applied)
-        if bool(applied.api_monitor_enabled) and not was_monitor_enabled:
-            self._show_api_monitor()
-        elif self.api_monitor_window is not None:
-            self.api_monitor_window.refresh(force=True)
-        self.statusBar().showMessage("전역 설정을 현재 작업에 적용했습니다.")
+        try:
+            with operation_context(operation_id):
+                was_monitor_enabled = API_MONITOR.enabled
+                applied = self.batch_window.apply_global_settings(settings)
+                API_MONITOR.configure(
+                    enabled=bool(applied.api_monitor_enabled),
+                    slow_threshold_ms=int(applied.api_monitor_slow_threshold_ms),
+                )
+                self._update_mode_badge(applied)
+                self.batch_window._apply_theme(applied.theme_name)
+                self.tracker_workspace_page.on_settings_applied(applied)
+                if bool(applied.api_monitor_enabled) and not was_monitor_enabled:
+                    self._show_api_monitor()
+                elif self.developer_tools_window is not None:
+                    self.developer_tools_window.refresh(force=True)
+                self.statusBar().showMessage("전역 설정을 현재 작업에 적용했습니다.")
+        except Exception as exc:
+            self.diagnostics.finish_operation(
+                operation_id,
+                source=DiagnosticSource.SETTINGS,
+                event_kind="settings_apply",
+                message="전역 설정을 적용하지 못했습니다.",
+                outcome="failed",
+                details={"error_type": type(exc).__name__},
+            )
+            raise
+        self.diagnostics.finish_operation(
+            operation_id,
+            source=DiagnosticSource.SETTINGS,
+            event_kind="settings_apply",
+            message="전역 설정을 적용했습니다.",
+        )
 
-    def _show_api_monitor(self) -> None:
-        if self.api_monitor_window is None:
-            self.api_monitor_window = ApiMonitorWindow(
+    def _show_developer_tools(self) -> None:
+        if self.developer_tools_window is None:
+            self.developer_tools_window = DeveloperToolsWindow(
+                self.diagnostics,
                 API_MONITOR,
                 settings_provider=lambda: self.batch_window.session_state.settings,
+                activity_provider=self.activity_store.load,
+                default_directory=self.settings_store.root_dir,
                 parent=self,
             )
-        self.api_monitor_window.show()
-        self.api_monitor_window.raise_()
-        self.api_monitor_window.activateWindow()
-        self.api_monitor_window.refresh(force=True)
+            self.developer_tools_window.excel_tool_panel = ExcelToolPanel(
+                default_directory=self.settings_store.root_dir,
+                operation_runner=lambda message, callback: self.batch_window._run_with_busy(
+                    message,
+                    callback,
+                ),
+                parent=self.developer_tools_window.tabs,
+            )
+            self.developer_tools_window.payload_tool_panel = PayloadToolPanel(
+                self._current_payload_frame,
+                parent=self.developer_tools_window.tabs,
+            )
+            self.developer_tools_window.schema_cache_tool_panel = SchemaCacheToolPanel(
+                lambda: self.batch_window.session_state.mapping_context,
+                parent=self.developer_tools_window.tabs,
+            )
+            self.developer_tools_window.read_only_query_tool_panel = ReadOnlyQueryToolPanel(
+                self._execute_developer_read_only_query,
+                tracker_id_provider=self._current_developer_tracker_id,
+                parent=self.developer_tools_window.tabs,
+            )
+            self.developer_tools_window.add_tool_tab(
+                self.developer_tools_window.excel_tool_panel,
+                "Excel 도구",
+            )
+            self.developer_tools_window.add_tool_tab(
+                self.developer_tools_window.payload_tool_panel,
+                "Payload",
+            )
+            self.developer_tools_window.add_tool_tab(
+                self.developer_tools_window.schema_cache_tool_panel,
+                "스키마·캐시",
+            )
+            self.developer_tools_window.add_tool_tab(
+                self.developer_tools_window.read_only_query_tool_panel,
+                "읽기 전용 Query",
+            )
+            # Keep the previous public attribute while callers migrate to the
+            # combined developer tools window.
+            self.api_monitor_window = self.developer_tools_window
+        self.developer_tools_window.select_diagnostics_tab()
+        self.developer_tools_window.show()
+        self.developer_tools_window.raise_()
+        self.developer_tools_window.activateWindow()
+        self.developer_tools_window.refresh(force=True)
+
+    def _current_payload_frame(self):
+        validation_context = self.batch_window.session_state.validation_context
+        validated = getattr(validation_context, "payload_df", None)
+        if validated is not None:
+            return validated
+        mapping_context = self.batch_window.session_state.mapping_context
+        if mapping_context is None:
+            return None
+        wizard = getattr(mapping_context, "wizard", None)
+        state = getattr(wizard, "state", None)
+        return getattr(state, "payload_df", None)
+
+    def _current_developer_tracker_id(self) -> int | None:
+        tracker = getattr(self.tracker_workspace_page, "_current_tracker", None)
+        tracker_id = getattr(tracker, "tracker_id", None)
+        if tracker_id not in (None, ""):
+            return int(tracker_id)
+        fallback = self.batch_window.session_state.settings.default_tracker_id
+        try:
+            normalized = int(fallback)
+        except (TypeError, ValueError):
+            return None
+        return normalized if normalized > 0 else None
+
+    def _execute_developer_read_only_query(self, query):
+        return self.batch_window._run_with_busy(
+            "읽기 전용 Tracker Query를 실행하는 중입니다.",
+            self.tracker_workspace_page.service.search,
+            self.batch_window.session_state.settings,
+            query,
+        )
+
+    def _show_api_monitor(self) -> None:
+        self._show_developer_tools()
+        assert self.developer_tools_window is not None
+        self.developer_tools_window.select_api_tab()
 
     def _on_batch_settings_changed(self, settings: GuiSettings) -> None:
         self._update_mode_badge(settings)
@@ -506,8 +633,14 @@ class MainWindow(QMainWindow):
             self.settings_store.save_window_preferences(updated_settings)
         except Exception:
             pass
-        if self.api_monitor_window is not None:
-            self.api_monitor_window.close()
+        self.diagnostics.record(
+            level=DiagnosticLevel.INFO,
+            source=DiagnosticSource.APPLICATION,
+            event_kind="application_closing",
+            message="GUI 작업공간을 종료합니다.",
+        )
+        if self.developer_tools_window is not None:
+            self.developer_tools_window.close()
         self.tracker_workspace_page.shutdown()
         self._busy_tokens.clear()
         self.loading_overlay.clear()

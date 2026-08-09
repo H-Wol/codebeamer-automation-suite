@@ -55,7 +55,7 @@ class BatchUploadWindow(WindowShellMixin, WindowWorkflowMixin, WindowUploadMixin
             file_state={},
             projects=[],
             trackers=[],
-            workflow_preset=settings_store.load_workflow_preset(),
+            workflow_preset=None,
             mapping_context=None,
             validation_context=None,
             upload_result=None,
@@ -69,6 +69,7 @@ class BatchUploadWindow(WindowShellMixin, WindowWorkflowMixin, WindowUploadMixin
         self._activity_dry_run = False
         self._build_shell()
         self._build_pages()
+        self._connect_upload_workbook_actions()
 
         self.setWindowTitle("Codebeamer Upload Studio")
         if not self._embedded:
@@ -88,9 +89,6 @@ class BatchUploadWindow(WindowShellMixin, WindowWorkflowMixin, WindowUploadMixin
                 self.showFullScreen()
             elif bool(getattr(initial_settings, "window_is_maximized", False)):
                 self.showMaximized()
-        if self.session_state.workflow_preset is not None:
-            self._apply_workflow_preset(self.session_state.workflow_preset, startup=True)
-
     def _on_settings_changed(self, settings: GuiSettings | None) -> GuiSettings:
         updated_settings = WindowWorkflowMixin._on_settings_changed(self, settings)
         if self._settings_changed_callback is not None:

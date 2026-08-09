@@ -34,6 +34,8 @@ PySide6 signal/slot에서 처리되지 않은 Python 예외는 기본적으로 �
 - `threading.excepthook`으로 일반 Python thread의 처리되지 않은 예외를 수신합니다.
 - 기존 hook도 호출해 개발자용 traceback을 없애지 않습니다.
 - 사용자 알림에는 예외 종류와 제한된 메시지만 표시하고 password, token, authorization, cookie, session 형태의 값을 마스킹합니다.
+- 오류마다 짧은 진단 ID를 표시하고, 같은 ID의 구조화 이벤트를 세션 진단 로그에 남깁니다.
+- 진단 traceback은 locals와 source line을 제외한 파일·함수·행 번호만 보관합니다.
 - worker thread에서 발생한 알림은 queued signal로 GUI thread에 전달합니다.
 - 같은 제목과 메시지는 짧은 시간 안에 한 번만 표시합니다.
 - 오류 알림 자체가 실패해도 다시 예외 hook으로 진입하지 않습니다.

@@ -399,6 +399,20 @@ class GuiMainWindowSmokeTest(unittest.TestCase):
             self.assertIsNotNone(window.api_monitor_window)
             assert window.api_monitor_window is not None
             self.assertTrue(window.api_monitor_window.isVisible())
+            self.assertEqual(
+                [
+                    window.api_monitor_window.tabs.tabText(index)
+                    for index in range(window.api_monitor_window.tabs.count())
+                ],
+                [
+                    "진단 로그",
+                    "API 모니터",
+                    "Excel 도구",
+                    "Payload",
+                    "스키마·캐시",
+                    "읽기 전용 Query",
+                ],
+            )
 
             disabled = GuiSettings(
                 **{

@@ -3,7 +3,7 @@
 ## 목적
 
 API 모니터는 온라인 모드에서 발생하는 Codebeamer HTTP 호출의 상태와 응답 지연을
-별도 창에서 실시간으로 확인하는 개발자용 도구입니다. 서버 응답 내용을 검사하는
+개발자 도구 창의 `API 모니터` 탭에서 실시간으로 확인합니다. 서버 응답 내용을 검사하는
 도구가 아니라, 어떤 종류의 호출이 느리거나 실패하는지 빠르게 구분하는 용도입니다.
 
 ## 사용 방법
@@ -12,9 +12,9 @@ API 모니터는 온라인 모드에서 발생하는 Codebeamer HTTP 호출의 �
 2. `API 모니터 사용`을 켭니다.
 3. 필요하면 `느린 요청 기준`을 100~60,000ms 사이에서 조정합니다.
 4. 설정을 `저장`한 뒤 `적용`합니다.
-5. `API 모니터 열기`를 누릅니다.
+5. `개발자 도구 열기`를 누르고 `API 모니터` 탭을 선택합니다.
 
-기능을 켠 상태로 앱을 다시 시작하면 모니터 창이 자동으로 열립니다. 창만 닫아도
+기능을 켠 상태로 앱을 다시 시작하면 개발자 도구의 API 모니터 탭이 자동으로 열립니다. 창만 닫아도
 수집은 계속되며, 새 요청 수집을 중단하려면 설정을 끄고 적용해야 합니다. 설정을
 꺼도 현재 메모리에 남아 있는 행은 자동으로 삭제하지 않습니다.
 
@@ -43,6 +43,7 @@ API 모니터는 온라인 모드에서 발생하는 Codebeamer HTTP 호출의 �
 - 소요 시간
 - 성공, 실패 또는 재시도 결과와 제어된 오류 분류
 - 현재 시도 번호와 최대 시도 수
+- 같은 논리 작업의 진단 로그와 연결하는 짧은 진단 ID
 
 요청 종류·경로 검색, method, status 대역, 결과, 느린 요청 필터를 함께 사용할 수
 있습니다. `화면 업데이트 일시정지`는 표시만 멈추며 수집은 계속합니다. 선택 행
@@ -75,9 +76,10 @@ API 모니터는 온라인 모드에서 발생하는 Codebeamer HTTP 호출의 �
 
 - `src/api_monitor.py`: Qt와 독립된 thread-safe 이벤트 버퍼, 경로 정규화와 통계
 - `src/codebeamer_client.py`: 공통 GET/POST/PUT/DELETE 계측과 재시도 문맥
-- `src/gui/api_monitor_window.py`: 200ms polling 기반 별도 모니터 창
+- `src/gui/api_monitor_window.py`: 200ms polling 기반 재사용 panel과 기존 window wrapper
+- `src/gui/developer_tools_window.py`: 진단 로그와 API panel을 담는 별도 개발자 도구 창
 - `src/gui/settings_center.py`: 개발자 설정과 창 열기 동작
 - `src/gui/main_window.py`: 앱 시작·설정 적용·종료 생명주기
 
 작업 thread는 Qt widget을 직접 갱신하지 않습니다. HTTP 계층은 thread-safe 서비스에
-이벤트만 기록하고, 모니터 창의 `QTimer`가 snapshot을 읽어 GUI thread에서 표시합니다.
+이벤트만 기록하고, API panel의 `QTimer`가 snapshot을 읽어 GUI thread에서 표시합니다.

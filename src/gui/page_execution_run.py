@@ -63,15 +63,25 @@ def create_validation_page():
     buttons = QHBoxLayout()
     _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
+    export_button = QPushButton("검증 결과 Excel 내보내기")
+    template_button = QPushButton("트래커 업로드 템플릿")
     next_button = QPushButton("다음")
     next_button.setObjectName("primary_button")
     next_button.setEnabled(False)
     buttons.addWidget(previous_button)
+    buttons.addWidget(export_button)
+    buttons.addWidget(template_button)
     buttons.addStretch(1)
     buttons.addWidget(next_button)
     layout.addLayout(buttons)
 
     page.has_blocking_issues = True
+    page.status_label = status_label
+    page.export_validation_button = export_button
+    page.export_template_button = template_button
+    page.request_export_validation = lambda: None
+    page.request_export_template = lambda: None
+    export_button.setEnabled(False)
 
     def set_results(issue_df, has_blocking_issues: bool, summary_stats: dict | None = None) -> None:
         """`set_results` 값을 설정한다."""
@@ -122,6 +132,7 @@ def create_validation_page():
             summary_parts.append(f"설정 안내 {config_warnings}건")
         summary_label.setText(" | ".join(summary_parts))
         page.has_blocking_issues = has_blocking_issues
+        export_button.setEnabled(True)
         next_button.setEnabled(not has_blocking_issues)
         if has_blocking_issues:
             status_label.setText("수정이 필요한 항목이 있어 업로드를 시작할 수 없습니다.")
@@ -138,6 +149,8 @@ def create_validation_page():
         page.request_next()
 
     previous_button.clicked.connect(lambda: page.request_previous())
+    export_button.clicked.connect(lambda: page.request_export_validation())
+    template_button.clicked.connect(lambda: page.request_export_template())
     next_button.clicked.connect(_go_next)
     page.set_results = set_results
     return page
@@ -458,18 +471,37 @@ def create_result_page():
     page.response_view.setMinimumHeight(DETAIL_PANE_MIN_HEIGHT)
     layout.addWidget(page.response_view)
 
+    status_label = QLabel("")
+    status_label.setObjectName("status_label")
+    _configure_constrained_panel(status_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
+    layout.addWidget(status_label)
+
     buttons = QHBoxLayout()
     _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
+    export_failed_button = QPushButton("실패 보고서 Excel 내보내기")
+    retry_failed_button = QPushButton("실패 항목 재시도")
     restart_button = QPushButton("새 업로드 시작")
     restart_button.setObjectName("primary_button")
     buttons.addWidget(previous_button)
+    buttons.addWidget(export_failed_button)
+    buttons.addWidget(retry_failed_button)
     buttons.addStretch(1)
     buttons.addWidget(restart_button)
     layout.addLayout(buttons)
 
+    page.status_label = status_label
+    page.export_failed_button = export_failed_button
+    page.retry_failed_button = retry_failed_button
+    page.request_export_failed = lambda: None
+    page.request_retry_failed = lambda: None
+    page.upload_result = {}
+    export_failed_button.setEnabled(False)
+    retry_failed_button.setEnabled(False)
+
     def set_results(upload_result: dict) -> None:
         """`set_results` 값을 설정한다."""
+        page.upload_result = upload_result
         for key, table in page.tables.items():
             df = upload_result.get(key)
             if df is None or getattr(df, "empty", True):
@@ -499,7 +531,46 @@ def create_result_page():
         else:
             page.response_view.clear()
 
+        failed_df = upload_result.get("failed_df")
+        unresolved_df = upload_result.get("unresolved_df")
+        failed_count = (
+            0 if failed_df is None or getattr(failed_df, "empty", True) else len(failed_df)
+        )
+        unresolved_count = (
+            0
+            if unresolved_df is None or getattr(unresolved_df, "empty", True)
+            else len(unresolved_df)
+        )
+        export_failed_button.setEnabled(bool(failed_count or unresolved_count))
+        retry_context = upload_result.get("retry_context")
+        retry_target_count = int(
+            getattr(retry_context, "retry_target_count", 0) or 0
+        )
+        retry_failed_button.setEnabled(retry_target_count > 0)
+        non_retryable_count = int(
+            getattr(retry_context, "non_retryable_count", 0) or 0
+        )
+        if retry_target_count:
+            status_text = (
+                f"현재 세션 캐시로 실패/미해결 {retry_target_count}건을 재시도할 수 있습니다. "
+                "생성, 수정, 혼합 처리 모두 지원합니다."
+            )
+            if non_retryable_count:
+                status_text += (
+                    f" 준비·매핑·데이터 오류 {non_retryable_count}건은 검증 단계에서 수정해야 합니다."
+                )
+            status_label.setText(status_text)
+        elif failed_count or unresolved_count:
+            status_label.setText(
+                str(upload_result.get("retry_unavailable_reason") or "")
+                or "남은 항목은 자동 재시도할 수 없습니다. 검증 단계로 돌아가 원인을 수정하세요."
+            )
+        else:
+            status_label.setText("모든 업로드 항목이 성공했습니다.")
+
     previous_button.clicked.connect(lambda: page.request_previous())
+    export_failed_button.clicked.connect(lambda: page.request_export_failed())
+    retry_failed_button.clicked.connect(lambda: page.request_retry_failed())
     restart_button.clicked.connect(lambda: page.request_restart())
     page.set_results = set_results
     return page

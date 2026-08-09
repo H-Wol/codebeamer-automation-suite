@@ -9,6 +9,8 @@ import time
 from typing import Callable
 from urllib.parse import urlsplit
 
+from .diagnostics import current_operation_id
+
 
 API_MONITOR_MAX_EVENTS = 500
 API_MONITOR_DEFAULT_SLOW_THRESHOLD_MS = 1000
@@ -65,6 +67,7 @@ class ApiRequestEvent:
     attempt: int
     max_attempts: int
     error_kind: str | None = None
+    operation_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -103,6 +106,7 @@ class _ActiveRequest:
     path: str
     attempt: int
     max_attempts: int
+    operation_id: str
 
 
 def _percentile(values: list[float], percentile: float) -> float:
@@ -194,6 +198,7 @@ class ApiMonitorService:
         path: object,
         attempt: int = 1,
         max_attempts: int = 1,
+        operation_id: str | None = None,
     ) -> int | None:
         with self._lock:
             if not self._enabled:
@@ -213,6 +218,11 @@ class ApiMonitorService:
                 path=normalize_api_path(path),
                 attempt=current_attempt,
                 max_attempts=total_attempts,
+                operation_id=str(
+                    current_operation_id()
+                    if operation_id is None
+                    else operation_id
+                ).strip()[:64],
             )
             self._version += 1
             return handle
@@ -248,6 +258,7 @@ class ApiMonitorService:
                 attempt=active.attempt,
                 max_attempts=active.max_attempts,
                 error_kind=str(error_kind) if error_kind else None,
+                operation_id=active.operation_id,
             )
             self._events.append(event)
             self._version += 1

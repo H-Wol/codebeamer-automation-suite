@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.diagnostics import DIAGNOSTICS
+
 from .settings_store import GuiSettingsStore
 from .styles import build_gui_stylesheet
 
@@ -17,7 +19,8 @@ def run_gui() -> int:
     from .main_window import MainWindow
 
     app = QApplication.instance() or QApplication([])
-    install_global_exception_handler(app)
+    DIAGNOSTICS.clear()
+    install_global_exception_handler(app, diagnostics=DIAGNOSTICS)
     store = GuiSettingsStore()
     app.setStyleSheet(build_gui_stylesheet(store.load().theme_name))
     window = MainWindow(store)

@@ -24,6 +24,7 @@ class WindowShellMixin:
         QLabel = self.qt["QLabel"]
         QFrame = self.qt["QFrame"]
         QPushButton = self.qt["QPushButton"]
+        QComboBox = self.qt["QComboBox"]
 
         self.page_scroll_areas = {}
         self.page_meta = {}
@@ -55,13 +56,34 @@ class WindowShellMixin:
         title_row.addWidget(title)
         title_row.addStretch(1)
 
-        self.load_workflow_button = QPushButton("전체 설정 불러오기")
-        self.save_workflow_button = QPushButton("전체 설정 저장")
-        title_row.addWidget(self.load_workflow_button)
-        title_row.addWidget(self.save_workflow_button)
+        self.workflow_preset_combo = QComboBox()
+        self.workflow_preset_combo.setMinimumWidth(170)
+        self.workflow_preset_combo.setToolTip(
+            "현재 연결 프로필·프로젝트·트래커에 저장된 전체 업로드 설정"
+        )
+        self.load_workflow_button = QPushButton("불러오기")
+        self.save_workflow_button = QPushButton("저장")
+        self.save_workflow_as_button = QPushButton("새로 저장")
+        self.rename_workflow_button = QPushButton("이름 변경")
+        self.default_workflow_button = QPushButton("기본 지정")
+        self.delete_workflow_button = QPushButton("삭제")
 
         header_layout.addLayout(title_row)
         header_layout.addWidget(subtitle)
+
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(6)
+        preset_label = QLabel("전체 업로드 설정")
+        preset_label.setObjectName("section_label")
+        preset_row.addWidget(preset_label)
+        preset_row.addWidget(self.workflow_preset_combo, 1)
+        preset_row.addWidget(self.load_workflow_button)
+        preset_row.addWidget(self.save_workflow_button)
+        preset_row.addWidget(self.save_workflow_as_button)
+        preset_row.addWidget(self.rename_workflow_button)
+        preset_row.addWidget(self.default_workflow_button)
+        preset_row.addWidget(self.delete_workflow_button)
+        header_layout.addLayout(preset_row)
 
         steps_row = QHBoxLayout()
         steps_row.setSpacing(6)
@@ -308,6 +330,9 @@ class WindowShellMixin:
             self._on_file_state_changed,
             self._load_file_preview,
             self._show_error_dialog,
+            on_file_metadata_requested=self._load_file_metadata,
+            on_sheet_preview_requested=self._load_sheet_preview,
+            on_full_data_requested=self._load_full_file_data,
         )
         self.root_item_structure_page = create_root_item_page(
             self._preview_root_item_config,
@@ -332,6 +357,13 @@ class WindowShellMixin:
 
         self.load_workflow_button.clicked.connect(self._load_workflow_preset)
         self.save_workflow_button.clicked.connect(self._save_workflow_preset)
+        self.save_workflow_as_button.clicked.connect(self._save_workflow_preset_as)
+        self.rename_workflow_button.clicked.connect(self._rename_workflow_preset)
+        self.default_workflow_button.clicked.connect(self._set_default_workflow_preset)
+        self.delete_workflow_button.clicked.connect(self._delete_workflow_preset)
+        self.workflow_preset_combo.currentIndexChanged.connect(
+            self._sync_workflow_preset_action_state
+        )
 
         self._attach_navigation(self.settings_page, next_page=self.project_page)
         self._attach_navigation(
@@ -420,6 +452,7 @@ class WindowShellMixin:
         else:
             self._apply_theme(self.session_state.settings.theme_name)
             self.statusBar().showMessage("GUI 스켈레톤이 준비되었습니다.")
+        self._refresh_workflow_preset_choices()
 
     def _show_page(self, page) -> None:
         self._current_page = page

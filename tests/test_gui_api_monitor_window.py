@@ -56,11 +56,13 @@ class GuiApiMonitorWindowTest(unittest.TestCase):
         status_code: int | None = 200,
         outcome: str = API_OUTCOME_SUCCESS,
         elapsed_ms: float = 50,
+        operation_id: str | None = None,
     ) -> None:
         token = self.monitor.start_request(
             request_kind=request_kind,
             method=method,
             path=path,
+            operation_id=operation_id,
         )
         self.monotonic_clock.advance_ms(elapsed_ms)
         self.monitor.finish_request(
@@ -148,6 +150,16 @@ class GuiApiMonitorWindowTest(unittest.TestCase):
         self.window.settings_provider = lambda: SimpleNamespace(offline_mode=True)
         self.window.refresh(force=True)
         self.assertIn("테스트 모드", self.window.collection_state_label.text())
+
+    def test_diagnostic_id_is_visible_and_searchable(self) -> None:
+        self._record("get_item", operation_id="abcd1234" + ("0" * 24))
+        self._record("get_projects", operation_id="ffff0000" + ("0" * 24))
+        self.window.refresh(force=True)
+
+        self.window.search_edit.setText("abcd1234")
+
+        self.assertEqual(self.window.table.rowCount(), 1)
+        self.assertEqual(self.window.table.item(0, 8).text(), "abcd1234")
 
 
 if __name__ == "__main__":

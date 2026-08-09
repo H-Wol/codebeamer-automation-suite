@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -26,6 +28,10 @@ from src.gui.pages import create_upload_page
 from src.gui.pages import create_validation_page
 from src.gui.page_batch_settings import create_batch_settings_page
 from src.gui.settings_store import GuiSettings
+from src.gui.services import FileSignature
+from src.gui.services import PreviewData
+from src.gui.services import SheetPreviewData
+from src.gui.services import WorkbookMetadata
 from src.gui.styles import build_gui_stylesheet
 
 
@@ -160,6 +166,95 @@ class GuiPagesUploadPageTest(unittest.TestCase):
             self._expanding_policy,
         )
 
+    def test_file_selection_requires_explicit_preview_and_full_load_stages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "sample.xlsx"
+            path.write_bytes(b"sample")
+            signature = FileSignature.capture(str(path))
+            calls: list[str] = []
+            states: list[dict[str, object]] = []
+
+            def load_metadata(file_path: str) -> WorkbookMetadata:
+                calls.append("metadata")
+                return WorkbookMetadata(file_path, ["Main"], signature)
+
+            def load_sheet_preview(file_path: str, **_kwargs) -> SheetPreviewData:
+                calls.append("sheet_preview")
+                return SheetPreviewData(
+                    file_path=file_path,
+                    sheet_name="Main",
+                    header_row=1,
+                    summary_column="Summary",
+                    headers=["Summary", "담당자"],
+                    rows=[["REQ-001", "홍길동"]],
+                    suggested_summary="Summary",
+                    signature=signature,
+                )
+
+            def load_full(file_path: str, **_kwargs) -> PreviewData:
+                calls.append("full")
+                raw_df = pd.DataFrame([{"Summary": "REQ-001", "담당자": "홍길동"}])
+                return PreviewData(
+                    file_path=file_path,
+                    sheet_name="Main",
+                    header_row=1,
+                    summary_column="Summary",
+                    sheet_names=["Main"],
+                    headers=["Summary", "담당자"],
+                    rows=[["REQ-001", "홍길동"]],
+                    suggested_summary="Summary",
+                    raw_df=raw_df,
+                    raw_df_by_file={file_path: raw_df},
+                    file_signatures={file_path: signature},
+                )
+
+            page = create_file_selection_page(
+                GuiSettings(),
+                lambda state: states.append(dict(state)),
+                lambda *_args, **_kwargs: None,
+                on_file_metadata_requested=load_metadata,
+                on_sheet_preview_requested=load_sheet_preview,
+                on_full_data_requested=load_full,
+            )
+
+            page.load_state(
+                {
+                    "file_paths": [str(path)],
+                    "preview_file_path": str(path),
+                    "sheet_name": "Main",
+                    "header_row": 1,
+                    "summary_column": "Summary",
+                }
+            )
+
+            self.assertEqual(calls, ["metadata"])
+            self.assertFalse(page._sheet_preview_ready)
+            self.assertFalse(page._preview_ready)
+            self.assertFalse(page.summary_column_combo.isEditable())
+            self.assertFalse(page.summary_column_combo.isEnabled())
+
+            page.preview_button.click()
+
+            self.assertEqual(calls, ["metadata", "sheet_preview"])
+            self.assertTrue(page._sheet_preview_ready)
+            self.assertFalse(page._preview_ready)
+            self.assertTrue(page.summary_column_combo.isEnabled())
+            self.assertEqual(
+                [
+                    page.summary_column_combo.itemText(index)
+                    for index in range(page.summary_column_combo.count())
+                ],
+                ["Summary", "담당자"],
+            )
+            page.summary_column_combo.setCurrentText("임의 컬럼")
+            self.assertEqual(page.summary_column_combo.currentText(), "Summary")
+
+            page.load_button.click()
+
+            self.assertEqual(calls, ["metadata", "sheet_preview", "full"])
+            self.assertTrue(page._preview_ready)
+            self.assertIs(states[-1]["preview_data"], page._preview_data)
+
     def test_mapping_page_keeps_tabs_and_tables_expandable(self) -> None:
         page = create_mapping_page(lambda *_args: None)
 
@@ -257,6 +352,44 @@ class GuiPagesUploadPageTest(unittest.TestCase):
             result_page.tables["success_df"].sizePolicy().verticalPolicy(),
             self._expanding_policy,
         )
+
+    def test_export_and_retry_buttons_follow_current_result_capabilities(self) -> None:
+        validation_page = create_validation_page()
+        result_page = create_result_page()
+
+        self.assertFalse(validation_page.export_validation_button.isEnabled())
+        validation_page.set_results(pd.DataFrame(), False, {"total_rows": 0})
+        self.assertTrue(validation_page.export_validation_button.isEnabled())
+
+        failed_df = pd.DataFrame(
+            [{"_row_id": 1, "upload_name": "REQ-001", "error": "temporary"}]
+        )
+        result_page.set_results(
+            {
+                "success_df": pd.DataFrame(),
+                "failed_df": failed_df,
+                "unresolved_df": pd.DataFrame(),
+                "retry_context": None,
+                "retry_unavailable_reason": "검증 단계에서 수정하세요.",
+            }
+        )
+        self.assertTrue(result_page.export_failed_button.isEnabled())
+        self.assertFalse(result_page.retry_failed_button.isEnabled())
+        self.assertIn("검증 단계", result_page.status_label.text())
+
+        result_page.set_results(
+            {
+                "success_df": pd.DataFrame(),
+                "failed_df": failed_df,
+                "unresolved_df": pd.DataFrame(),
+                "retry_context": SimpleNamespace(
+                    retry_target_count=1,
+                    non_retryable_count=0,
+                ),
+            }
+        )
+        self.assertTrue(result_page.retry_failed_button.isEnabled())
+        self.assertIn("생성, 수정, 혼합 처리", result_page.status_label.text())
 
     def test_constrained_panel_remains_horizontally_responsive(self) -> None:
         from PySide6.QtWidgets import QWidget

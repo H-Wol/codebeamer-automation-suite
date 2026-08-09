@@ -39,6 +39,10 @@ def _initialize_file_selection_page(
     on_file_state_changed,
     on_file_preview_requested,
     on_error=None,
+    *,
+    on_file_metadata_requested=None,
+    on_sheet_preview_requested=None,
+    on_full_data_requested=None,
 ):
     qt = _require_qt()
     QWidget = qt["QWidget"]
@@ -77,9 +81,9 @@ def _initialize_file_selection_page(
     header_row.setMinimum(1)
     header_row.setValue(initial_settings.excel_header_row)
     summary_column = QComboBox()
-    summary_column.setEditable(True)
-    summary_column.addItems(["Summary", "요약"])
-    summary_column.setCurrentText(initial_settings.summary_column)
+    summary_column.setEditable(False)
+    summary_column.addItem("시트 미리보기 후 선택", "")
+    summary_column.setEnabled(False)
     _configure_form_field(file_path)
     _configure_form_field(file_row_widget, minimum_width=320)
     _configure_form_field(preview_file)
@@ -111,7 +115,7 @@ def _initialize_file_selection_page(
     page.preview_table = preview_table
     layout.addWidget(preview_table, 1)
 
-    status_label = QLabel("Excel 파일과 옵션을 정한 뒤 '데이터 불러오기'를 누르세요.")
+    status_label = QLabel("Excel 파일을 선택하면 먼저 시트 정보만 불러옵니다.")
     status_label.setObjectName("status_label")
     _configure_constrained_panel(status_label, max_width=WIDE_FORM_PANEL_MAX_WIDTH)
     layout.addWidget(status_label)
@@ -119,20 +123,32 @@ def _initialize_file_selection_page(
     buttons = QHBoxLayout()
     _configure_inline_layout(buttons)
     previous_button = QPushButton("이전")
-    load_button = QPushButton("데이터 불러오기")
+    preview_button = QPushButton("선택 시트 미리보기")
+    load_button = QPushButton("전체 데이터 불러오기")
     next_button = QPushButton("다음")
     load_button.setObjectName("primary_button")
     next_button.setObjectName("primary_button")
     next_button.setEnabled(False)
     buttons.addWidget(previous_button)
+    buttons.addWidget(preview_button)
     buttons.addWidget(load_button)
     buttons.addStretch(1)
     buttons.addWidget(next_button)
     layout.addLayout(buttons)
 
+    page._metadata_ready = False
+    page._sheet_preview_ready = False
     page._preview_ready = False
     page._selected_file_paths = [initial_settings.last_file_path] if initial_settings.last_file_path else []
+    page._metadata_data = None
+    page._sheet_preview_data = None
     page._preview_data = None
+    page._preferred_summary_column = str(
+        initial_settings.summary_column or "Summary"
+    ).strip() or "Summary"
+    page.preview_button = preview_button
+    page.load_button = load_button
+    page.summary_column_combo = summary_column
 
     def _update_next_button_state() -> None:
         next_button.setEnabled(bool(page._selected_file_paths) and page._preview_ready)
@@ -177,8 +193,16 @@ def _initialize_file_selection_page(
             "preview_file_path": _selected_preview_file_path(),
             "sheet_name": sheet_name.currentText().strip() or "0",
             "header_row": header_row.value(),
-            "summary_column": summary_column.currentText().strip() or "Summary",
+            "summary_column": (
+                str(summary_column.currentData() or "").strip()
+                or page._preferred_summary_column
+                or "Summary"
+            ),
         }
+        if page._metadata_data is not None:
+            state["metadata_data"] = page._metadata_data
+        if page._sheet_preview_data is not None:
+            state["sheet_preview_data"] = page._sheet_preview_data
         if page._preview_ready and page._preview_data is not None:
             state["preview_data"] = page._preview_data
         return state
@@ -193,11 +217,23 @@ def _initialize_file_selection_page(
             for col_index, value in enumerate(row):
                 preview_table.setItem(row_index, col_index, QTableWidgetItem(value))
         _configure_table_columns(preview_table, [180] * max(len(headers), 1))
-        if resolved_summary:
-            summary_column.blockSignals(True)
-            if summary_column.findText(resolved_summary) < 0:
-                summary_column.addItem(resolved_summary)
-            summary_column.setCurrentText(resolved_summary)
+        summary_column.blockSignals(True)
+        try:
+            summary_column.clear()
+            for header in headers:
+                summary_column.addItem(header, header)
+            if not headers:
+                summary_column.addItem("선택할 수 있는 헤더가 없습니다", "")
+            target_summary = (
+                resolved_summary
+                if resolved_summary in headers
+                else (headers[0] if headers else "")
+            )
+            if target_summary:
+                summary_column.setCurrentIndex(summary_column.findData(target_summary))
+                page._preferred_summary_column = target_summary
+            summary_column.setEnabled(bool(headers))
+        finally:
             summary_column.blockSignals(False)
 
     def _clear_preview() -> None:
@@ -205,24 +241,47 @@ def _initialize_file_selection_page(
         preview_table.clear()
         preview_table.setColumnCount(0)
         preview_table.setRowCount(0)
+        summary_column.blockSignals(True)
+        try:
+            summary_column.clear()
+            summary_column.addItem("시트 미리보기 후 선택", "")
+            summary_column.setEnabled(False)
+        finally:
+            summary_column.blockSignals(False)
 
-    def _mark_preview_dirty(*, clear_sheet_names: bool = False, message: str | None = None) -> None:
-        """`mark_preview_dirty` 상태를 표시한다."""
+    def _mark_full_data_dirty(*, message: str | None = None) -> None:
+        """전체 데이터만 무효화하고 제한 행 미리보기는 유지한다."""
         page._preview_ready = False
         page._preview_data = None
+        _update_next_button_state()
+        if message:
+            status_label.setText(message)
+        elif page._sheet_preview_ready:
+            status_label.setText(
+                "설정을 바꿨습니다. '전체 데이터 불러오기'를 눌러 다시 적용하세요."
+            )
+
+    def _mark_preview_dirty(*, clear_sheet_names: bool = False, message: str | None = None) -> None:
+        """시트 미리보기와 전체 데이터를 함께 무효화한다."""
+        page._sheet_preview_ready = False
+        page._sheet_preview_data = None
+        _mark_full_data_dirty()
         _clear_preview()
         if clear_sheet_names:
+            page._metadata_ready = False
+            page._metadata_data = None
             sheet_name.blockSignals(True)
             sheet_name.clear()
             sheet_name.blockSignals(False)
-        _update_next_button_state()
         if message:
             status_label.setText(message)
             return
         if page._selected_file_paths:
-            status_label.setText("설정을 바꿨습니다. '데이터 불러오기'를 눌러 다시 확인하세요.")
+            status_label.setText(
+                "시트 또는 헤더 설정을 바꿨습니다. '선택 시트 미리보기'를 다시 실행하세요."
+            )
             return
-        status_label.setText("Excel 파일과 옵션을 정한 뒤 '데이터 불러오기'를 누르세요.")
+        status_label.setText("Excel 파일을 선택하세요.")
 
     def _set_sheet_names(names: list[str], selected_name: str) -> None:
         """`set_sheet_names` 값을 설정한다."""
@@ -235,34 +294,125 @@ def _initialize_file_selection_page(
             sheet_name.setCurrentIndex(index if index >= 0 else 0)
         sheet_name.blockSignals(False)
 
-    def _refresh_preview() -> None:
-        """`refresh_preview` 표시를 새로 고친다."""
+    def _load_metadata() -> None:
+        """대표 파일의 시트 목록만 읽는다."""
         state = _collect_state()
-        page._preview_ready = False
-        _update_next_button_state()
         if not state["file_paths"]:
             status_label.setText("Excel 파일을 먼저 선택해야 합니다.")
             return
-        try:
-            preview = on_file_preview_requested(
-                state["preview_file_path"],
-                file_paths=state["file_paths"],
-                sheet_name=state["sheet_name"],
-                header_row=state["header_row"],
-                summary_column=state["summary_column"],
+        _mark_preview_dirty(clear_sheet_names=True)
+        if not callable(on_file_metadata_requested):
+            status_label.setText(
+                "파일을 선택했습니다. '전체 데이터 불러오기'를 눌러 확인하세요."
             )
+            return
+        try:
+            metadata = on_file_metadata_requested(state["preview_file_path"])
         except Exception as exc:
-            message = f"파일 미리보기 실패: {exc}"
+            message = f"시트 정보 불러오기 실패: {exc}"
             status_label.setText(message)
             if callable(on_error):
-                on_error("파일 미리보기 실패", message)
+                on_error("시트 정보 불러오기 실패", message)
             return
-        _set_sheet_names(preview.sheet_names, state["sheet_name"])
-        _set_preview(preview.headers, preview.rows, getattr(preview, "summary_column", preview.suggested_summary))
+        page._metadata_data = metadata
+        page._metadata_ready = True
+        _set_sheet_names(list(metadata.sheet_names), state["sheet_name"])
+        status_label.setText(
+            f"{Path(state['preview_file_path']).name}에서 시트 {len(metadata.sheet_names)}개를 찾았습니다. "
+            "시트를 정한 뒤 미리보기를 실행하세요."
+        )
+        on_file_state_changed(_collect_state())
+
+    def _refresh_sheet_preview() -> None:
+        """선택 시트의 헤더와 제한된 행만 읽는다."""
+        state = _collect_state()
+        if not state["file_paths"]:
+            status_label.setText("Excel 파일을 먼저 선택해야 합니다.")
+            return
+        if callable(on_file_metadata_requested) and not page._metadata_ready:
+            status_label.setText("시트 정보를 먼저 불러와야 합니다.")
+            return
+        _mark_preview_dirty()
+        try:
+            if callable(on_sheet_preview_requested):
+                preview = on_sheet_preview_requested(
+                    state["preview_file_path"],
+                    sheet_name=state["sheet_name"],
+                    header_row=state["header_row"],
+                    summary_column=state["summary_column"],
+                )
+            else:
+                preview = on_file_preview_requested(
+                    state["preview_file_path"],
+                    file_paths=state["file_paths"],
+                    sheet_name=state["sheet_name"],
+                    header_row=state["header_row"],
+                    summary_column=state["summary_column"],
+                )
+        except Exception as exc:
+            message = f"선택 시트 미리보기 실패: {exc}"
+            status_label.setText(message)
+            if callable(on_error):
+                on_error("선택 시트 미리보기 실패", message)
+            return
+        _set_preview(
+            preview.headers,
+            preview.rows,
+            getattr(preview, "summary_column", preview.suggested_summary),
+        )
+        page._sheet_preview_data = preview
+        page._sheet_preview_ready = True
+        status_label.setText(
+            "헤더와 일부 행을 확인했습니다. Summary 컬럼을 정한 뒤 전체 데이터를 불러오세요."
+        )
+        on_file_state_changed(_collect_state())
+
+    def _load_full_data() -> None:
+        """명시적 호출에서만 선택한 모든 파일의 전체 데이터를 읽는다."""
+        state = _collect_state()
+        if not state["file_paths"]:
+            status_label.setText("Excel 파일을 먼저 선택해야 합니다.")
+            return
+        if callable(on_sheet_preview_requested) and not page._sheet_preview_ready:
+            status_label.setText("선택 시트 미리보기를 먼저 실행해야 합니다.")
+            return
+        page._preview_ready = False
+        page._preview_data = None
+        _update_next_button_state()
+        try:
+            if callable(on_full_data_requested):
+                preview = on_full_data_requested(
+                    state["preview_file_path"],
+                    file_paths=state["file_paths"],
+                    sheet_name=state["sheet_name"],
+                    header_row=state["header_row"],
+                    summary_column=state["summary_column"],
+                    sheet_preview=page._sheet_preview_data,
+                )
+            else:
+                preview = on_file_preview_requested(
+                    state["preview_file_path"],
+                    file_paths=state["file_paths"],
+                    sheet_name=state["sheet_name"],
+                    header_row=state["header_row"],
+                    summary_column=state["summary_column"],
+                )
+        except Exception as exc:
+            message = f"전체 데이터 불러오기 실패: {exc}"
+            status_label.setText(message)
+            if callable(on_error):
+                on_error("전체 데이터 불러오기 실패", message)
+            return
+        if page._metadata_data is not None:
+            preview.sheet_names = list(page._metadata_data.sheet_names)
+        _set_preview(preview.headers, preview.rows, preview.summary_column)
         page._preview_data = preview
         page._preview_ready = True
         _update_next_button_state()
-        status_label.setText(f"{len(page._selected_file_paths)}개 파일 기준으로 시트 목록과 미리보기를 갱신했습니다.")
+        cache_note = " · 기존 로드 데이터 재사용" if bool(getattr(preview, "cache_hit", False)) else ""
+        status_label.setText(
+            f"{len(page._selected_file_paths)}개 파일의 전체 데이터를 불러왔습니다{cache_note}."
+        )
         on_file_state_changed(_collect_state())
 
     def _choose_files():
@@ -278,17 +428,17 @@ def _initialize_file_selection_page(
             page._selected_file_paths = [str(path) for path in selected]
             _set_preview_file_items(page._selected_file_paths)
             _update_file_display()
-            _mark_preview_dirty(
-                clear_sheet_names=True,
-                message=(
-                    f"{len(page._selected_file_paths)}개 파일을 선택했습니다. "
-                    "'데이터 불러오기'를 눌러 시트 목록과 미리보기를 확인하세요."
-                ),
-            )
+            _load_metadata()
 
     def _go_previous():
         """`go_previous` 단계 이동을 처리한다."""
         page.request_previous()
+
+    def _on_summary_column_changed(_index: int) -> None:
+        selected_summary = str(summary_column.currentData() or "").strip()
+        if selected_summary:
+            page._preferred_summary_column = selected_summary
+        _mark_full_data_dirty()
 
     def _go_next():
         """`go_next` 단계 이동을 처리한다."""
@@ -297,17 +447,18 @@ def _initialize_file_selection_page(
             status_label.setText("Excel 파일을 하나 이상 선택해야 합니다.")
             return
         if not page._preview_ready:
-            status_label.setText("파일 설정을 마친 뒤 '데이터 불러오기'를 먼저 실행해야 합니다.")
+            status_label.setText("파일 설정을 마친 뒤 '전체 데이터 불러오기'를 실행해야 합니다.")
             return
         on_file_state_changed(state)
         page.request_next()
 
     file_button.clicked.connect(_choose_files)
-    load_button.clicked.connect(_refresh_preview)
-    preview_file.currentIndexChanged.connect(lambda _: _mark_preview_dirty())
+    preview_button.clicked.connect(_refresh_sheet_preview)
+    load_button.clicked.connect(_load_full_data)
+    preview_file.currentIndexChanged.connect(lambda _: _load_metadata())
     sheet_name.currentTextChanged.connect(lambda _: _mark_preview_dirty())
     header_row.valueChanged.connect(lambda _: _mark_preview_dirty())
-    summary_column.currentTextChanged.connect(lambda _: _mark_preview_dirty())
+    summary_column.currentIndexChanged.connect(_on_summary_column_changed)
     previous_button.clicked.connect(_go_previous)
     next_button.clicked.connect(_go_next)
 
@@ -331,7 +482,6 @@ def _initialize_file_selection_page(
 
         sheet_name.blockSignals(True)
         header_row.blockSignals(True)
-        summary_column.blockSignals(True)
         try:
             loaded_sheet_name = str(loaded_state.get("sheet_name") or "").strip()
             loaded_header_row = int(loaded_state.get("header_row") or initial_settings.excel_header_row or 1)
@@ -341,26 +491,29 @@ def _initialize_file_selection_page(
 
             if loaded_sheet_name and sheet_name.findText(loaded_sheet_name) < 0:
                 sheet_name.addItem(loaded_sheet_name)
-            if loaded_summary and summary_column.findText(loaded_summary) < 0:
-                summary_column.addItem(loaded_summary)
-
             if loaded_sheet_name:
                 sheet_name.setCurrentText(loaded_sheet_name)
             header_row.setValue(max(1, loaded_header_row))
-            summary_column.setCurrentText(loaded_summary)
+            page._preferred_summary_column = loaded_summary
         finally:
             sheet_name.blockSignals(False)
             header_row.blockSignals(False)
-            summary_column.blockSignals(False)
 
         _mark_preview_dirty(
-            message="저장된 파일 설정을 불러왔습니다. '데이터 불러오기'를 눌러 다시 확인하세요.",
+            message=(
+                "저장된 파일 설정을 불러왔습니다. 시트 미리보기와 전체 데이터 로드를 "
+                "순서대로 실행하세요."
+            ),
         )
+        if page._selected_file_paths:
+            _load_metadata()
         on_file_state_changed(_collect_state())
 
     page.get_state = _collect_state
     page.load_state = _load_state
-    page.refresh_preview = _refresh_preview
+    page.load_metadata = _load_metadata
+    page.refresh_sheet_preview = _refresh_sheet_preview
+    page.refresh_preview = _load_full_data
 
     return page
 
@@ -374,6 +527,10 @@ class FileSelectionPage(QtWidget):
         on_file_state_changed,
         on_file_preview_requested,
         on_error=None,
+        *,
+        on_file_metadata_requested=None,
+        on_sheet_preview_requested=None,
+        on_full_data_requested=None,
     ) -> None:
         super().__init__()
         _initialize_file_selection_page(
@@ -382,6 +539,9 @@ class FileSelectionPage(QtWidget):
             on_file_state_changed,
             on_file_preview_requested,
             on_error,
+            on_file_metadata_requested=on_file_metadata_requested,
+            on_sheet_preview_requested=on_sheet_preview_requested,
+            on_full_data_requested=on_full_data_requested,
         )
 
 
@@ -390,6 +550,10 @@ def create_file_selection_page(
     on_file_state_changed,
     on_file_preview_requested,
     on_error=None,
+    *,
+    on_file_metadata_requested=None,
+    on_sheet_preview_requested=None,
+    on_full_data_requested=None,
 ):
     """기존 factory 호출 계약으로 `FileSelectionPage`를 생성한다."""
     return FileSelectionPage(
@@ -397,6 +561,9 @@ def create_file_selection_page(
         on_file_state_changed,
         on_file_preview_requested,
         on_error,
+        on_file_metadata_requested=on_file_metadata_requested,
+        on_sheet_preview_requested=on_sheet_preview_requested,
+        on_full_data_requested=on_full_data_requested,
     )
 
 

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QPushButton
 
 from src.gui.error_reporting import install_global_exception_handler
 from src.gui.error_reporting import safe_exception_message
+from src.diagnostics import DiagnosticService
 
 
 class GuiErrorReportingTest(unittest.TestCase):
@@ -26,12 +27,14 @@ class GuiErrorReportingTest(unittest.TestCase):
             existing.restore()
         self.alerts: list[tuple[str, str]] = []
         self.logged: list[tuple[str, str, str]] = []
+        self.diagnostics = DiagnosticService()
         self.reporter = install_global_exception_handler(
             self._app,
             alert_handler=lambda title, message: self.alerts.append((title, message)),
             exception_logger=lambda exc_type, exc_value, _traceback, thread_name: (
                 self.logged.append((exc_type.__name__, str(exc_value), thread_name))
             ),
+            diagnostics=self.diagnostics,
         )
 
     def tearDown(self) -> None:
@@ -54,6 +57,10 @@ class GuiErrorReportingTest(unittest.TestCase):
         self.assertEqual(self.alerts[0][0], "예상하지 못한 오류")
         self.assertIn("AttributeError", self.alerts[0][1])
         self.assertIn("status_label", self.alerts[0][1])
+        self.assertIn("진단 ID", self.alerts[0][1])
+        event = self.diagnostics.snapshot().events[0]
+        self.assertEqual(event.event_kind, "unhandled_exception")
+        self.assertEqual(event.exception_type, "AttributeError")
 
     def test_unhandled_python_thread_exception_is_forwarded_to_gui(self) -> None:
         def fail() -> None:
@@ -84,12 +91,51 @@ class GuiErrorReportingTest(unittest.TestCase):
 
     def test_safe_message_redacts_credentials_and_limits_length(self) -> None:
         message = safe_exception_message(
-            RuntimeError("token=secret password:guess " + ("x" * 2000))
+            RuntimeError(
+                "token=secret password:guess https://private.example.test/path "
+                "person@example.test /Users/private/file.xlsx "
+                + ("x" * 2000)
+            )
         )
 
         self.assertNotIn("secret", message)
         self.assertNotIn("guess", message)
+        self.assertNotIn("private.example", message)
+        self.assertNotIn("person@example", message)
+        self.assertNotIn("/Users/private", message)
         self.assertLessEqual(len(message), 1200)
+
+    def test_user_notification_keeps_business_message_out_of_diagnostic_buffer(self) -> None:
+        self.reporter.notify(
+            "Private Project 오류",
+            "Private Item ABC-123 처리에 실패했습니다.",
+        )
+
+        event = self.diagnostics.snapshot().events[-1]
+        serialized = repr(event.to_payload())
+        self.assertEqual(event.event_kind, "user_notified_error")
+        self.assertNotIn("Private Project", serialized)
+        self.assertNotIn("Private Item", serialized)
+        self.assertNotIn("ABC-123", serialized)
+        self.assertIn("Private Item", self.alerts[-1][1])
+
+    def test_exception_observer_does_not_replace_previous_console_hook(self) -> None:
+        previous_calls = []
+        self.reporter._previous_sys_hook = (
+            lambda exc_type, exc_value, traceback: previous_calls.append(
+                (exc_type.__name__, str(exc_value), traceback)
+            )
+        )
+        try:
+            raise ValueError("sample failure")
+        except ValueError as exc:
+            self.reporter._handle_sys_exception(type(exc), exc, exc.__traceback__)
+
+        self.assertEqual(previous_calls[0][:2], ("ValueError", "sample failure"))
+        self.assertEqual(
+            self.diagnostics.snapshot().events[-1].exception_type,
+            "ValueError",
+        )
 
 
 if __name__ == "__main__":

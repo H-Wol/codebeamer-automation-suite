@@ -74,6 +74,33 @@ class UpsertSchemaClient(StaticSchemaClient):
         return {"id": int(item_id)}
 
 
+class FailingCreateUpsertClient(UpsertSchemaClient):
+    def create_item(
+        self,
+        tracker_id: int,
+        payload: dict[str, Any],
+        parent_item_id: int | None = None,
+    ):
+        del tracker_id, payload, parent_item_id
+        raise RuntimeError("create failed")
+
+
+class CancelAfterCreateUpsertClient(UpsertSchemaClient):
+    def __init__(self, schema: list[dict[str, Any]]) -> None:
+        super().__init__(schema)
+        self.cancelled = False
+
+    def create_item(
+        self,
+        tracker_id: int,
+        payload: dict[str, Any],
+        parent_item_id: int | None = None,
+    ):
+        result = super().create_item(tracker_id, payload, parent_item_id)
+        self.cancelled = True
+        return result
+
+
 class CountingWizard(CodebeamerUploadWizard):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -333,6 +360,97 @@ class PayloadCacheWizardTest(unittest.TestCase):
         )
         self.assertEqual(len(upload_result["success_df"]), 2)
 
+    def test_upsert_insert_stop_keeps_unattempted_update_for_retry(self) -> None:
+        client = FailingCreateUpsertClient(self.schema)
+        wizard = CountingWizard(
+            client=client,
+            processor=HierarchyProcessor(summary_col="요약"),
+            mapper=self.mapper,
+        )
+        wizard.select_project(1)
+        wizard.select_tracker(2)
+        wizard.state.upload_mode = "upsert"
+        raw_df = pd.DataFrame(
+            [
+                {
+                    "id": None,
+                    "요약": "Create Row",
+                    "_excel_row": 2,
+                    "_summary_indent": 0,
+                },
+                {
+                    "id": 101,
+                    "요약": "Update Row",
+                    "_excel_row": 3,
+                    "_summary_indent": 0,
+                },
+            ],
+            dtype=object,
+        )
+        wizard.load_raw_dataframe(raw_df, list_cols=[])
+        wizard.load_schema_and_compare({"요약": "Summary"})
+        wizard.process_option_mapping({"요약": "Summary"})
+
+        result = wizard.upsert_items(
+            dry_run=False,
+            continue_on_error=False,
+        )
+
+        skipped_update = result["unresolved_df"].loc[
+            result["unresolved_df"]["phase"].eq("update")
+        ]
+        self.assertEqual(skipped_update["_row_id"].tolist(), [1])
+        self.assertIn("아직 수정 요청을 실행하지 않았습니다", skipped_update.iloc[0]["error"])
+        self.assertFalse(result["update_payload_prepared"])
+        self.assertEqual(client.get_item_calls, [])
+        self.assertEqual(client.update_item_calls, [])
+
+    def test_upsert_cancel_after_insert_does_not_prepare_updates(self) -> None:
+        client = CancelAfterCreateUpsertClient(self.schema)
+        wizard = CountingWizard(
+            client=client,
+            processor=HierarchyProcessor(summary_col="요약"),
+            mapper=self.mapper,
+        )
+        wizard.select_project(1)
+        wizard.select_tracker(2)
+        wizard.state.upload_mode = "upsert"
+        raw_df = pd.DataFrame(
+            [
+                {
+                    "id": None,
+                    "요약": "Create Row",
+                    "_excel_row": 2,
+                    "_summary_indent": 0,
+                },
+                {
+                    "id": 101,
+                    "요약": "Update Row",
+                    "_excel_row": 3,
+                    "_summary_indent": 0,
+                },
+            ],
+            dtype=object,
+        )
+        wizard.load_raw_dataframe(raw_df, list_cols=[])
+        wizard.load_schema_and_compare({"요약": "Summary"})
+        wizard.process_option_mapping({"요약": "Summary"})
+
+        result = wizard.upsert_items(
+            dry_run=False,
+            continue_on_error=True,
+            cancel_requested=lambda: client.cancelled,
+        )
+
+        skipped_update = result["unresolved_df"].loc[
+            result["unresolved_df"]["phase"].eq("update")
+        ]
+        self.assertEqual(skipped_update["_row_id"].tolist(), [1])
+        self.assertIn("사용자 중단 요청", skipped_update.iloc[0]["error"])
+        self.assertFalse(result["update_payload_prepared"])
+        self.assertEqual(client.get_item_calls, [])
+        self.assertEqual(client.update_item_calls, [])
+
     def test_upsert_blocks_update_row_with_new_ancestor(self) -> None:
         client = UpsertSchemaClient(self.schema)
         wizard = CountingWizard(
@@ -505,6 +623,45 @@ class PayloadCacheWizardTest(unittest.TestCase):
             [None, None, 1001, 1003, 1002],
         )
         self.assertEqual(len(upload_result["success_df"]), 5)
+
+    def test_upload_retry_reuses_successful_top_level_parent_without_duplicate_creation(self) -> None:
+        processor = HierarchyProcessor(summary_col="요약")
+        wizard = CountingWizard(
+            client=self.client,
+            processor=processor,
+            mapper=self.mapper,
+        )
+        wizard.select_project(1)
+        wizard.select_tracker(2)
+        raw_df = pd.DataFrame([
+            {"요약": "Parent A", "_excel_row": 2, "_summary_indent": 0},
+        ])
+        wizard.load_raw_dataframe(raw_df, list_cols=[])
+        wizard.load_schema_and_compare({"요약": "Summary"})
+        wizard.process_option_mapping({"요약": "Summary"})
+        parent_specs = [
+            {"key": "ems", "name": "EMS", "field_values": {}, "row_ids": [0]},
+        ]
+
+        first_result = wizard.upload(
+            dry_run=False,
+            top_level_parent_specs=parent_specs,
+            include_row_ids=set(),
+        )
+        parent_id = first_result["parent_item_ids_by_key"]["ems"]
+        self.client.create_item_calls.clear()
+
+        retry_result = wizard.upload(
+            dry_run=False,
+            top_level_parent_specs=parent_specs,
+            include_row_ids={0},
+            existing_parent_item_ids_by_key={"ems": parent_id},
+        )
+
+        self.assertEqual(len(self.client.create_item_calls), 1)
+        self.assertEqual(self.client.create_item_calls[0]["payload"]["name"], "Parent A")
+        self.assertEqual(self.client.create_item_calls[0]["parent_item_id"], parent_id)
+        self.assertEqual(retry_result["parent_item_ids_by_key"], {"ems": parent_id})
 
     def test_upload_can_create_nested_top_level_parent_specs_before_rows(self) -> None:
         processor = HierarchyProcessor(summary_col="요약")

@@ -483,6 +483,9 @@ _SENSITIVE_RAW_KEYS = {
     "sessionid",
     "token",
 }
+_SENSITIVE_RAW_KEYS_COMPACT = {
+    key.replace("_", "") for key in _SENSITIVE_RAW_KEYS
+}
 
 
 def mask_sensitive_payload(value: Any) -> Any:
@@ -492,7 +495,10 @@ def mask_sensitive_payload(value: Any) -> Any:
             normalized_key = str(key).strip().lower().replace("-", "_")
             masked[key] = (
                 "***"
-                if normalized_key in _SENSITIVE_RAW_KEYS
+                if (
+                    normalized_key in _SENSITIVE_RAW_KEYS
+                    or normalized_key.replace("_", "") in _SENSITIVE_RAW_KEYS_COMPACT
+                )
                 else mask_sensitive_payload(child)
             )
         return masked

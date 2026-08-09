@@ -7,7 +7,6 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import QCheckBox
 from PySide6.QtWidgets import QComboBox
-from PySide6.QtWidgets import QDialog
 from PySide6.QtWidgets import QFrame
 from PySide6.QtWidgets import QGridLayout
 from PySide6.QtWidgets import QHBoxLayout
@@ -44,8 +43,8 @@ _ERROR_KIND_LABELS = {
 }
 
 
-class ApiMonitorWindow(QDialog):
-    """Non-modal live view over metadata-only API monitor events."""
+class ApiMonitorPanel(QFrame):
+    """Reusable live view over metadata-only API monitor events."""
 
     TABLE_HEADERS = (
         "시각",
@@ -56,6 +55,7 @@ class ApiMonitorWindow(QDialog):
         "소요 시간",
         "결과",
         "시도",
+        "진단 ID",
     )
 
     def __init__(
@@ -63,6 +63,7 @@ class ApiMonitorWindow(QDialog):
         monitor: ApiMonitorService,
         *,
         settings_provider=None,
+        embedded: bool = True,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -72,16 +73,17 @@ class ApiMonitorWindow(QDialog):
         self._last_table_version = -1
         self._last_snapshot: ApiMonitorSnapshot | None = None
 
-        self.setObjectName("api_monitor_window")
-        self.setWindowTitle("Codebeamer API 모니터")
-        self.setModal(False)
-        self.setWindowFlags(
-            Qt.WindowType.Window
-            | Qt.WindowType.WindowMinMaxButtonsHint
-            | Qt.WindowType.WindowCloseButtonHint
-        )
-        self.setMinimumSize(900, 600)
-        self.resize(1280, 760)
+        self.embedded = bool(embedded)
+        self.setObjectName("api_monitor_panel")
+        if not self.embedded:
+            self.setWindowTitle("Codebeamer API 모니터")
+            self.setWindowFlags(
+                Qt.WindowType.Window
+                | Qt.WindowType.WindowMinMaxButtonsHint
+                | Qt.WindowType.WindowCloseButtonHint
+            )
+            self.setMinimumSize(900, 600)
+            self.resize(1280, 760)
         self._build_ui()
 
         self.refresh_timer = QTimer(self)
@@ -163,7 +165,7 @@ class ApiMonitorWindow(QDialog):
         filter_layout.setContentsMargins(8, 7, 8, 7)
         filter_layout.setSpacing(7)
         self.search_edit = QLineEdit(filters)
-        self.search_edit.setPlaceholderText("요청 종류 또는 API 경로 검색")
+        self.search_edit.setPlaceholderText("요청 종류, API 경로 또는 진단 ID 검색")
         self.method_combo = QComboBox(filters)
         for label, value in (
             ("모든 Method", ""),
@@ -214,7 +216,7 @@ class ApiMonitorWindow(QDialog):
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         header.setStretchLastSection(False)
-        for column, width in enumerate((90, 180, 70, 310, 75, 100, 130, 80)):
+        for column, width in enumerate((90, 180, 70, 310, 75, 100, 130, 80, 90)):
             self.table.setColumnWidth(column, width)
         root_layout.addWidget(self.table, 1)
 
@@ -235,6 +237,7 @@ class ApiMonitorWindow(QDialog):
         footer.addWidget(self.copy_button)
         footer.addWidget(self.clear_button)
         footer.addWidget(self.close_button)
+        self.close_button.setVisible(not self.embedded)
         root_layout.addLayout(footer)
 
         self.search_edit.textChanged.connect(lambda _text: self.refresh(force=True))
@@ -249,12 +252,22 @@ class ApiMonitorWindow(QDialog):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        self.refresh_timer.start()
+        self.start_refresh()
         self.refresh(force=True)
 
+    def hideEvent(self, event) -> None:
+        self.stop_refresh()
+        super().hideEvent(event)
+
     def closeEvent(self, event) -> None:
-        self.refresh_timer.stop()
+        self.stop_refresh()
         super().closeEvent(event)
+
+    def start_refresh(self) -> None:
+        self.refresh_timer.start()
+
+    def stop_refresh(self) -> None:
+        self.refresh_timer.stop()
 
     def _set_paused(self, paused: bool) -> None:
         self.paused = bool(paused)
@@ -323,7 +336,12 @@ class ApiMonitorWindow(QDialog):
 
     def _event_matches(self, event: ApiRequestEvent, snapshot: ApiMonitorSnapshot) -> bool:
         search_text = self.search_edit.text().strip().casefold()
-        if search_text and search_text not in event.request_kind.casefold() and search_text not in event.path.casefold():
+        if (
+            search_text
+            and search_text not in event.request_kind.casefold()
+            and search_text not in event.path.casefold()
+            and search_text not in event.operation_id.casefold()
+        ):
             return False
         method = str(self.method_combo.currentData() or "")
         if method and event.method != method:
@@ -361,11 +379,12 @@ class ApiMonitorWindow(QDialog):
                     f"{event.elapsed_ms:.1f} ms",
                     result,
                     f"{event.attempt}/{event.max_attempts}",
+                    event.operation_id[:8] if event.operation_id else "-",
                 )
                 for column, value in enumerate(values):
                     item = QTableWidgetItem(value)
                     item.setData(Qt.ItemDataRole.UserRole, event.sequence)
-                    if column in {2, 4, 5, 7}:
+                    if column in {2, 4, 5, 7, 8}:
                         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     self.table.setItem(row, column, item)
         finally:
@@ -394,4 +413,27 @@ class ApiMonitorWindow(QDialog):
         self.refresh(force=True)
 
 
-__all__ = ["API_MONITOR_REFRESH_INTERVAL_MS", "ApiMonitorWindow"]
+class ApiMonitorWindow(ApiMonitorPanel):
+    """Compatibility wrapper that keeps the existing stand-alone API window."""
+
+    def __init__(
+        self,
+        monitor: ApiMonitorService,
+        *,
+        settings_provider=None,
+        parent=None,
+    ) -> None:
+        super().__init__(
+            monitor,
+            settings_provider=settings_provider,
+            embedded=False,
+            parent=parent,
+        )
+        self.setObjectName("api_monitor_window")
+
+
+__all__ = [
+    "API_MONITOR_REFRESH_INTERVAL_MS",
+    "ApiMonitorPanel",
+    "ApiMonitorWindow",
+]
