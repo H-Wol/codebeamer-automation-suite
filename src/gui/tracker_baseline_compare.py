@@ -136,6 +136,7 @@ def compare_tracker_items(
     *,
     before_source: BaselineComparisonSource,
     after_source: BaselineComparisonSource,
+    tracker_schema: dict[str, Any] | None = None,
 ) -> BaselineComparisonResult:
     if before_source == after_source:
         raise ValueError("서로 다른 두 비교 기준을 선택하세요.")
@@ -146,7 +147,11 @@ def compare_tracker_items(
         before = before_by_id.get(item_id)
         after = after_by_id.get(item_id)
         if before is None:
-            fields = _field_comparisons({}, after.raw_reference if after is not None else {})
+            fields = _field_comparisons(
+                {},
+                after.raw_reference if after is not None else {},
+                tracker_schema=tracker_schema,
+            )
             comparisons.append(
                 TrackerItemComparison(
                     item_id,
@@ -158,7 +163,11 @@ def compare_tracker_items(
             )
             continue
         if after is None:
-            fields = _field_comparisons(before.raw_reference, {})
+            fields = _field_comparisons(
+                before.raw_reference,
+                {},
+                tracker_schema=tracker_schema,
+            )
             comparisons.append(
                 TrackerItemComparison(
                     item_id,
@@ -169,7 +178,11 @@ def compare_tracker_items(
                 )
             )
             continue
-        fields = _field_comparisons(before.raw_reference, after.raw_reference)
+        fields = _field_comparisons(
+            before.raw_reference,
+            after.raw_reference,
+            tracker_schema=tracker_schema,
+        )
         kind = (
             BaselineComparisonKind.CHANGED
             if any(field.is_changed for field in fields)
@@ -182,9 +195,12 @@ def compare_tracker_items(
 def _field_comparisons(
     before: dict[str, Any],
     after: dict[str, Any],
+    *,
+    tracker_schema: dict[str, Any] | None = None,
 ) -> tuple[TrackerFieldDifference, ...]:
-    before_fields = _comparison_fields(before)
-    after_fields = _comparison_fields(after)
+    schema_fields = _schema_fields(tracker_schema)
+    before_fields = _comparison_fields(before, schema_fields=schema_fields)
+    after_fields = _comparison_fields(after, schema_fields=schema_fields)
     comparisons: list[TrackerFieldDifference] = []
     missing = object()
     for key in dict.fromkeys((*after_fields, *before_fields)):
@@ -193,18 +209,18 @@ def _field_comparisons(
         before_label, before_compare, before_value, before_table, before_columns = (
             before_entry
             if before_entry is not None
-            else (key, missing, None, False, ())
+            else ("", missing, None, False, ())
         )
         after_label, after_compare, after_value, after_table, after_columns = (
             after_entry
             if after_entry is not None
-            else (key, missing, None, False, ())
+            else ("", missing, None, False, ())
         )
         table_columns = _merge_table_columns(after_columns, before_columns)
         comparisons.append(
             TrackerFieldDifference(
                 key,
-                after_label or before_label,
+                _preferred_field_label(key, after_label, before_label),
                 before_value,
                 after_value,
                 before_compare != after_compare,
@@ -213,6 +229,14 @@ def _field_comparisons(
             )
         )
     return tuple(comparisons)
+
+
+def _preferred_field_label(key: str, *labels: str) -> str:
+    fallback_prefix = "사용자 정의 필드 #"
+    for label in labels:
+        if label and not label.startswith(fallback_prefix):
+            return label
+    return next((label for label in labels if label), key)
 
 
 _FIELD_LABELS = {
@@ -243,6 +267,8 @@ _FIELD_ORDER = tuple(_FIELD_LABELS)
 
 def _comparison_fields(
     raw: dict[str, Any],
+    *,
+    schema_fields: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, tuple[str, Any, Any, bool, tuple[TrackerTableColumn, ...]]]:
     if not isinstance(raw, dict):
         return {}
@@ -252,14 +278,23 @@ def _comparison_fields(
         value: Any,
         *,
         raw_field: dict[str, Any] | None = None,
+        schema_field: dict[str, Any] | None = None,
     ) -> tuple[str, Any, Any, bool, tuple[TrackerTableColumn, ...]]:
         field_payload = raw_field or {}
+        schema_payload = schema_field or {}
         type_name = " ".join(
-            str(field_payload.get(key) or "")
+            str(schema_payload.get(key) or field_payload.get(key) or "")
             for key in ("type", "valueModel")
         ).casefold()
         is_table = "tablefield" in type_name
-        columns = _table_columns(field_payload, value) if is_table else ()
+        columns = (
+            _merge_table_columns(
+                _table_columns(schema_payload, value),
+                _table_columns(field_payload, value),
+            )
+            if is_table
+            else ()
+        )
         return label, _canonical(value), value, is_table, columns
 
     safe_raw = mask_sensitive_payload(raw)
@@ -272,20 +307,60 @@ def _comparison_fields(
         *(key for key in safe_raw if key not in _FIELD_LABELS and key != "customFields"),
     )
     for key in ordered_keys:
-        fields[key] = normalize_field(_FIELD_LABELS.get(key, key), safe_raw[key])
+        schema_field = (schema_fields or {}).get(key)
+        schema_label = str((schema_field or {}).get("name") or "").strip()
+        fields[key] = normalize_field(
+            schema_label or _FIELD_LABELS.get(key, key),
+            safe_raw[key],
+            schema_field=schema_field,
+        )
 
     custom_fields = safe_raw.get("customFields")
     if isinstance(custom_fields, list):
-        for index, field in enumerate(custom_fields):
+        for field in custom_fields:
             if not isinstance(field, dict):
                 continue
             field_id = field.get("fieldId") if field.get("fieldId") is not None else field.get("id")
-            name = str(field.get("name") or field_id or f"custom-{index}")
+            name = str(field.get("name") or "").strip()
             key = f"custom:{field_id if field_id is not None else name}"
+            schema_field = (schema_fields or {}).get(key)
+            schema_name = str((schema_field or {}).get("name") or "").strip()
+            fallback_label = (
+                f"사용자 정의 필드 #{field_id}"
+                if field_id is not None
+                else "사용자 정의 필드"
+            )
             value = field.get("values") if "values" in field else field.get("value")
-            fields[key] = normalize_field(name, value, raw_field=field)
+            fields[key] = normalize_field(
+                schema_name or name or fallback_label,
+                value,
+                raw_field=field,
+                schema_field=schema_field,
+            )
     elif "customFields" in safe_raw:
         fields["customFields"] = normalize_field("사용자 정의 필드", custom_fields)
+    return fields
+
+
+def _schema_fields(
+    tracker_schema: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(tracker_schema, dict):
+        return {}
+    raw_fields = tracker_schema.get("fields")
+    if not isinstance(raw_fields, list):
+        return {}
+    fields: dict[str, dict[str, Any]] = {}
+    for raw_field in raw_fields:
+        if not isinstance(raw_field, dict):
+            continue
+        field = dict(raw_field)
+        builtin_key = str(field.get("trackerItemField") or "").strip()
+        if builtin_key:
+            fields[builtin_key] = field
+        field_id = _optional_column_id(field)
+        if field_id is not None:
+            fields[f"custom:{field_id}"] = field
     return fields
 
 

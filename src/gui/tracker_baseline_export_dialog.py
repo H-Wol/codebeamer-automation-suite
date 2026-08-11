@@ -64,10 +64,10 @@ class BaselineExportFieldDialog(QDialog):
         self.status_label.setObjectName("baseline_export_selection_status")
         selection_row.addWidget(self.status_label, 1)
         select_all = QPushButton("전체 선택", self)
-        select_all.clicked.connect(lambda: self._set_visible_checks(Qt.CheckState.Checked))
+        select_all.clicked.connect(lambda: self._set_all_checks(Qt.CheckState.Checked))
         selection_row.addWidget(select_all)
-        clear = QPushButton("선택 해제", self)
-        clear.clicked.connect(lambda: self._set_visible_checks(Qt.CheckState.Unchecked))
+        clear = QPushButton("전체 해제", self)
+        clear.clicked.connect(lambda: self._set_all_checks(Qt.CheckState.Unchecked))
         selection_row.addWidget(clear)
         layout.addLayout(selection_row)
 
@@ -104,12 +104,11 @@ class BaselineExportFieldDialog(QDialog):
             item = self.field_list.item(index)
             item.setHidden(bool(needle) and needle not in item.text().casefold())
 
-    def _set_visible_checks(self, state: Qt.CheckState) -> None:
+    def _set_all_checks(self, state: Qt.CheckState) -> None:
         self.field_list.blockSignals(True)
         for index in range(self.field_list.count()):
             item = self.field_list.item(index)
-            if not item.isHidden():
-                item.setCheckState(state)
+            item.setCheckState(state)
         self.field_list.blockSignals(False)
         self._update_status()
 

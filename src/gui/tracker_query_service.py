@@ -609,12 +609,17 @@ class TrackerQueryService:
 
         reference = load_source(reference_source)
         comparison = load_source(comparison_source)
+        try:
+            tracker_schema = self.load_tracker_schema(settings, normalized_tracker_id)
+        except TrackerQueryServiceError:
+            tracker_schema = None
         # 내부 before/after는 비교 대상에서 기준으로 이동한 변화 방향을 나타낸다.
         return compare_tracker_items(
             comparison,
             reference,
             before_source=comparison_source,
             after_source=reference_source,
+            tracker_schema=tracker_schema,
         )
 
     def compare_item_at_sources(
@@ -654,12 +659,17 @@ class TrackerQueryService:
         comparison = self._run(
             "compare_item_at_sources", lambda: load_source(comparison_source)
         )
+        try:
+            tracker_schema = self.load_tracker_schema(settings, normalized_tracker_id)
+        except TrackerQueryServiceError:
+            tracker_schema = None
         # 신규/삭제는 비교 대상에서 기준으로 이동했을 때의 변화로 판정한다.
         return compare_tracker_items(
             comparison,
             reference,
             before_source=comparison_source,
             after_source=reference_source,
+            tracker_schema=tracker_schema,
         )
 
     def load_detail(self, settings, item_id: int) -> TrackerItemDetail:

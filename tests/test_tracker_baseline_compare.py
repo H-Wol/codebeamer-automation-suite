@@ -209,6 +209,107 @@ class TrackerBaselineComparisonTest(unittest.TestCase):
         self.assertTrue(result.items[0].fields)
         self.assertTrue(all(field.is_changed for field in result.items[0].fields))
 
+    def test_schema_resolves_custom_field_name_type_and_table_columns(self):
+        before = TrackerItemSummary.from_raw(
+            {
+                "id": 1,
+                "name": "Item",
+                "customFields": [
+                    {
+                        "fieldId": 1000,
+                        "name": "응답 이름",
+                        "value": [[{"fieldId": 1001, "value": "이전"}]],
+                    }
+                ],
+            }
+        )
+        after = TrackerItemSummary.from_raw(
+            {
+                "id": 1,
+                "name": "Item",
+                "customFields": [
+                    {
+                        "fieldId": 1000,
+                        "name": "응답 이름",
+                        "value": [[{"fieldId": 1001, "value": "현재"}]],
+                    }
+                ],
+            }
+        )
+        schema = {
+            "fields": [
+                {
+                    "id": 1000,
+                    "name": "검토 결과",
+                    "type": "TableField",
+                    "valueModel": "TableFieldValue",
+                    "columns": [{"id": 1001, "name": "판정"}],
+                }
+            ]
+        }
+
+        result = compare_tracker_items(
+            (before,),
+            (after,),
+            before_source=BaselineComparisonSource(11),
+            after_source=BaselineComparisonSource(None),
+            tracker_schema=schema,
+        )
+        field = next(
+            field for field in result.items[0].fields if field.field_key == "custom:1000"
+        )
+
+        self.assertEqual(field.label, "검토 결과")
+        self.assertNotIn("custom:1000", field.label)
+        self.assertTrue(field.is_table)
+        self.assertEqual([column.label for column in field.table_columns], ["판정"])
+
+    def test_custom_field_name_falls_back_without_schema_or_response_name(self):
+        result = compare_tracker_items(
+            (),
+            (
+                TrackerItemSummary.from_raw(
+                    {
+                        "id": 1,
+                        "name": "Item",
+                        "customFields": [{"fieldId": 1000, "value": "값"}],
+                    }
+                ),
+            ),
+            before_source=BaselineComparisonSource(11),
+            after_source=BaselineComparisonSource(None),
+            tracker_schema={"fields": []},
+        )
+        field = next(
+            field for field in result.items[0].fields if field.field_key == "custom:1000"
+        )
+
+        self.assertEqual(field.label, "사용자 정의 필드 #1000")
+
+    def test_removed_custom_field_uses_response_name_without_exposing_internal_key(self):
+        result = compare_tracker_items(
+            (
+                TrackerItemSummary.from_raw(
+                    {
+                        "id": 1,
+                        "name": "Item",
+                        "customFields": [
+                            {"fieldId": 1000, "name": "검토 결과", "value": "값"}
+                        ],
+                    }
+                ),
+            ),
+            (),
+            before_source=BaselineComparisonSource(11),
+            after_source=BaselineComparisonSource(None),
+        )
+        field = next(
+            field for field in result.items[0].fields if field.field_key == "custom:1000"
+        )
+
+        self.assertEqual(field.label, "검토 결과")
+        self.assertNotIn("custom:1000", field.label)
+
     def test_comparison_includes_unchanged_and_unknown_response_fields(self):
         before = TrackerItemSummary.from_raw(
             {

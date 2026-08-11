@@ -968,6 +968,13 @@ class TrackerWorkspacePage(QWidget):
             self._render_baseline_comparison_results
         )
         filter_row.addWidget(self.baseline_result_filter)
+        self.baseline_field_filter = QComboBox(results_tab)
+        self.baseline_field_filter.setObjectName("baseline_field_filter")
+        self.baseline_field_filter.addItem("전체 변경 필드", "")
+        self.baseline_field_filter.currentIndexChanged.connect(
+            self._render_baseline_comparison_results
+        )
+        filter_row.addWidget(self.baseline_field_filter)
         self.baseline_result_search = QLineEdit(results_tab)
         self.baseline_result_search.setObjectName("baseline_result_search")
         self.baseline_result_search.setPlaceholderText("ID 또는 아이템명 검색")
@@ -1178,6 +1185,7 @@ class TrackerWorkspacePage(QWidget):
         self.baseline_item_tree.clear()
         self.baseline_result_table.setRowCount(0)
         self.baseline_result_filter.setCurrentIndex(0)
+        self._reset_baseline_field_filter()
         self.baseline_result_search.clear()
         self._baseline_selected_item_id = None
         self._baseline_loaded_tracker_id = None
@@ -1202,6 +1210,7 @@ class TrackerWorkspacePage(QWidget):
         self.baseline_item_tree.clear()
         self.baseline_result_table.setRowCount(0)
         self.baseline_result_filter.setCurrentIndex(0)
+        self._reset_baseline_field_filter()
         self.baseline_result_search.clear()
         self.baseline_tree_status_label.setText(message)
         self.baseline_comparison_panel.reset_state(message)
@@ -1860,15 +1869,7 @@ class TrackerWorkspacePage(QWidget):
         if result is None:
             self.baseline_result_table.setSortingEnabled(True)
             return
-        kind_filter = str(self.baseline_result_filter.currentData() or "")
-        needle = self.baseline_result_search.text().strip().casefold()
-        visible = []
-        for comparison in result.items:
-            if kind_filter and comparison.kind.value != kind_filter:
-                continue
-            if needle and needle not in str(comparison.item_id) and needle not in comparison.name.casefold():
-                continue
-            visible.append(comparison)
+        visible = self._filtered_baseline_comparisons(result)
         self.baseline_result_table.setRowCount(len(visible))
         palette = self.baseline_result_table.palette()
         base_color = palette.base().color()
@@ -1911,6 +1912,55 @@ class TrackerWorkspacePage(QWidget):
         self.baseline_tree_status_label.setText(
             f"전체 비교 {len(result.items)}개 · 현재 표시 {len(visible)}개"
         )
+
+    def _filtered_baseline_comparisons(
+        self,
+        result: BaselineComparisonResult | None = None,
+    ) -> tuple:
+        source = result or self._baseline_comparison_result
+        if source is None:
+            return ()
+        kind_filter = str(self.baseline_result_filter.currentData() or "")
+        field_filter = str(self.baseline_field_filter.currentData() or "")
+        needle = self.baseline_result_search.text().strip().casefold()
+        visible = []
+        for comparison in source.items:
+            if kind_filter and comparison.kind.value != kind_filter:
+                continue
+            if (
+                needle
+                and needle not in str(comparison.item_id)
+                and needle not in comparison.name.casefold()
+            ):
+                continue
+            if field_filter and not any(
+                field.field_key == field_filter and field.is_changed
+                for field in comparison.fields
+            ):
+                continue
+            visible.append(comparison)
+        return tuple(visible)
+
+    def _populate_baseline_field_filter(
+        self,
+        result: BaselineComparisonResult,
+    ) -> None:
+        selected_key = str(self.baseline_field_filter.currentData() or "")
+        fields = baseline_export_fields(result)
+        self.baseline_field_filter.blockSignals(True)
+        self.baseline_field_filter.clear()
+        self.baseline_field_filter.addItem("전체 변경 필드", "")
+        for field in fields:
+            self.baseline_field_filter.addItem(field.label, field.field_key)
+        selected_index = self.baseline_field_filter.findData(selected_key)
+        self.baseline_field_filter.setCurrentIndex(max(selected_index, 0))
+        self.baseline_field_filter.blockSignals(False)
+
+    def _reset_baseline_field_filter(self) -> None:
+        self.baseline_field_filter.blockSignals(True)
+        self.baseline_field_filter.clear()
+        self.baseline_field_filter.addItem("전체 변경 필드", "")
+        self.baseline_field_filter.blockSignals(False)
 
     def _on_search_selection_changed(self) -> None:
         selected = self.search_table.selectedItems()
@@ -2354,6 +2404,9 @@ class TrackerWorkspacePage(QWidget):
         self._baseline_comparison_cache_key = None
         self._baseline_comparison_loading_key = None
         self.baseline_result_table.setRowCount(0)
+        self.baseline_result_filter.setCurrentIndex(0)
+        self._reset_baseline_field_filter()
+        self.baseline_result_search.clear()
         self.baseline_comparison_panel.clear_result(
             "비교 기준이 변경되었습니다. '전체 비교 실행'을 눌러 데이터를 불러오세요."
         )
@@ -2462,6 +2515,7 @@ class TrackerWorkspacePage(QWidget):
         if not force and self._baseline_comparison_cache_key == key:
             result = self._baseline_comparison_result
             if result is not None:
+                self._populate_baseline_field_filter(result)
                 self.baseline_comparison_panel.set_result(
                     result,
                     selected_item_id=self._baseline_selected_item_id,
@@ -2488,6 +2542,7 @@ class TrackerWorkspacePage(QWidget):
             self._baseline_comparison_loading_key = None
             self._baseline_comparison_result = result
             self._baseline_comparison_cache_key = key
+            self._populate_baseline_field_filter(result)
             self.baseline_comparison_panel.set_result(
                 result,
                 selected_item_id=self._baseline_selected_item_id,
@@ -2530,7 +2585,17 @@ class TrackerWorkspacePage(QWidget):
                 "전체 비교 데이터를 불러온 뒤 Excel로 내보낼 수 있습니다."
             )
             return
-        fields = baseline_export_fields(result)
+        filtered_result = BaselineComparisonResult(
+            result.before_source,
+            result.after_source,
+            self._filtered_baseline_comparisons(result),
+        )
+        if not filtered_result.items:
+            self.baseline_comparison_panel.set_error(
+                "현재 필터에 표시된 아이템이 없어 내보낼 수 없습니다."
+            )
+            return
+        fields = baseline_export_fields(filtered_result)
         if not fields:
             self.baseline_comparison_panel.set_error("내보낼 비교 필드가 없습니다.")
             return
@@ -2552,7 +2617,7 @@ class TrackerWorkspacePage(QWidget):
 
         def export():
             return export_baseline_comparison_xlsx(
-                result,
+                filtered_result,
                 output_path,
                 tracker_name=f"{tracker.name} (ID {tracker.tracker_id})",
                 reference_label=reference_label,
@@ -2578,7 +2643,7 @@ class TrackerWorkspacePage(QWidget):
                     tracker_name=tracker.name,
                     details={
                         "selectedFieldCount": len(selected_keys),
-                        "itemCount": len(result.items),
+                        "itemCount": len(filtered_result.items),
                     },
                 )
             )
