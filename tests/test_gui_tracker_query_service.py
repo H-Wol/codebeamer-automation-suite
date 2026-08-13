@@ -310,6 +310,61 @@ class TrackerQueryServiceTest(unittest.TestCase):
             [1, 2],
         )
 
+    def test_hierarchy_export_snapshot_uses_bulk_query_and_roots_without_item_calls(self) -> None:
+        class BulkHierarchyClient(QueryFakeClient):
+            def get_tracker_children_page(self, tracker_id: int, *, page: int, page_size: int):
+                self.__class__.calls.append(("roots", tracker_id, page, page_size))
+                return {
+                    "page": page,
+                    "pageSize": page_size,
+                    "total": 1,
+                    "itemRefs": [{"id": 1, "name": "Root", "hasChildren": True}],
+                }
+
+            def search_items(self, *, query_string, baseline_id=None, page, page_size):
+                del baseline_id
+                self.__class__.calls.append(("search", query_string, page, page_size))
+                return {
+                    "page": page,
+                    "pageSize": page_size,
+                    "total": 2,
+                    "items": [
+                        {
+                            "id": 1,
+                            "name": "Root",
+                            "tracker": {"id": 20},
+                            "children": [{"id": 2, "name": "Child"}],
+                        },
+                        {
+                            "id": 2,
+                            "name": "Child",
+                            "tracker": {"id": 20},
+                            "parent": {"id": 1, "name": "Root"},
+                            "children": [],
+                        },
+                    ],
+                }
+
+            def get_item(self, item_id: int):
+                raise AssertionError(f"unexpected item call: {item_id}")
+
+            def get_item_children_page(self, item_id: int, *, page: int, page_size: int):
+                raise AssertionError(f"unexpected child call: {item_id}, {page}, {page_size}")
+
+        BulkHierarchyClient.reset()
+        service = TrackerQueryService(client_factory=BulkHierarchyClient)
+
+        snapshot = service.load_tracker_hierarchy_export_snapshot(
+            self.settings,
+            20,
+            tracker_name="Requirements",
+        )
+
+        self.assertEqual([node.item.item_id for node in snapshot.nodes], [1, 2])
+        self.assertEqual([node.depth for node in snapshot.nodes], [0, 1])
+        self.assertTrue(any(call[0] == "search" for call in BulkHierarchyClient.calls))
+        self.assertTrue(any(call[0] == "roots" for call in BulkHierarchyClient.calls))
+
     def test_search_passes_only_scoped_cbql_and_preserves_it_as_metadata(self) -> None:
         result = self.service.search(
             self.settings,

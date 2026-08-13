@@ -21,6 +21,7 @@
 - 두 tracker를 포함한 익명 테스트 모드 snapshot
 - 트래커 Baseline 목록과 현재/Baseline별 전체 query 결과 비교
 - 신규·삭제·변경·동일 전체 결과 캐시와 선택 아이템 상세 재사용
+- 트래커 전체 query와 최상위 목록을 결합한 계층 Excel snapshot
 
 쓰기, 상태 전환, 관계·댓글·첨부·이력은 이 서비스의 범위가 아닙니다.
 단건 생성, 선택 필드 수정, 상태 전환과 삭제는 [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)의
@@ -123,6 +124,9 @@ Qt widget은 서버 원본 dict를 직접 탐색하지 않고 위 모델만 사�
 - Baseline 비교는 기준을 변경하면 기존 전체 캐시를 무효화하지만 자동으로 서버를 호출하지 않습니다. 사용자가 `전체 비교 실행` 또는 `전체 비교 다시 불러오기`의 경고를 확인한 경우에만 조회하며, 탭 이동, 결과 정렬, 결과 유형·ID/이름·변경 필드 AND 필터와 아이템 선택은 서버를 다시 호출하지 않습니다.
 - 변경 필드 필터는 기존 아이템에서 실제로 값이 달라진 경우와 신규·삭제 아이템의 해당 필드 존재 여부를 같은 내부 필드 키로 판정합니다. 상세 비교는 필터와 무관하게 선택 아이템의 전체 필드를 표시하고 Excel은 현재 필터 결과만 사용합니다.
 - 사용자 정의 필드는 `custom:<id>`를 내부 식별자로 유지합니다. 표시 이름과 TableField 열은 tracker schema를 우선하며, 이름이 없으면 응답 `name`, `사용자 정의 필드 #ID` 순서로 보완합니다.
+- 계층 Excel 내보내기는 `tracker.id = <trackerId> ORDER BY item.id ASC` 전체 `items`와 최상위 목록, schema만 사용합니다. `parent`, `children`, `ordinal`로 부모·형제 순서를 재구성하며 아이템별 상세 또는 하위 API를 호출하지 않습니다.
+- 최상위 누락, 미연결 item, 중복 부모, 순환이나 tracker 외부 참조가 있으면 일부 계층을 정상 파일로 가장하지 않고 저장을 중단합니다. 내부 `custom:<id>` key는 필드 선택 화면과 Excel에 노출하지 않습니다.
+- 계층 Excel의 고정 열은 ID, Summary, 계층 단계, 상위 아이템 ID입니다. 일반 schema 필드는 기본 선택하고 TableField는 기본 해제하며, 선택 시 내부 행·열 순서를 보존합니다.
 - tracker 검색은 선택 tracker ID로 `TrackerQuery`를 만들며 빈 검색 조건은 화면에서 차단합니다.
 - ID 바로 열기는 `resolve_item_context()` 후 `load_ancestor_path()`를 호출해 선택 컨텍스트와 경로를 함께 전환합니다.
 - 설정·선택이 바뀐 뒤 늦게 끝난 요청이 화면을 덮지 않도록 작업 종류별 request token과 현재 tracker/item을 비교합니다.

@@ -301,6 +301,55 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.assertTrue(self.page.search_button.isEnabled())
         self.assertFalse(self.page.create_item_button.isEnabled())
 
+    def test_hierarchy_export_selects_fields_and_uses_bulk_snapshot_service(self) -> None:
+        self.page.activate()
+        snapshot = object()
+        summary = SimpleNamespace(
+            item_count=5,
+            selected_field_count=2,
+            data_row_count=7,
+            long_value_count=0,
+            long_value_part_count=0,
+        )
+
+        with (
+            patch(
+                "src.gui.tracker_workspace.TrackerHierarchyExportFieldDialog"
+            ) as dialog_cls,
+            patch(
+                "src.gui.tracker_workspace.QFileDialog.getSaveFileName",
+                return_value=("hierarchy.xlsx", "Excel 통합 문서 (*.xlsx)"),
+            ),
+            patch.object(
+                self.service,
+                "load_tracker_hierarchy_export_snapshot",
+                return_value=snapshot,
+            ) as snapshot_mock,
+            patch(
+                "src.gui.tracker_workspace.export_tracker_hierarchy_xlsx",
+                return_value=summary,
+            ) as export_mock,
+        ):
+            dialog_cls.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            dialog_cls.return_value.selected_field_keys.return_value = (
+                "status",
+                "custom:101",
+            )
+
+            self.page.hierarchy_export_button.click()
+
+        snapshot_mock.assert_called_once()
+        export_mock.assert_called_once_with(
+            snapshot,
+            "hierarchy.xlsx",
+            tracker_name="Offline Requirements (ID 24680001)",
+            project_name="Offline Vehicle Project",
+            selected_field_keys=("status", "custom:101"),
+        )
+        self.assertFalse(self.page._hierarchy_export_in_progress)
+        self.assertTrue(self.page.hierarchy_export_button.isEnabled())
+        self.assertIn("아이템 5개", self.page.tree_status_label.text())
+
     def test_baseline_compare_uses_separate_workspace_and_does_not_eagerly_fetch_details(self) -> None:
         self.page.activate()
 

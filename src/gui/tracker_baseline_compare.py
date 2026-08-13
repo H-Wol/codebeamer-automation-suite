@@ -91,6 +91,22 @@ class TrackerTableColumn:
 
 
 @dataclass(frozen=True)
+class TrackerItemFieldValue:
+    """조회 item 한 건에서 Excel에 표시할 수 있도록 정규화한 필드 값이다."""
+
+    field_key: str
+    label: str
+    value: Any
+    is_table: bool = False
+    table_columns: tuple[TrackerTableColumn, ...] = ()
+
+    def display_text(self) -> str:
+        if self.is_table:
+            return _display_table(self.value, self.table_columns)
+        return _display_value(self.value, field_key=self.field_key)
+
+
+@dataclass(frozen=True)
 class TrackerItemComparison:
     item_id: int
     kind: BaselineComparisonKind
@@ -128,6 +144,27 @@ class BaselineComparisonResult:
     @property
     def comparison_source(self) -> BaselineComparisonSource:
         return self.before_source
+
+
+def tracker_item_fields(
+    item: TrackerItemSummary,
+    *,
+    tracker_schema: dict[str, Any] | None = None,
+) -> tuple[TrackerItemFieldValue, ...]:
+    """단일 조회 item의 builtin/custom/TableField 값을 공통 표시 모델로 바꾼다."""
+    schema_fields = _schema_fields(tracker_schema)
+    normalized = _comparison_fields(item.raw_reference, schema_fields=schema_fields)
+    return tuple(
+        TrackerItemFieldValue(
+            field_key=field_key,
+            label=label,
+            value=value,
+            is_table=is_table,
+            table_columns=table_columns,
+        )
+        for field_key, (label, _canonical_value, value, is_table, table_columns)
+        in normalized.items()
+    )
 
 
 def compare_tracker_items(
@@ -488,6 +525,11 @@ def table_field_rows(value: Any) -> tuple[dict[str, Any], ...]:
 def comparison_value_key(value: Any) -> Any:
     """표시명 변경을 제외한 비교용 canonical 값을 반환한다."""
     return _canonical(value)
+
+
+def display_tracker_value(value: Any, *, field_key: str = "") -> str:
+    """조회·비교 Excel에서 공유하는 사용자 친화적 필드 표시 문자열을 반환한다."""
+    return _display_value(value, field_key=field_key)
 
 
 def _canonical(value: Any) -> Any:

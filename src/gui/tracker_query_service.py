@@ -19,6 +19,8 @@ from .tracker_baseline_compare import BaselineComparisonResult
 from .tracker_baseline_compare import BaselineComparisonSource
 from .tracker_baseline_compare import TrackerBaseline
 from .tracker_baseline_compare import compare_tracker_items
+from .tracker_hierarchy_export import TrackerHierarchyExportSnapshot
+from .tracker_hierarchy_export import build_tracker_hierarchy_snapshot
 from src.codebeamer_client import CodebeamerClient
 
 
@@ -449,6 +451,45 @@ class TrackerQueryService:
             entity_id=normalized_item_id,
             page_size=page_size,
             normalize=normalize,
+        )
+
+    def load_tracker_hierarchy_export_snapshot(
+        self,
+        settings,
+        tracker_id: int,
+        *,
+        tracker_name: str = "",
+        project_id: int | None = None,
+        project_name: str = "",
+        page_size: int = 500,
+    ) -> TrackerHierarchyExportSnapshot:
+        """단건 조회 없이 트래커 전체 item과 최상위 목록으로 계층 snapshot을 만든다."""
+        normalized_tracker_id = int(tracker_id)
+        items = self.load_all_search_items(
+            settings,
+            TrackerQuery(
+                tracker_id=normalized_tracker_id,
+                page=1,
+                page_size=page_size,
+                sort="item.id ASC",
+            ),
+            page_size=page_size,
+            require_full_items=True,
+        )
+        roots = self.load_all_top_level_items(
+            settings,
+            normalized_tracker_id,
+            tracker_name=tracker_name,
+            project_id=project_id,
+            project_name=project_name,
+            page_size=page_size,
+        )
+        schema = self.load_tracker_schema(settings, normalized_tracker_id)
+        return build_tracker_hierarchy_snapshot(
+            items,
+            roots,
+            schema,
+            tracker_id=normalized_tracker_id,
         )
 
     def search(
