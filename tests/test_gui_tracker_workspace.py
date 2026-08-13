@@ -82,6 +82,7 @@ class CountingTrackerQueryService(TrackerQueryService):
         self.child_load_count = 0
         self.baseline_compare_count = 0
         self.baseline_load_count = 0
+        self.baseline_hierarchy_count = 0
 
     def load_all_child_items(self, *args, **kwargs):
         self.child_load_count += 1
@@ -98,6 +99,10 @@ class CountingTrackerQueryService(TrackerQueryService):
     def load_tracker_baselines(self, *args, **kwargs):
         self.baseline_load_count += 1
         return super().load_tracker_baselines(*args, **kwargs)
+
+    def load_baseline_hierarchy_snapshot(self, *args, **kwargs):
+        self.baseline_hierarchy_count += 1
+        return super().load_baseline_hierarchy_snapshot(*args, **kwargs)
 
 
 EDITOR_SCHEMA = {
@@ -300,6 +305,86 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.assertIn("Offline Requirements", self.page.search_scope_label.text())
         self.assertTrue(self.page.search_button.isEnabled())
         self.assertFalse(self.page.create_item_button.isEnabled())
+
+    def test_baseline_source_loads_full_read_only_hierarchy_and_detail(self) -> None:
+        self.page.activate()
+
+        self.assertEqual(self.page.hierarchy_source_combo.count(), 2)
+        baseline_id = 24681001
+        self.page.hierarchy_source_combo.setCurrentIndex(
+            self.page.hierarchy_source_combo.findData(baseline_id)
+        )
+        self._app.processEvents()
+
+        self.assertEqual(self.page.item_tree.topLevelItemCount(), 0)
+        self.assertIn("Baseline 계층 조회", self.page.reload_roots_button.text())
+        self.assertFalse(self.page.hierarchy_export_button.isEnabled())
+        self.assertFalse(self.page.detail_tabs.isTabEnabled(self.page.editor_tab_index))
+        self.page._create_item()
+        self.assertIn("Baseline 조회 중", self.page.workspace_status_label.text())
+
+        child_loads_before = self.service.child_load_count
+        self.page.reload_roots_button.click()
+        self._app.processEvents()
+
+        self.assertEqual(self.page.item_tree.topLevelItemCount(), 1)
+        root = self.page.item_tree.topLevelItem(0)
+        self.assertEqual(root.text(0), "9001001")
+        self.assertEqual(root.text(1), "Vehicle requirements baseline")
+        self.assertEqual(root.childCount(), 2)
+        self.assertTrue(root.data(0, CHILDREN_LOADED_ROLE))
+        self.page._on_tree_item_expanded(root)
+        self.assertEqual(self.service.child_load_count, child_loads_before)
+
+        child = root.child(0)
+        self.page.item_tree.setCurrentItem(child)
+        self._app.processEvents()
+
+        self.assertEqual(self.page._detail_baseline_id, baseline_id)
+        self.assertEqual(self.page.detail_title.text(), "Brake system baseline · Baseline")
+        self.assertIn("읽기 전용", self.page.detail_warning.text())
+        self.assertFalse(self.page.detail_tabs.isTabEnabled(self.page.editor_tab_index))
+
+        self.page.hierarchy_source_combo.setCurrentIndex(0)
+        self._app.processEvents()
+
+        self.assertIsNone(self.page._detail_baseline_id)
+        self.assertEqual(self.page.item_tree.topLevelItemCount(), 2)
+        self.assertTrue(self.page.hierarchy_export_button.isEnabled())
+
+        self.page.hierarchy_source_combo.setCurrentIndex(
+            self.page.hierarchy_source_combo.findData(baseline_id)
+        )
+        self._app.processEvents()
+        self.assertEqual(self.page.item_tree.topLevelItemCount(), 1)
+        self.assertEqual(self.service.baseline_hierarchy_count, 1)
+
+    def test_stale_baseline_hierarchy_does_not_replace_current_tree(self) -> None:
+        self.page.activate()
+        tasks: list[_DeferredTask] = []
+        self.page.synchronous = False
+        self.page.task_factory = lambda operation: tasks.append(
+            _DeferredTask(operation)
+        ) or tasks[-1]
+
+        baseline_id = 24681001
+        self.page.hierarchy_source_combo.setCurrentIndex(
+            self.page.hierarchy_source_combo.findData(baseline_id)
+        )
+        self.page.reload_roots_button.click()
+        self.assertEqual(len(tasks), 1)
+
+        self.page.hierarchy_source_combo.setCurrentIndex(0)
+        self.assertEqual(self.page.item_tree.topLevelItemCount(), 2)
+
+        tasks[0].finish()
+        self._app.processEvents()
+
+        self.assertEqual(self.page.item_tree.topLevelItemCount(), 2)
+        self.assertNotIn(
+            (24680001, baseline_id),
+            self.page._baseline_hierarchy_cache,
+        )
 
     def test_hierarchy_export_selects_fields_and_uses_bulk_snapshot_service(self) -> None:
         self.page.activate()
@@ -1231,11 +1316,12 @@ class TrackerWorkspacePageTest(unittest.TestCase):
 
             starts = [value for kind, value in events if kind == "start"]
             finishes = [value for kind, value in events if kind == "finish"]
-            self.assertEqual(len(starts), 3)
-            self.assertEqual(finishes, [3, 2, 1])
+            self.assertEqual(len(starts), 4)
+            self.assertEqual(finishes, [3, 4, 2, 1])
             self.assertIn("프로젝트", starts[0])
             self.assertIn("트래커", starts[1])
             self.assertIn("최상위 아이템", starts[2])
+            self.assertIn("baseline 목록", starts[3])
         finally:
             page.close()
 

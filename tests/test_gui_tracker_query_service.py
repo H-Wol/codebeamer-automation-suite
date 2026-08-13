@@ -365,6 +365,78 @@ class TrackerQueryServiceTest(unittest.TestCase):
         self.assertTrue(any(call[0] == "search" for call in BulkHierarchyClient.calls))
         self.assertTrue(any(call[0] == "roots" for call in BulkHierarchyClient.calls))
 
+    def test_baseline_hierarchy_and_detail_keep_the_selected_baseline(self) -> None:
+        class BaselineHierarchyClient(QueryFakeClient):
+            def search_items(self, *, query_string, baseline_id=None, page, page_size):
+                self.__class__.calls.append(
+                    ("baseline_search", query_string, baseline_id, page, page_size)
+                )
+                return {
+                    "page": page,
+                    "pageSize": page_size,
+                    "total": 3,
+                    "items": [
+                        {
+                            "id": 1,
+                            "name": "Baseline root",
+                            "tracker": {"id": 20},
+                            "ordinal": 1,
+                            "children": [{"id": 2}, {"id": 3}],
+                        },
+                        {
+                            "id": 2,
+                            "name": "Second",
+                            "tracker": {"id": 20},
+                            "parent": {"id": 1},
+                            "ordinal": 2,
+                            "children": [],
+                        },
+                        {
+                            "id": 3,
+                            "name": "First",
+                            "tracker": {"id": 20},
+                            "parent": {"id": 1},
+                            "ordinal": 1,
+                            "children": [],
+                        },
+                    ],
+                }
+
+            def get_item(self, item_id: int, baseline_id=None):
+                self.__class__.calls.append(("baseline_item", item_id, baseline_id))
+                return {
+                    "id": item_id,
+                    "name": "Baseline detail",
+                    "tracker": {"id": 20, "name": "Requirements"},
+                    "children": [],
+                    "customFields": [],
+                }
+
+            def get_tracker_children_page(self, tracker_id: int, *, page: int, page_size: int):
+                raise AssertionError("current root API must not be used")
+
+            def get_item_children_page(self, item_id: int, *, page: int, page_size: int):
+                raise AssertionError("current child API must not be used")
+
+        BaselineHierarchyClient.reset()
+        service = TrackerQueryService(client_factory=BaselineHierarchyClient)
+
+        snapshot = service.load_baseline_hierarchy_snapshot(
+            self.settings,
+            20,
+            11,
+        )
+        detail = service.load_detail(self.settings, 2, baseline_id=11)
+
+        self.assertEqual([node.item.item_id for node in snapshot.nodes], [1, 2, 3])
+        search_call = next(
+            call for call in BaselineHierarchyClient.calls if call[0] == "baseline_search"
+        )
+        self.assertEqual(search_call[2], 11)
+        self.assertIn("tracker.id = 20", search_call[1])
+        self.assertEqual(detail.summary.name, "Baseline detail")
+        self.assertIn(("baseline_item", 2, 11), BaselineHierarchyClient.calls)
+
     def test_search_passes_only_scoped_cbql_and_preserves_it_as_metadata(self) -> None:
         result = self.service.search(
             self.settings,

@@ -21,6 +21,8 @@ from .tracker_baseline_compare import TrackerTableColumn
 from .tracker_baseline_compare import display_tracker_value
 from .tracker_baseline_compare import table_field_rows
 from .tracker_baseline_compare import tracker_item_fields
+from .tracker_hierarchy import TrackerHierarchyError
+from .tracker_hierarchy import build_tracker_hierarchy
 from .tracker_query_models import TrackerItemSummary
 
 
@@ -211,140 +213,20 @@ def build_tracker_hierarchy_snapshot(
     tracker_id: int,
 ) -> TrackerHierarchyExportSnapshot:
     normalized_tracker_id = int(tracker_id)
-    item_by_id: dict[int, TrackerItemSummary] = {}
-    for item in items:
-        if item.item_id in item_by_id:
-            raise TrackerHierarchyExportError(
-                f"전체 조회 결과에 아이템 #{item.item_id}가 중복되었습니다."
-            )
-        if item.tracker_id is not None and int(item.tracker_id) != normalized_tracker_id:
-            raise TrackerHierarchyExportError(
-                f"전체 조회 결과에 다른 트래커의 아이템 #{item.item_id}가 포함되었습니다."
-            )
-        item_by_id[item.item_id] = item
-
-    root_ids: list[int] = []
-    for root in roots:
-        if root.item_id not in item_by_id:
-            raise TrackerHierarchyExportError(
-                f"최상위 아이템 #{root.item_id}가 전체 조회 결과에 없습니다."
-            )
-        if root.item_id not in root_ids:
-            root_ids.append(root.item_id)
-    if item_by_id and not root_ids:
-        raise TrackerHierarchyExportError(
-            "전체 조회 결과는 있지만 최상위 아이템을 확인할 수 없습니다."
+    try:
+        hierarchy = build_tracker_hierarchy(
+            items,
+            tracker_id=normalized_tracker_id,
+            root_ids=(root.item_id for root in roots),
         )
-
-    parent_by_id: dict[int, int | None] = {root_id: None for root_id in root_ids}
-    explicit_child_order: dict[int, list[int]] = {}
-
-    def assign_parent(child_id: int, parent_id: int, *, source: str) -> None:
-        if child_id not in item_by_id:
-            raise TrackerHierarchyExportError(
-                f"{source}가 현재 트래커에 없는 아이템 #{child_id}를 참조합니다."
-            )
-        if parent_id not in item_by_id:
-            raise TrackerHierarchyExportError(
-                f"아이템 #{child_id}의 상위 아이템 #{parent_id}가 전체 조회 결과에 없습니다."
-            )
-        if child_id in root_ids:
-            raise TrackerHierarchyExportError(
-                f"최상위 아이템 #{child_id}에 상위 아이템 #{parent_id} 참조가 함께 있습니다."
-            )
-        existing = parent_by_id.get(child_id)
-        if existing is not None and existing != parent_id:
-            raise TrackerHierarchyExportError(
-                f"아이템 #{child_id}가 두 개의 상위 아이템 #{existing}, #{parent_id}를 참조합니다."
-            )
-        parent_by_id[child_id] = parent_id
-
-    for item in item_by_id.values():
-        raw_children = item.raw_reference.get("children")
-        if isinstance(raw_children, list):
-            ordered: list[int] = []
-            for raw_child in raw_children:
-                child_id = _reference_id(raw_child)
-                if child_id is None or child_id in ordered:
-                    continue
-                assign_parent(child_id, item.item_id, source=f"아이템 #{item.item_id}의 children")
-                ordered.append(child_id)
-            explicit_child_order[item.item_id] = ordered
-
-    for item in item_by_id.values():
-        raw_parent = item.raw_reference.get("parent")
-        parent_id = item.parent_id or _reference_id(raw_parent)
-        if parent_id is None:
-            raw_parent_id = item.raw_reference.get("parentId")
-            parent_id = _optional_positive_int(raw_parent_id)
-        if parent_id is not None:
-            assign_parent(item.item_id, parent_id, source=f"아이템 #{item.item_id}의 parent")
-
-    unresolved = sorted(item_id for item_id in item_by_id if item_id not in parent_by_id)
-    if unresolved:
-        preview = ", ".join(f"#{item_id}" for item_id in unresolved[:8])
-        suffix = " 외" if len(unresolved) > 8 else ""
-        raise TrackerHierarchyExportError(
-            f"상위 관계를 확인할 수 없는 아이템이 있습니다: {preview}{suffix}. "
-            "전체 query 응답의 parent/children 정보를 확인하세요."
-        )
-
-    for start_id in item_by_id:
-        chain: set[int] = set()
-        current_id: int | None = start_id
-        while current_id is not None:
-            if current_id in chain:
-                raise TrackerHierarchyExportError(
-                    f"아이템 #{current_id}에서 순환 계층을 발견했습니다."
-                )
-            chain.add(current_id)
-            current_id = parent_by_id[current_id]
-
-    children_by_parent: dict[int, list[int]] = {item_id: [] for item_id in item_by_id}
-    for child_id, parent_id in parent_by_id.items():
-        if parent_id is not None:
-            children_by_parent[parent_id].append(child_id)
-    for parent_id, child_ids in children_by_parent.items():
-        explicit = explicit_child_order.get(parent_id, [])
-        explicit_set = set(explicit)
-        ordered = [child_id for child_id in explicit if child_id in child_ids]
-        remaining = [child_id for child_id in child_ids if child_id not in explicit_set]
-        remaining.sort(key=lambda item_id: _sibling_sort_key(item_by_id[item_id]))
-        children_by_parent[parent_id] = [*ordered, *remaining]
-
-    ordered_nodes: list[tuple[TrackerItemSummary, int | None, int]] = []
-    visiting: set[int] = set()
-    visited: set[int] = set()
-
-    def visit(item_id: int, depth: int) -> None:
-        if item_id in visiting:
-            raise TrackerHierarchyExportError(
-                f"아이템 #{item_id}에서 순환 계층을 발견했습니다."
-            )
-        if item_id in visited:
-            raise TrackerHierarchyExportError(
-                f"아이템 #{item_id}가 계층에 두 번 연결되었습니다."
-            )
-        visiting.add(item_id)
-        visited.add(item_id)
-        ordered_nodes.append((item_by_id[item_id], parent_by_id[item_id], depth))
-        for child_id in children_by_parent[item_id]:
-            visit(child_id, depth + 1)
-        visiting.remove(item_id)
-
-    for root_id in root_ids:
-        visit(root_id, 0)
-    if len(visited) != len(item_by_id):
-        missing = sorted(set(item_by_id) - visited)
-        preview = ", ".join(f"#{item_id}" for item_id in missing[:8])
-        raise TrackerHierarchyExportError(
-            f"최상위 계층에서 도달할 수 없는 아이템이 있습니다: {preview}."
-        )
+    except TrackerHierarchyError as exc:
+        raise TrackerHierarchyExportError(str(exc)) from exc
 
     fields = list(hierarchy_export_fields_from_schema(tracker_schema))
     field_indexes = {field.field_key: index for index, field in enumerate(fields)}
     nodes: list[TrackerHierarchyExportNode] = []
-    for item, parent_id, depth in ordered_nodes:
+    for hierarchy_node in hierarchy.nodes:
+        item = hierarchy_node.item
         normalized_fields = tracker_item_fields(item, tracker_schema=tracker_schema)
         for value in normalized_fields:
             index = field_indexes.get(value.field_key)
@@ -363,8 +245,8 @@ def build_tracker_hierarchy_snapshot(
         nodes.append(
             TrackerHierarchyExportNode(
                 item=item,
-                parent_id=parent_id,
-                depth=depth,
+                parent_id=hierarchy_node.parent_id,
+                depth=hierarchy_node.depth,
                 fields=normalized_fields,
             )
         )
@@ -810,12 +692,6 @@ def _positive_field_id(value: dict[str, Any]) -> int | None:
     return _optional_positive_int(value.get("fieldId") or value.get("id"))
 
 
-def _reference_id(value: Any) -> int | None:
-    if isinstance(value, dict):
-        return _optional_positive_int(value.get("id"))
-    return _optional_positive_int(value)
-
-
 def _optional_positive_int(value: Any) -> int | None:
     if value in (None, "") or isinstance(value, bool):
         return None
@@ -824,21 +700,6 @@ def _optional_positive_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return normalized if normalized > 0 else None
-
-
-def _sibling_sort_key(item: TrackerItemSummary) -> tuple[int, int, int]:
-    ordinal = _optional_nonnegative_int(item.raw_reference.get("ordinal"))
-    return (ordinal is None, ordinal or 0, item.item_id)
-
-
-def _optional_nonnegative_int(value: Any) -> int | None:
-    if value in (None, "") or isinstance(value, bool):
-        return None
-    try:
-        normalized = int(value)
-    except (TypeError, ValueError):
-        return None
-    return normalized if normalized >= 0 else None
 
 
 def _normalize_excel_text(value: Any) -> str:

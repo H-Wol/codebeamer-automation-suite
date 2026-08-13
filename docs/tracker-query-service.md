@@ -22,6 +22,7 @@
 - 트래커 Baseline 목록과 현재/Baseline별 전체 query 결과 비교
 - 신규·삭제·변경·동일 전체 결과 캐시와 선택 아이템 상세 재사용
 - 트래커 전체 query와 최상위 목록을 결합한 계층 Excel snapshot
+- Baseline 전체 query만으로 재구성한 단일 시점 계층과 읽기 전용 상세
 
 쓰기, 상태 전환, 관계·댓글·첨부·이력은 이 서비스의 범위가 아닙니다.
 단건 생성, 선택 필드 수정, 상태 전환과 삭제는 [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)의
@@ -37,6 +38,7 @@
 | 조건 검색 | `GET /v3/items/query` | `CodebeamerClient.search_items()` |
 | Baseline 목록 | `GET /v3/trackers/{trackerId}/baselines` | `CodebeamerClient.get_tracker_baselines()` |
 | Baseline 전체 비교 | `GET /v3/items/query?baselineId={baselineId}` | `TrackerQueryService.compare_tracker_at_sources()` |
+| Baseline 단일 계층 | `GET /v3/items/query?baselineId={baselineId}` | `TrackerQueryService.load_baseline_hierarchy_snapshot()` |
 | 상세 | `GET /v3/items/{itemId}` | `CodebeamerClient.get_item()` |
 | schema | `GET /v3/trackers/{trackerId}/schema` | `CodebeamerClient.get_tracker_schema()` |
 
@@ -128,6 +130,8 @@ Qt widget은 서버 원본 dict를 직접 탐색하지 않고 위 모델만 사�
 - 최상위 누락, 미연결 item, 중복 부모, 순환이나 tracker 외부 참조가 있으면 일부 계층을 정상 파일로 가장하지 않고 저장을 중단합니다. 내부 `custom:<id>` key는 필드 선택 화면과 Excel에 노출하지 않습니다.
 - 계층 Excel의 고정 열은 ID, Summary, 계층 단계, 상위 아이템 ID입니다. 일반 schema 필드는 기본 선택하고 TableField는 기본 해제하며, 선택 시 내부 행·열 순서를 보존합니다.
 - 계층 Excel의 TrackerItemChoiceField는 참조 ID나 tracker 정보 없이 각 참조 아이템의 `name`만 줄 단위로 표시합니다.
+- 기본 계층 탭에서 Baseline을 선택하면 사용자가 계층 조회 버튼을 누른 경우에만 해당 시점의 전체 `items` 페이지를 수집합니다. root는 parent가 없는 item에서 도출하고, children의 명시 순서와 ordinal/ID fallback으로 트리를 구성합니다. 이 과정에서 현재 시점 root/children API나 아이템별 상세 API를 사용하지 않습니다.
+- Baseline 트리의 상세는 동일한 `baselineId`를 유지하며 읽기 전용으로 표시합니다. 관계 충돌, 순환, 누락 참조 또는 tracker 외부 참조가 있으면 현재 계층으로 대체하지 않고 조회를 중단합니다.
 - tracker 검색은 선택 tracker ID로 `TrackerQuery`를 만들며 빈 검색 조건은 화면에서 차단합니다.
 - ID 바로 열기는 `resolve_item_context()` 후 `load_ancestor_path()`를 호출해 선택 컨텍스트와 경로를 함께 전환합니다.
 - 설정·선택이 바뀐 뒤 늦게 끝난 요청이 화면을 덮지 않도록 작업 종류별 request token과 현재 tracker/item을 비교합니다.

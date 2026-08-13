@@ -19,6 +19,9 @@ from .tracker_baseline_compare import BaselineComparisonResult
 from .tracker_baseline_compare import BaselineComparisonSource
 from .tracker_baseline_compare import TrackerBaseline
 from .tracker_baseline_compare import compare_tracker_items
+from .tracker_hierarchy import TrackerHierarchyError
+from .tracker_hierarchy import TrackerHierarchySnapshot
+from .tracker_hierarchy import build_tracker_hierarchy
 from .tracker_hierarchy_export import TrackerHierarchyExportSnapshot
 from .tracker_hierarchy_export import build_tracker_hierarchy_snapshot
 from src.codebeamer_client import CodebeamerClient
@@ -492,6 +495,38 @@ class TrackerQueryService:
             tracker_id=normalized_tracker_id,
         )
 
+    def load_baseline_hierarchy_snapshot(
+        self,
+        settings,
+        tracker_id: int,
+        baseline_id: int,
+        *,
+        page_size: int = 500,
+    ) -> TrackerHierarchySnapshot:
+        """현재 계층 API를 섞지 않고 Baseline 전체 item으로 계층을 만든다."""
+        normalized_tracker_id = int(tracker_id)
+        normalized_baseline_id = int(baseline_id)
+        items = self.load_all_search_items(
+            settings,
+            TrackerQuery(
+                tracker_id=normalized_tracker_id,
+                page=1,
+                page_size=page_size,
+                sort="item.id ASC",
+                baseline_id=normalized_baseline_id,
+            ),
+            page_size=page_size,
+            require_full_items=True,
+        )
+        try:
+            return build_tracker_hierarchy(items, tracker_id=normalized_tracker_id)
+        except TrackerHierarchyError as exc:
+            raise TrackerQueryServiceError(
+                TrackerQueryErrorKind.SERVER,
+                str(exc),
+                operation="load_baseline_hierarchy",
+            ) from exc
+
     def search(
         self,
         settings,
@@ -515,7 +550,7 @@ class TrackerQueryService:
         ):
             raise TrackerQueryServiceError(
                 TrackerQueryErrorKind.SERVER,
-                "전체 비교에는 items가 포함된 query 응답이 필요합니다.",
+                "이 작업에는 전체 필드가 포함된 items query 응답이 필요합니다.",
                 operation="search_items",
             )
         raw_items = self._extract_list(payload, "items", "itemRefs")
@@ -713,11 +748,26 @@ class TrackerQueryService:
             tracker_schema=tracker_schema,
         )
 
-    def load_detail(self, settings, item_id: int) -> TrackerItemDetail:
+    def load_detail(
+        self,
+        settings,
+        item_id: int,
+        *,
+        baseline_id: int | None = None,
+    ) -> TrackerItemDetail:
         client = self._client(settings, "load_item_detail")
+        normalized_baseline_id = (
+            None if baseline_id is None else int(baseline_id)
+        )
         raw_item = self._run(
             "load_item_detail",
-            lambda: client.get_item(int(item_id)),
+            lambda: (
+                client.get_item(int(item_id))
+                if normalized_baseline_id is None
+                else client.get_item(
+                    int(item_id), baseline_id=normalized_baseline_id
+                )
+            ),
         )
         if not isinstance(raw_item, dict):
             raise TrackerQueryServiceError(

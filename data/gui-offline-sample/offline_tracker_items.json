@@ -198,5 +198,84 @@
       "version": 1,
       "customFields": []
     }
+  ],
+  "baselines": [
+    {
+      "id": 24681001,
+      "trackerId": 24680001,
+      "name": "Offline Requirements Baseline",
+      "createdAt": "2026-07-15T09:00:00Z",
+      "items": [
+        {
+          "id": 9001001,
+          "trackerId": 24680001,
+          "name": "Vehicle requirements baseline",
+          "description": "Historical top-level sample requirement.",
+          "descriptionFormat": "PlainText",
+          "ordinal": 1,
+          "children": [
+            {
+              "id": 9001002,
+              "name": "Brake system baseline",
+              "type": "TrackerItemReference"
+            },
+            {
+              "id": 9001003,
+              "name": "Steering system baseline",
+              "type": "TrackerItemReference"
+            }
+          ],
+          "status": {
+            "id": 201,
+            "name": "Open",
+            "type": "ChoiceOptionReference"
+          },
+          "version": 1,
+          "customFields": []
+        },
+        {
+          "id": 9001002,
+          "trackerId": 24680001,
+          "parent": {
+            "id": 9001001,
+            "name": "Vehicle requirements baseline",
+            "type": "TrackerItemReference"
+          },
+          "name": "Brake system baseline",
+          "description": "Historical brake requirement.",
+          "descriptionFormat": "PlainText",
+          "ordinal": 1,
+          "children": [],
+          "status": {
+            "id": 202,
+            "name": "Review",
+            "type": "ChoiceOptionReference"
+          },
+          "version": 1,
+          "customFields": []
+        },
+        {
+          "id": 9001003,
+          "trackerId": 24680001,
+          "parent": {
+            "id": 9001001,
+            "name": "Vehicle requirements baseline",
+            "type": "TrackerItemReference"
+          },
+          "name": "Steering system baseline",
+          "description": "Historical steering requirement.",
+          "descriptionFormat": "PlainText",
+          "ordinal": 2,
+          "children": [],
+          "status": {
+            "id": 201,
+            "name": "Open",
+            "type": "ChoiceOptionReference"
+          },
+          "version": 1,
+          "customFields": []
+        }
+      ]
+    }
   ]
 }
