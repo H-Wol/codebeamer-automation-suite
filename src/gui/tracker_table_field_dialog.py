@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any
+from typing import Callable
 
 try:
     from PySide6.QtCore import Qt
@@ -19,6 +20,8 @@ except ImportError as exc:  # pragma: no cover - GUI dependency guard
     raise RuntimeError("GUI 실행에는 PySide6 패키지가 필요합니다.") from exc
 
 from .tracker_query_models import TrackerFieldValue
+from .tracker_content_models import WikiRenderResult
+from .wiki_content_view import WikiContentView
 from .wiki_renderer import codebeamer_wiki_to_html
 from .wiki_renderer import payload_uses_wiki
 
@@ -133,11 +136,23 @@ def table_field_summary(field: TrackerFieldValue) -> str:
 class TrackerTableFieldDialog(QDialog):
     """TableField 행·열 구조를 보존하며 Wiki 셀만 rich text로 표시한다."""
 
-    def __init__(self, field: TrackerFieldValue, parent=None) -> None:
+    def __init__(
+        self,
+        field: TrackerFieldValue,
+        parent=None,
+        *,
+        wiki_render_request: Callable[[str, Callable[[WikiRenderResult], None]], None] | None = None,
+        wiki_resource_loader: Callable[[WikiRenderResult, WikiContentView], None] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.field = field
         self.rows = _row_payloads(field.raw_value)
         self.columns = _column_payloads(field.raw_value, self.rows)
+        self.wiki_render_request = wiki_render_request
+        self.wiki_resource_loader = wiki_resource_loader
+        self._wiki_generation = 0
+        self._pending_wiki: list[tuple[int, str, WikiContentView]] = []
+        self._active_wiki_requests = 0
         self.setWindowTitle(f"{field.name} · 테이블 보기")
         self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
         self.setMinimumSize(720, 440)
@@ -225,6 +240,10 @@ class TrackerTableFieldDialog(QDialog):
         return None
 
     def _populate(self, show_source: bool = False) -> None:
+        self._wiki_generation += 1
+        generation = self._wiki_generation
+        self._pending_wiki.clear()
+        self._active_wiki_requests = 0
         previous_row_heights = [
             self.table.rowHeight(index) for index in range(self.table.rowCount())
         ]
@@ -255,18 +274,39 @@ class TrackerTableFieldDialog(QDialog):
                 metadata.update(cell)
                 if show_source or not payload_uses_wiki(metadata):
                     continue
-                label = QLabel(self.table)
+                label = WikiContentView(self.table)
                 label.setObjectName("tracker_wiki_cell")
-                label.setTextFormat(Qt.TextFormat.RichText)
-                label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-                label.setWordWrap(True)
-                label.setMargin(6)
                 label.setMinimumHeight(32)
-                label.setText(codebeamer_wiki_to_html(text))
+                label.setHtml(codebeamer_wiki_to_html(text))
                 item.setText("")
                 self.table.setCellWidget(row_index, column_index, label)
+                if self.wiki_render_request is not None:
+                    self._pending_wiki.append((generation, text, label))
         for row_index, height in enumerate(previous_row_heights[: len(self.rows)]):
             self.table.setRowHeight(row_index, height)
+        self._drain_wiki_queue()
+
+    def _drain_wiki_queue(self) -> None:
+        while self._active_wiki_requests < 4 and self._pending_wiki:
+            generation, text, view = self._pending_wiki.pop(0)
+            if generation != self._wiki_generation:
+                continue
+            self._active_wiki_requests += 1
+
+            def completed(
+                result: WikiRenderResult,
+                *,
+                expected_generation=generation,
+                target=view,
+            ) -> None:
+                self._active_wiki_requests = max(0, self._active_wiki_requests - 1)
+                if expected_generation == self._wiki_generation:
+                    target.set_render_result(result)
+                    if self.wiki_resource_loader is not None:
+                        self.wiki_resource_loader(result, target)
+                self._drain_wiki_queue()
+
+            self.wiki_render_request(text, completed)
 
     def _fit_columns_to_contents(self, _checked: bool = False) -> None:
         column_count = self.table.columnCount()
