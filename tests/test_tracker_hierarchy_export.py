@@ -37,6 +37,13 @@ SCHEMA = {
             "trackerItemField": "status",
         },
         {
+            "id": 8,
+            "name": "연관 요구사항",
+            "type": "TrackerItemChoiceField",
+            "valueModel": "ChoiceFieldValue<TrackerItemReference>",
+            "multipleValues": True,
+        },
+        {
             "id": 10,
             "name": "검증 표",
             "type": "TableField",
@@ -66,6 +73,7 @@ def _item(
     child_ids: tuple[int, ...] = (),
     ordinal: int = 0,
     table_rows: list[list[dict]] | None = None,
+    related_items: list[dict] | None = None,
 ) -> TrackerItemSummary:
     payload = {
         "id": item_id,
@@ -79,6 +87,12 @@ def _item(
             for child_id in child_ids
         ],
         "customFields": [
+            {
+                "fieldId": 8,
+                "name": "연관 요구사항",
+                "type": "ChoiceFieldValue<TrackerItemReference>",
+                "values": related_items or [],
+            },
             {
                 "fieldId": 10,
                 "name": "검증 표",
@@ -119,6 +133,7 @@ class TrackerHierarchyExportTest(unittest.TestCase):
         self.assertNotIn("custom:99", by_key)
         self.assertIn("description", by_key)
         self.assertTrue(by_key["status"].default_selected)
+        self.assertTrue(by_key["custom:8"].is_tracker_item_choice)
         self.assertFalse(by_key["custom:10"].default_selected)
         self.assertEqual(
             [column.label for column in by_key["custom:10"].table_columns],
@@ -196,6 +211,38 @@ class TrackerHierarchyExportTest(unittest.TestCase):
         self.assertEqual(sheet.row_dimensions[7].outlineLevel, 2)
         self.assertEqual(summary.item_count, 4)
         self.assertEqual(summary.data_row_count, 5)
+
+    def test_tracker_item_choice_field_exports_names_only(self) -> None:
+        root = _item(
+            11,
+            "Root",
+            related_items=[
+                {"id": 501, "name": "요구사항 A", "type": "TrackerItemReference"},
+                {
+                    "id": 502,
+                    "name": "요구사항 B",
+                    "type": "TrackerItemReference",
+                    "tracker": {"id": 20, "name": "Requirements"},
+                },
+                {"id": 503, "type": "TrackerItemReference"},
+            ],
+        )
+        snapshot = build_tracker_hierarchy_snapshot(
+            (root,),
+            (root,),
+            SCHEMA,
+            tracker_id=20,
+        )
+
+        workbook, _summary = create_tracker_hierarchy_workbook(
+            snapshot,
+            tracker_name="Requirements",
+            selected_field_keys=("custom:8",),
+        )
+
+        value = workbook["트래커 항목"]["E3"].value
+        self.assertEqual(value, "요구사항 A\n요구사항 B")
+        self.assertNotIn("501", value)
 
     def test_fixed_columns_only_and_formula_injection_are_safe(self) -> None:
         injected = _item(9, "=HYPERLINK('unsafe')")

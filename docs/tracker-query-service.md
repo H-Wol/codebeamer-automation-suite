@@ -127,6 +127,7 @@ Qt widget은 서버 원본 dict를 직접 탐색하지 않고 위 모델만 사�
 - 계층 Excel 내보내기는 `tracker.id = <trackerId> ORDER BY item.id ASC` 전체 `items`와 최상위 목록, schema만 사용합니다. `parent`, `children`, `ordinal`로 부모·형제 순서를 재구성하며 아이템별 상세 또는 하위 API를 호출하지 않습니다.
 - 최상위 누락, 미연결 item, 중복 부모, 순환이나 tracker 외부 참조가 있으면 일부 계층을 정상 파일로 가장하지 않고 저장을 중단합니다. 내부 `custom:<id>` key는 필드 선택 화면과 Excel에 노출하지 않습니다.
 - 계층 Excel의 고정 열은 ID, Summary, 계층 단계, 상위 아이템 ID입니다. 일반 schema 필드는 기본 선택하고 TableField는 기본 해제하며, 선택 시 내부 행·열 순서를 보존합니다.
+- 계층 Excel의 TrackerItemChoiceField는 참조 ID나 tracker 정보 없이 각 참조 아이템의 `name`만 줄 단위로 표시합니다.
 - tracker 검색은 선택 tracker ID로 `TrackerQuery`를 만들며 빈 검색 조건은 화면에서 차단합니다.
 - ID 바로 열기는 `resolve_item_context()` 후 `load_ancestor_path()`를 호출해 선택 컨텍스트와 경로를 함께 전환합니다.
 - 설정·선택이 바뀐 뒤 늦게 끝난 요청이 화면을 덮지 않도록 작업 종류별 request token과 현재 tracker/item을 비교합니다.

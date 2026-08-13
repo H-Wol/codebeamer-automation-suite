@@ -49,6 +49,7 @@ class TrackerHierarchyExportField:
     is_table: bool = False
     table_columns: tuple[TrackerTableColumn, ...] = ()
     default_selected: bool = True
+    is_tracker_item_choice: bool = False
 
     @property
     def column_count(self) -> int:
@@ -188,6 +189,7 @@ def hierarchy_export_fields_from_schema(
             str(raw_field.get(key) or "") for key in ("type", "valueModel")
         ).casefold()
         is_table = "tablefield" in type_name
+        is_tracker_item_choice = "trackeritemchoicefield" in type_name
         fields.append(
             TrackerHierarchyExportField(
                 field_key=field_key,
@@ -195,6 +197,7 @@ def hierarchy_export_fields_from_schema(
                 is_table=is_table,
                 table_columns=_schema_table_columns(raw_field) if is_table else (),
                 default_selected=not is_table,
+                is_tracker_item_choice=is_tracker_item_choice,
             )
         )
     return tuple(fields)
@@ -355,6 +358,7 @@ def build_tracker_hierarchy_snapshot(
                 is_table=current.is_table or value.is_table,
                 table_columns=merged_columns,
                 default_selected=current.default_selected,
+                is_tracker_item_choice=current.is_tracker_item_choice,
             )
         nodes.append(
             TrackerHierarchyExportNode(
@@ -470,6 +474,19 @@ def export_tracker_hierarchy_xlsx(
     )
 
 
+def _tracker_item_choice_names(value: Any) -> str:
+    """TrackerItemChoiceField 참조에서 이름만 간결하게 표시한다."""
+    candidates = value if isinstance(value, (list, tuple)) else (value,)
+    names: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        name = str(candidate.get("name") or "").strip()
+        if name:
+            names.append(name)
+    return "\n".join(names) if names else "-"
+
+
 def _populate_item_sheet(
     sheet,
     *,
@@ -535,7 +552,11 @@ def _populate_item_sheet(
                 _merge_value(sheet, start_row, end_row, offset, "-", context=field.label)
                 continue
             if not field.is_table or table_column is None:
-                text = value.display_text()
+                text = (
+                    _tracker_item_choice_names(value.value)
+                    if field.is_tracker_item_choice
+                    else value.display_text()
+                )
                 _write_scalar_value(
                     sheet,
                     start_row=start_row,
