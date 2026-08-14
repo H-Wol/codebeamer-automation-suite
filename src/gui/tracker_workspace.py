@@ -47,6 +47,7 @@ from .tracker_item_editor import TrackerItemEditorService
 from .tracker_item_editor import TrackerItemFieldChange
 from .tracker_item_editor import TrackerItemWriteError
 from .tracker_item_editor_dialog import TrackerItemEditorDialog
+from .tracker_item_detail_dialog import TrackerItemDetailDialog
 from .tracker_item_editor_panel import ConfirmItemDeleteDialog
 from .tracker_item_editor_panel import TrackerItemEditorPanel
 from .tracker_item_create_dialog import TrackerItemCreateDialog
@@ -713,6 +714,10 @@ class TrackerWorkspacePage(QWidget):
         self.detail_title = QLabel("아이템 상세")
         self.detail_title.setObjectName("tracker_detail_title")
         detail_heading.addWidget(self.detail_title, 1)
+        self.detail_open_button = QPushButton("상세 크게 보기", detail_panel)
+        self.detail_open_button.setEnabled(False)
+        self.detail_open_button.clicked.connect(self._open_detail_dialog)
+        detail_heading.addWidget(self.detail_open_button)
         self.detail_refresh_button = QPushButton("상세 새로고침", detail_panel)
         self.detail_refresh_button.setToolTip("현재 아이템의 최신 version과 필드를 다시 조회합니다.")
         self.detail_refresh_button.clicked.connect(self._reload_current_detail)
@@ -4133,6 +4138,30 @@ class TrackerWorkspacePage(QWidget):
             dialog.view.add_attachment_resource(resource)
         dialog.exec()
 
+    def _open_detail_dialog(self, _checked: bool = False) -> None:
+        detail = self._current_detail
+        if detail is None:
+            return
+        if self._description_uses_wiki:
+            description_html = (
+                self._description_render_result.html
+                if self._description_render_result is not None
+                else codebeamer_wiki_to_html(self._description_text)
+            )
+        else:
+            description_html = (
+                "<p>" + escape(self._description_text).replace("\n", "<br>") + "</p>"
+            )
+        dialog = TrackerItemDetailDialog(
+            detail,
+            description_html=description_html,
+            attachments=self._attachments,
+            image_resources=tuple(self._attachment_preview_resources.values()),
+            baseline_id=self._detail_baseline_id,
+            parent=self,
+        )
+        dialog.exec()
+
     def _save_attachment(self, attachment: AttachmentSummary) -> None:
         output_path, _selected_filter = QFileDialog.getSaveFileName(
             self,
@@ -4184,6 +4213,7 @@ class TrackerWorkspacePage(QWidget):
             else summary.name
         )
         self.detail_refresh_button.setEnabled(True)
+        self.detail_open_button.setEnabled(True)
         self.detail_refresh_button.setToolTip(
             "선택한 Baseline 시점의 아이템 상세를 다시 조회합니다."
             if historical
@@ -4338,6 +4368,7 @@ class TrackerWorkspacePage(QWidget):
         self.description_source_toggle.setVisible(False)
         self.detail_title.setText("아이템 상세")
         self.detail_refresh_button.setEnabled(False)
+        self.detail_open_button.setEnabled(False)
         self.detail_refresh_button.setToolTip(
             "현재 아이템의 최신 version과 필드를 다시 조회합니다."
         )

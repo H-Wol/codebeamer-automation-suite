@@ -1206,6 +1206,15 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         dialog_class.return_value.exec.assert_called_once()
         self.assertEqual(calls, [(28, 10 * 1024 * 1024)])
 
+        with patch("src.gui.tracker_workspace.TrackerItemDetailDialog") as detail_dialog:
+            self.page._open_detail_dialog()
+
+        detail_dialog.assert_called_once()
+        detail_kwargs = detail_dialog.call_args.kwargs
+        self.assertEqual(detail_kwargs["attachments"], self.page._attachments)
+        self.assertEqual(len(detail_kwargs["image_resources"]), 1)
+        detail_dialog.return_value.exec.assert_called_once()
+
     def test_baseline_detail_does_not_mix_current_attachment_metadata(self) -> None:
         detail = TrackerItemDetail.from_raw(
             {
