@@ -503,6 +503,18 @@ class CodebeamerClient:
             lambda: self._request_binary(source_url, max_bytes=max_bytes),
         )
 
+    def download_attachment_content(
+        self,
+        attachment_id: int,
+        *,
+        max_bytes: int,
+    ) -> tuple[str, bytes]:
+        """첨부 ID로 공식 v3 content endpoint의 바이너리를 가져온다."""
+        return self.download_authenticated_resource(
+            f"{self.base_url}/v3/attachments/{int(attachment_id)}/content",
+            max_bytes=max_bytes,
+        )
+
     def get_tracker_configuration(self, tracker_id: int) -> Any:
         """트래커 configuration 메타데이터를 가져온다."""
         candidate_paths = (

@@ -3,9 +3,10 @@
 ## 목적
 
 트래커 작업공간은 Codebeamer가 Wiki 형식으로 선언한 설명과 필드만 안전한 rich text로 표시합니다.
-온라인에서는 Codebeamer의 `/v3/projects/{projectId}/wiki2html`을 우선 사용하고, 테스트 모드나
-서버 렌더링 실패 시 제한된 로컬 렌더러를 사용합니다. 값에 `%%(...)` 문자열이 포함됐다는 이유만으로
-형식을 추측하지 않습니다.
+연결 프로필에서 `서버 Wiki HTML 렌더링 사용`을 명시적으로 켠 경우에만 Codebeamer의
+`/v3/projects/{projectId}/wiki2html`을 사용합니다. 기본값은 꺼짐이며, 꺼진 상태·테스트 모드·서버
+렌더링 실패 시 제한된 로컬 렌더러를 사용합니다. 값에 `%%(...)` 문자열이 포함됐다는 이유만으로 형식을
+추측하지 않습니다.
 
 ## 형식 판정
 
@@ -51,12 +52,14 @@ fallback은 `Table`, sortable, zebra plugin을 재구현하지 않으며 원문�
 - 받은 이미지는 `cb-attachment://...` 내부 URL로 치환해 Qt 문서에 로컬 resource로 넣습니다.
 - 외부 HTTP(S), `data:`, `file:`, `javascript:` 이미지와 확인되지 않은 같은-origin 경로는 차단합니다.
 - 자동 이미지는 파일당 10MB, 선택 아이템 합계 50MB까지 허용합니다. 응답 길이와 실제 수신량을 모두 검사합니다.
+- 첨부 목록에서 받은 안정적인 ID로 `/v3/attachments/{attachmentId}/content`를 호출합니다. 목록의
+  선택적 `downloadUrl` 또는 메타데이터 `uri`를 바이너리 경로로 간주하지 않습니다.
 - 첨부 저장은 대상 폴더의 임시 파일을 완성한 뒤 교체하므로 실패한 다운로드가 정상 파일로 남지 않습니다.
 
-현재 공개 문서만으로 아이템 첨부 목록 endpoint와 과거 첨부 revision 해석은 확정할 수 없습니다. 구현은
-`/v3/items/{itemId}/attachments` adapter와 상세 응답의 `attachments` 메타데이터를 지원하지만 대상 서버
-Swagger 및 실데이터로 확인해야 합니다. Baseline 상세는 최신 첨부와 섞이지 않도록 첨부 목록과 인라인
-이미지 자동 다운로드를 차단합니다.
+아이템 첨부 목록은 `/v3/items/{itemId}/attachments`, 바이너리는
+`/v3/attachments/{attachmentId}/content`를 사용합니다. 대상 서버에서 이 endpoint들의 제공 여부와 과거
+첨부 revision 해석은 Swagger 및 실데이터로 확인해야 합니다. Baseline 상세는 최신 첨부와 섞이지 않도록
+첨부 목록과 인라인 이미지 자동 다운로드를 차단합니다.
 
 허용하는 CSS 속성은 `color`, `background-color`, `font-size`, `font-style`, `font-weight`,
 `text-decoration`으로 제한합니다. 현재 테마와 충돌하는 검정·흰색 전경색은 제거하고 화면 기본 전경색을

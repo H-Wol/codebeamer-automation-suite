@@ -63,6 +63,7 @@ class TrackerContentService:
     def _settings_key(settings) -> tuple[Any, ...]:
         return (
             bool(getattr(settings, "offline_mode", False)),
+            bool(getattr(settings, "server_wiki_html_enabled", False)),
             str(getattr(settings, "base_url", "") or "").strip().rstrip("/"),
             str(getattr(settings, "username", "") or "").strip(),
             str(getattr(settings, "offline_query_data_path", "") or "").strip(),
@@ -94,7 +95,11 @@ class TrackerContentService:
         markup: str,
     ) -> WikiRenderResult:
         source = str(markup or "")
-        if context is None or bool(getattr(settings, "offline_mode", False)):
+        if (
+            context is None
+            or bool(getattr(settings, "offline_mode", False))
+            or not bool(getattr(settings, "server_wiki_html_enabled", False))
+        ):
             return WikiRenderResult(
                 html=codebeamer_wiki_to_html(source),
                 used_fallback=True,
@@ -219,18 +224,26 @@ class TrackerContentService:
         *,
         max_bytes: int,
     ) -> AttachmentResource:
-        source = str(attachment.download_url or "").strip()
-        if not source:
-            raise ValueError(
-                "서버 응답에 첨부 다운로드 URL이 없어 파일을 안전하게 가져올 수 없습니다."
-            )
-        return self.download_resource(
-            settings,
-            resource_key=f"attachment-{attachment.attachment_id}",
-            source_url=source,
-            max_bytes=max_bytes,
-            image_only=False,
+        resource_key = f"attachment-{attachment.attachment_id}"
+        key = (
+            self._settings_key(settings),
+            resource_key,
+            attachment.version,
+            attachment.md5,
+            int(max_bytes),
+            False,
         )
+        cached = self._resource_cache.get(key)
+        if cached is not None:
+            return cached
+        mime_type, data = self._client(settings).download_attachment_content(
+            attachment.attachment_id,
+            max_bytes=max_bytes,
+        )
+        normalized_mime = mime_type.split(";", 1)[0].strip().casefold()
+        result = AttachmentResource(resource_key, normalized_mime, data)
+        self._resource_cache[key] = result
+        return result
 
     def save_attachment(
         self,

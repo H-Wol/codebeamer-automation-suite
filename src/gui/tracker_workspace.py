@@ -1171,6 +1171,7 @@ class TrackerWorkspacePage(QWidget):
     def _settings_key(settings: GuiSettings) -> tuple[Any, ...]:
         return (
             bool(settings.offline_mode),
+            bool(getattr(settings, "server_wiki_html_enabled", False)),
             str(settings.base_url or "").strip().rstrip("/"),
             str(settings.username or "").strip(),
             bool(settings.password),

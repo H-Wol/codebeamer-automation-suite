@@ -45,10 +45,15 @@ class FakeContentClient:
         self.download_calls.append((source_url, max_bytes))
         return "image/png", b"safe-bytes"
 
+    def download_attachment_content(self, attachment_id: int, *, max_bytes: int):
+        self.download_calls.append((f"/v3/attachments/{attachment_id}/content", max_bytes))
+        return "image/png", b"safe-bytes"
+
 
 def settings():
     return SimpleNamespace(
         offline_mode=False,
+        server_wiki_html_enabled=True,
         base_url="https://example.test/cb",
         username="sample",
         password="placeholder",
@@ -74,6 +79,16 @@ class TrackerContentServiceTest(unittest.TestCase):
         self.assertEqual(len(FakeContentClient.instances), 1)
         self.assertEqual(FakeContentClient.instances[0].render_calls[0]["context_version"], 7)
 
+    def test_render_does_not_call_server_when_html_rendering_is_disabled(self) -> None:
+        disabled = settings()
+        disabled.server_wiki_html_enabled = False
+
+        result = self.service.render_wiki(disabled, self.context, "|| 이름 || 상태")
+
+        self.assertTrue(result.used_fallback)
+        self.assertIn("<table", result.html)
+        self.assertEqual(FakeContentClient.instances, [])
+
     def test_baseline_cache_is_separate_and_blocks_unverified_images(self) -> None:
         current = self.service.render_wiki(settings(), self.context, "image")
         historical = self.service.render_wiki(
@@ -97,7 +112,7 @@ class TrackerContentServiceTest(unittest.TestCase):
         self.assertEqual(len(FakeContentClient.instances), 1)
 
     def test_save_attachment_replaces_target_after_complete_download(self) -> None:
-        attachment = AttachmentSummary(28, "sample.png", download_url="/attachment/28")
+        attachment = AttachmentSummary(28, "sample.png")
         with TemporaryDirectory() as directory:
             target = Path(directory) / "sample.png"
             target.write_bytes(b"old")
@@ -107,15 +122,9 @@ class TrackerContentServiceTest(unittest.TestCase):
             self.assertEqual(size, len(b"safe-bytes"))
             self.assertEqual(target.read_bytes(), b"safe-bytes")
             self.assertEqual(list(target.parent.glob("*.tmp")), [])
-
-    def test_attachment_without_server_download_url_is_not_guessed(self) -> None:
-        attachment = AttachmentSummary(28, "sample.png")
-
-        with self.assertRaisesRegex(ValueError, "다운로드 URL"):
-            self.service.download_attachment(
-                settings(),
-                attachment,
-                max_bytes=100,
+            self.assertEqual(
+                FakeContentClient.instances[0].download_calls,
+                [("/v3/attachments/28/content", 1024 * 1024 * 1024)],
             )
 
 

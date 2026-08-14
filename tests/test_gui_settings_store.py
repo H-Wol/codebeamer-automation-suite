@@ -232,6 +232,7 @@ class GuiSettingsStoreTest(unittest.TestCase):
                 username="tester",
                 password="profile-secret",
                 credential_storage=CREDENTIAL_STORAGE_LOCAL,
+                server_wiki_html_enabled=True,
             )
 
             store.save_app_settings(
@@ -242,6 +243,7 @@ class GuiSettingsStoreTest(unittest.TestCase):
 
             self.assertNotIn("profile-secret", serialized)
             self.assertEqual(loaded.active_profile().password, "profile-secret")
+            self.assertTrue(loaded.active_profile().server_wiki_html_enabled)
 
 
 class _FakeCredentialStore:
@@ -289,9 +291,10 @@ class GuiAppSettingsStoreTest(unittest.TestCase):
 
             loaded = store.load_app_settings()
 
-            self.assertEqual(loaded.version, 3)
+            self.assertEqual(loaded.version, 4)
             self.assertFalse(loaded.api_monitor_enabled)
             self.assertEqual(loaded.api_monitor_slow_threshold_ms, 1000)
+            self.assertFalse(loaded.active_profile())
 
     def test_api_monitor_threshold_is_normalized_before_save(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -590,7 +593,7 @@ class GuiAppSettingsStoreTest(unittest.TestCase):
 
             payload = json.loads(store.workflow_preset_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(payload["version"], 3)
+            self.assertEqual(payload["version"], 4)
             self.assertEqual(payload["settings"]["upload_mode"], GUI_UPLOAD_MODE_UPDATE)
             self.assertEqual(payload["settings"]["excel_header_row"], 3)
             self.assertEqual(payload["settings"]["summary_column"], "요약")

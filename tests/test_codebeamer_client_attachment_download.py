@@ -108,6 +108,20 @@ class AttachmentDownloadTest(unittest.TestCase):
         self.assertNotIn("task_id", event.path)
         self.assertNotIn("artifact_id", event.path)
 
+    def test_attachment_id_download_uses_v3_content_endpoint(self) -> None:
+        session = FakeSession(
+            [FakeResponse(headers={"Content-Type": "application/pdf"}, chunks=(b"pdf",))]
+        )
+
+        mime_type, content = self.client(session).download_attachment_content(
+            4392,
+            max_bytes=10,
+        )
+
+        self.assertEqual(mime_type, "application/pdf")
+        self.assertEqual(content, b"pdf")
+        self.assertEqual(session.calls[0][0], "https://example.test/cb/v3/attachments/4392/content")
+
 
 if __name__ == "__main__":
     unittest.main()

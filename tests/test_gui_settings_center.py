@@ -119,6 +119,7 @@ class GuiSettingsCenterTest(unittest.TestCase):
                 busy_finished=lambda token: busy_events.append(("finish", token)),
             )
             self._configure_online_profile(page)
+            page.server_wiki_html_checkbox.setChecked(True)
 
             self.assertTrue(page.has_unsaved_changes())
             self.assertFalse(page.apply_saved_settings())
@@ -141,6 +142,7 @@ class GuiSettingsCenterTest(unittest.TestCase):
             self.assertEqual(len(applied), 1)
             self.assertEqual(applied[0].base_url, "https://example.test")
             self.assertEqual(applied[0].password, "session-secret")
+            self.assertTrue(applied[0].server_wiki_html_enabled)
             self.assertNotIn(
                 "session-secret",
                 page.settings_store.app_settings_path.read_text(encoding="utf-8"),
