@@ -1192,8 +1192,19 @@ class TrackerWorkspacePageTest(unittest.TestCase):
 
         self.assertTrue(self.page.attachment_preview.isVisible())
         self.assertIn("cb-attachment://attachment-28", self.page.attachment_preview.text())
+        self.assertTrue(self.page.attachment_preview_button.isVisible())
+        self.assertTrue(self.page.attachment_preview_button.isEnabled())
         self.assertEqual(calls, [(28, 10 * 1024 * 1024)])
         self.assertEqual(self.page._inline_image_bytes, len(png))
+
+        with patch("src.gui.tracker_workspace.WikiContentDialog") as dialog_class:
+            self.page._open_attachment_preview()
+
+        dialog_class.assert_called_once()
+        dialog_class.return_value.resize.assert_called_once_with(1100, 760)
+        dialog_class.return_value.view.add_attachment_resource.assert_called_once()
+        dialog_class.return_value.exec.assert_called_once()
+        self.assertEqual(calls, [(28, 10 * 1024 * 1024)])
 
     def test_baseline_detail_does_not_mix_current_attachment_metadata(self) -> None:
         detail = TrackerItemDetail.from_raw(

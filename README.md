@@ -107,7 +107,7 @@ GUI를 실행하면 최상위 앱 셸이 열리고 `트래커 작업공간`, `�
   - 상세 ID 배지를 클릭해 숫자 ID만 클립보드에 복사
   - 명시적 Wiki 형식 설명·필드는 연결 프로필에서 서버 HTML 렌더링을 켠 경우에만 `wiki2html`을 사용하며, 기본값은 꺼짐이고 원문 전환과 안전한 로컬 단순 table fallback 제공
   - `TableField` 행·열 전용 보기와 Wiki 셀 최대 4개 동시 렌더링, 같은 서버의 인증된 첨부 이미지만 10MB/개·50MB/아이템 한도로 표시
-  - 현재 아이템을 열 때 이미지 첨부를 메모리에 자동 렌더링하고 `/v3/attachments/{attachmentId}/content` 기반 목록·사용자 선택 파일 저장 제공; Baseline 과거 첨부는 서버 revision 계약 확인 전 차단
+  - 현재 아이템을 열 때 이미지 첨부를 메모리에 자동 렌더링하고 `이미지 크게 보기` 창과 `/v3/attachments/{attachmentId}/content` 기반 목록·사용자 선택 파일 저장 제공; Baseline 과거 첨부는 서버 revision 계약 확인 전 차단
   - 현재 상태와 Baseline을 `/v3/items/query` 전체 pagination으로 명시적으로 조회하는 전용 비교 탭
   - 현재 계층과 신규·삭제·변경·동일 전체 결과를 함께 제공하고, 결과 유형·ID/이름·단일 변경 필드를 AND 조건으로 캐시에서 필터링
   - tracker schema의 필드 이름·유형·TableField 열 정의를 우선 사용하되 응답 이름과 안전한 사용자 정의 필드 이름으로 보완하며 내부 `custom:<id>` 키는 노출하지 않음

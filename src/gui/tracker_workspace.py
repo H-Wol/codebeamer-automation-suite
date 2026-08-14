@@ -68,6 +68,7 @@ from .tracker_query_models import TrackerSearchMode
 from .tracker_query_models import TrackerQueryServiceError
 from .tracker_query_models import TrackerSummary
 from .tracker_query_service import TrackerQueryService
+from .tracker_content_models import AttachmentResource
 from .tracker_content_models import AttachmentSummary
 from .tracker_content_models import WikiRenderContext
 from .tracker_content_models import WikiRenderResult
@@ -573,6 +574,7 @@ class TrackerWorkspacePage(QWidget):
         self._description_uses_wiki = False
         self._description_render_result: WikiRenderResult | None = None
         self._attachments: tuple[AttachmentSummary, ...] = ()
+        self._attachment_preview_resources: dict[str, AttachmentResource] = {}
         self._inline_image_bytes = 0
         self._wiki_resource_generation = 0
         self._inline_resource_reservations: set[tuple[int, str, int]] = set()
@@ -1122,6 +1124,12 @@ class TrackerWorkspacePage(QWidget):
         self.attachment_reload_button.setEnabled(False)
         self.attachment_reload_button.clicked.connect(self._load_attachments)
         attachment_header.addWidget(self.attachment_reload_button)
+        self.attachment_preview_button = QPushButton("이미지 크게 보기", tab)
+        self.attachment_preview_button.setObjectName("tracker_attachment_preview_open")
+        self.attachment_preview_button.setEnabled(False)
+        self.attachment_preview_button.setVisible(False)
+        self.attachment_preview_button.clicked.connect(self._open_attachment_preview)
+        attachment_header.addWidget(self.attachment_preview_button)
         layout.addLayout(attachment_header)
         self.attachment_status_label = QLabel("아이템을 선택하면 첨부를 확인할 수 있습니다.", tab)
         self.attachment_status_label.setWordWrap(True)
@@ -4029,6 +4037,9 @@ class TrackerWorkspacePage(QWidget):
     ) -> None:
         settings = self.settings_provider()
         if bool(settings.offline_mode) or self._detail_baseline_id is not None:
+            self._attachment_preview_resources.clear()
+            self.attachment_preview_button.setEnabled(False)
+            self.attachment_preview_button.setVisible(False)
             self.attachment_preview.clear()
             self.attachment_preview.setVisible(False)
             return
@@ -4048,6 +4059,9 @@ class TrackerWorkspacePage(QWidget):
             and (attachment.size is None or attachment.size <= MAX_INLINE_IMAGE_BYTES)
         ][:available_slots]
         if not candidates:
+            self._attachment_preview_resources.clear()
+            self.attachment_preview_button.setEnabled(False)
+            self.attachment_preview_button.setVisible(False)
             self.attachment_preview.clear()
             self.attachment_preview.setVisible(False)
             return
@@ -4062,6 +4076,9 @@ class TrackerWorkspacePage(QWidget):
                 f'<img src="cb-attachment://{resource_key}" alt="{escape(attachment.name)}">'
                 "</p>"
             )
+        self._attachment_preview_resources.clear()
+        self.attachment_preview_button.setEnabled(False)
+        self.attachment_preview_button.setVisible(True)
         self.attachment_preview.setHtml("".join(blocks))
         self.attachment_preview.setVisible(True)
         item_id = detail.item_id
@@ -4089,6 +4106,8 @@ class TrackerWorkspacePage(QWidget):
                 if self.attachment_preview.add_attachment_resource(resource):
                     self._inline_image_bytes += len(resource.data)
                     self._loaded_inline_resources.add(reserved)
+                    self._attachment_preview_resources[resource.resource_key] = resource
+                    self.attachment_preview_button.setEnabled(True)
 
             def failed(_exc: Exception, *, reserved=reservation) -> None:
                 self._inline_resource_reservations.discard(reserved)
@@ -4103,6 +4122,16 @@ class TrackerWorkspacePage(QWidget):
                 loaded,
                 failed,
             )
+
+    def _open_attachment_preview(self, _checked: bool = False) -> None:
+        if not self._attachment_preview_resources:
+            return
+        result = WikiRenderResult(html=self.attachment_preview.text())
+        dialog = WikiContentDialog("첨부 이미지", "", result, self)
+        dialog.resize(1100, 760)
+        for resource in self._attachment_preview_resources.values():
+            dialog.view.add_attachment_resource(resource)
+        dialog.exec()
 
     def _save_attachment(self, attachment: AttachmentSummary) -> None:
         output_path, _selected_filter = QFileDialog.getSaveFileName(
@@ -4187,6 +4216,9 @@ class TrackerWorkspacePage(QWidget):
         self._inline_resource_reservations.clear()
         self._loaded_inline_resources.clear()
         self._attachments = ()
+        self._attachment_preview_resources.clear()
+        self.attachment_preview_button.setEnabled(False)
+        self.attachment_preview_button.setVisible(False)
         self.attachment_preview.clear()
         self.attachment_preview.setVisible(False)
         self.attachment_table.setRowCount(0)
@@ -4295,6 +4327,7 @@ class TrackerWorkspacePage(QWidget):
         self._description_uses_wiki = False
         self._description_render_result = None
         self._attachments = ()
+        self._attachment_preview_resources.clear()
         self._inline_image_bytes = 0
         self._wiki_resource_generation += 1
         self._inline_resource_reservations.clear()
@@ -4316,6 +4349,8 @@ class TrackerWorkspacePage(QWidget):
         self.attachment_reload_button.setEnabled(False)
         self.attachment_reload_button.setText("첨부 불러오기")
         self.attachment_status_label.setText("아이템을 선택하면 첨부를 확인할 수 있습니다.")
+        self.attachment_preview_button.setEnabled(False)
+        self.attachment_preview_button.setVisible(False)
         self.attachment_preview.clear()
         self.attachment_preview.setVisible(False)
         self.attachment_table.setRowCount(0)
