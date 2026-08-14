@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from copy import deepcopy
 import os
 from pathlib import Path
@@ -1140,6 +1141,59 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.assertEqual(self.page.attachment_table.item(0, 0).text(), "sample.png")
         self.assertEqual(self.page.attachment_table.item(0, 1).text(), "2.0 KB")
         self.assertIsNotNone(self.page.attachment_table.cellWidget(0, 3))
+
+    def test_current_detail_automatically_renders_image_attachment_in_memory(self) -> None:
+        self.settings.offline_mode = False
+        self.settings.base_url = "https://example.test/cb"
+        self.settings.username = "sample"
+        self.settings.password = "placeholder"
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        calls = []
+        self.page.content_service.download_attachment = (
+            lambda _settings, attachment, *, max_bytes: calls.append(
+                (attachment.attachment_id, max_bytes)
+            )
+            or AttachmentResource(
+                f"attachment-{attachment.attachment_id}",
+                "image/png",
+                png,
+            )
+        )
+        detail = TrackerItemDetail.from_raw(
+            {
+                "id": 1205,
+                "name": "Image preview",
+                "version": 1,
+                "tracker": {
+                    "id": 24680001,
+                    "name": "Offline Requirements",
+                    "project": {"id": 246800, "name": "Offline Project"},
+                },
+                "attachments": [
+                    {
+                        "id": 28,
+                        "name": "sample.png",
+                        "size": len(png),
+                        "mimeType": "image/png",
+                    },
+                    {
+                        "id": 29,
+                        "name": "sample.pdf",
+                        "size": 100,
+                        "mimeType": "application/pdf",
+                    },
+                ],
+            }
+        )
+
+        self.page._render_detail(detail)
+
+        self.assertTrue(self.page.attachment_preview.isVisible())
+        self.assertIn("cb-attachment://attachment-28", self.page.attachment_preview.text())
+        self.assertEqual(calls, [(28, 10 * 1024 * 1024)])
+        self.assertEqual(self.page._inline_image_bytes, len(png))
 
     def test_baseline_detail_does_not_mix_current_attachment_metadata(self) -> None:
         detail = TrackerItemDetail.from_raw(

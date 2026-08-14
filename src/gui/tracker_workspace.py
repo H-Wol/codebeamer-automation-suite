@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import replace
+from html import escape
 import json
 from typing import Any
 from typing import Callable
@@ -104,6 +105,14 @@ CHILDREN_LOADED_ROLE = int(Qt.ItemDataRole.UserRole) + 3
 BASELINE_COMPARISON_ROLE = int(Qt.ItemDataRole.UserRole) + 4
 HIERARCHY_FETCH_PAGE_SIZE = 500
 DEFAULT_SEARCH_PAGE_SIZE = 50
+ATTACHMENT_IMAGE_MIME_TYPES = {
+    "image/bmp",
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+}
+ATTACHMENT_IMAGE_SUFFIXES = (".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp")
 
 REQUEST_BUSY_MESSAGES = {
     "projects": "프로젝트 목록을 불러오는 중입니다.",
@@ -1117,6 +1126,13 @@ class TrackerWorkspacePage(QWidget):
         self.attachment_status_label = QLabel("아이템을 선택하면 첨부를 확인할 수 있습니다.", tab)
         self.attachment_status_label.setWordWrap(True)
         layout.addWidget(self.attachment_status_label)
+        self.attachment_preview = WikiContentView(tab)
+        self.attachment_preview.setObjectName("tracker_attachment_preview")
+        self.attachment_preview.setReadOnly(True)
+        self.attachment_preview.setOpenExternalLinks(False)
+        self.attachment_preview.setMaximumHeight(260)
+        self.attachment_preview.setVisible(False)
+        layout.addWidget(self.attachment_preview)
         self.attachment_table = QTableWidget(0, 4, tab)
         self.attachment_table.setObjectName("tracker_attachment_table")
         self.attachment_table.setHorizontalHeaderLabels(["파일명", "크기", "수정 시각", "작업"])
@@ -3959,8 +3975,11 @@ class TrackerWorkspacePage(QWidget):
             current = self._current_detail
             if current is None or current.item_id != item_id or current.version != version:
                 return
+            previews_need_refresh = attachments != self._attachments
             self._attachments = attachments
             self.attachment_reload_button.setEnabled(True)
+            if previews_need_refresh:
+                self._load_attachment_previews(attachments, detail)
             self.attachment_table.setRowCount(len(attachments))
             for row, attachment in enumerate(attachments):
                 self.attachment_table.setItem(row, 0, QTableWidgetItem(attachment.name))
@@ -3993,6 +4012,97 @@ class TrackerWorkspacePage(QWidget):
             loaded,
             failed,
         )
+
+    @staticmethod
+    def _is_attachment_image(attachment: AttachmentSummary) -> bool:
+        mime_type = str(attachment.mime_type or "").split(";", 1)[0].strip().casefold()
+        if mime_type:
+            return mime_type in ATTACHMENT_IMAGE_MIME_TYPES
+        return str(attachment.name or "").strip().casefold().endswith(
+            ATTACHMENT_IMAGE_SUFFIXES
+        )
+
+    def _load_attachment_previews(
+        self,
+        attachments: tuple[AttachmentSummary, ...],
+        detail: TrackerItemDetail,
+    ) -> None:
+        settings = self.settings_provider()
+        if bool(settings.offline_mode) or self._detail_baseline_id is not None:
+            self.attachment_preview.clear()
+            self.attachment_preview.setVisible(False)
+            return
+        available_slots = max(
+            (
+                MAX_ITEM_INLINE_IMAGE_BYTES
+                - self._inline_image_bytes
+                - len(self._inline_resource_reservations) * MAX_INLINE_IMAGE_BYTES
+            )
+            // MAX_INLINE_IMAGE_BYTES,
+            0,
+        )
+        candidates = [
+            attachment
+            for attachment in attachments
+            if self._is_attachment_image(attachment)
+            and (attachment.size is None or attachment.size <= MAX_INLINE_IMAGE_BYTES)
+        ][:available_slots]
+        if not candidates:
+            self.attachment_preview.clear()
+            self.attachment_preview.setVisible(False)
+            return
+
+        blocks = []
+        for attachment in candidates:
+            resource_key = f"attachment-{attachment.attachment_id}"
+            blocks.append(
+                "<p><b>"
+                f"{escape(attachment.name)}"
+                "</b><br>"
+                f'<img src="cb-attachment://{resource_key}" alt="{escape(attachment.name)}">'
+                "</p>"
+            )
+        self.attachment_preview.setHtml("".join(blocks))
+        self.attachment_preview.setVisible(True)
+        item_id = detail.item_id
+        version = detail.version
+
+        for attachment in candidates:
+            reservation = (
+                self._wiki_resource_generation,
+                f"attachment-{attachment.attachment_id}",
+                id(self.attachment_preview),
+            )
+            if reservation in self._loaded_inline_resources:
+                continue
+            if reservation in self._inline_resource_reservations:
+                continue
+            self._inline_resource_reservations.add(reservation)
+
+            def loaded(resource, *, reserved=reservation) -> None:
+                self._inline_resource_reservations.discard(reserved)
+                current = self._current_detail
+                if current is None or current.item_id != item_id or current.version != version:
+                    return
+                if self._inline_image_bytes + len(resource.data) > MAX_ITEM_INLINE_IMAGE_BYTES:
+                    return
+                if self.attachment_preview.add_attachment_resource(resource):
+                    self._inline_image_bytes += len(resource.data)
+                    self._loaded_inline_resources.add(reserved)
+
+            def failed(_exc: Exception, *, reserved=reservation) -> None:
+                self._inline_resource_reservations.discard(reserved)
+
+            self._submit(
+                f"attachment_preview:{self._wiki_resource_generation}:{attachment.attachment_id}",
+                lambda selected=attachment: self.content_service.download_attachment(
+                    settings,
+                    selected,
+                    max_bytes=MAX_INLINE_IMAGE_BYTES,
+                ),
+                loaded,
+                failed,
+            )
 
     def _save_attachment(self, attachment: AttachmentSummary) -> None:
         output_path, _selected_filter = QFileDialog.getSaveFileName(
@@ -4077,6 +4187,8 @@ class TrackerWorkspacePage(QWidget):
         self._inline_resource_reservations.clear()
         self._loaded_inline_resources.clear()
         self._attachments = ()
+        self.attachment_preview.clear()
+        self.attachment_preview.setVisible(False)
         self.attachment_table.setRowCount(0)
         self.attachment_reload_button.setEnabled(not historical)
         self.attachment_reload_button.setText("첨부 다시 불러오기")
@@ -4204,6 +4316,8 @@ class TrackerWorkspacePage(QWidget):
         self.attachment_reload_button.setEnabled(False)
         self.attachment_reload_button.setText("첨부 불러오기")
         self.attachment_status_label.setText("아이템을 선택하면 첨부를 확인할 수 있습니다.")
+        self.attachment_preview.clear()
+        self.attachment_preview.setVisible(False)
         self.attachment_table.setRowCount(0)
         self.detail_fields_table.setRowCount(0)
         self.detail_raw_json.clear()

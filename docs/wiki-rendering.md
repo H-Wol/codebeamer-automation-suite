@@ -52,6 +52,8 @@ fallback은 `Table`, sortable, zebra plugin을 재구현하지 않으며 원문�
 - 받은 이미지는 `cb-attachment://...` 내부 URL로 치환해 Qt 문서에 로컬 resource로 넣습니다.
 - 외부 HTTP(S), `data:`, `file:`, `javascript:` 이미지와 확인되지 않은 같은-origin 경로는 차단합니다.
 - 자동 이미지는 파일당 10MB, 선택 아이템 합계 50MB까지 허용합니다. 응답 길이와 실제 수신량을 모두 검사합니다.
+- 현재 아이템 상세를 열면 첨부 목록의 raster 이미지 MIME을 자동으로 메모리에 받아 첨부 영역에 표시합니다.
+  이미지가 아닌 첨부는 자동으로 받지 않으며 기존 목록과 명시적 저장 흐름을 유지합니다.
 - 첨부 목록에서 받은 안정적인 ID로 `/v3/attachments/{attachmentId}/content`를 호출합니다. 목록의
   선택적 `downloadUrl` 또는 메타데이터 `uri`를 바이너리 경로로 간주하지 않습니다.
 - 첨부 저장은 대상 폴더의 임시 파일을 완성한 뒤 교체하므로 실패한 다운로드가 정상 파일로 남지 않습니다.
