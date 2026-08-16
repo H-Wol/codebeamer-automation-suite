@@ -26,7 +26,8 @@
 
 쓰기, 상태 전환, 관계·댓글·첨부·이력은 이 서비스의 범위가 아닙니다. Wiki 렌더링, 첨부 목록과
 인증 바이너리 다운로드는 별도 `TrackerContentService`가 담당합니다. 현재 아이템의 관계·참조와 변경 이력은
-`TrackerItemContextService`가 담당하며 상세 창에서 각 탭을 처음 열 때만 조회합니다.
+`TrackerItemContextService`가 담당하며 상세 창에서 각 탭을 처음 열 때만 조회합니다. 현재 아이템 댓글 목록은
+`TrackerCommentService`가 정규화하고 본문·첨부 리소스는 content service를 재사용합니다.
 단건 생성, 선택 필드 수정, Status 필드 변경과 삭제는 [트래커 아이템 단건 생성·수정·Status 필드 변경·삭제](./tracker-item-editor.md)의
 별도 서비스 계약을 사용합니다.
 
@@ -44,6 +45,7 @@
 | 상세 | `GET /v3/items/{itemId}` | `CodebeamerClient.get_item()` |
 | 관계·참조 | `GET /v3/items/{itemId}/relations` | `TrackerItemContextService.load_relations()` |
 | 변경 이력 | `GET /v3/items/{itemId}/history` | `TrackerItemContextService.load_history()` |
+| 댓글 | `GET /v3/items/{itemId}/comments` | `TrackerCommentService.load_comments()` |
 | schema | `GET /v3/trackers/{trackerId}/schema` | `CodebeamerClient.get_tracker_schema()` |
 | Wiki HTML | `POST /v3/projects/{projectId}/wiki2html` | `TrackerContentService.render_wiki()` |
 | 첨부 목록 | 서버 Swagger 확인 필요 | `TrackerContentService.load_attachments()` |
@@ -53,6 +55,11 @@
 확인된 항목만 상세 이동을 허용합니다. 목록을 표시하기 위한 관계별 추가 상세 요청은 하지 않습니다.
 관계·이력 캐시는 연결 설정, item ID와 version으로 구분하며 설정 변경과 명시적 상세 새로고침 때
 무효화합니다. Baseline 상세에서는 현재 상태 endpoint를 호출하지 않습니다.
+
+댓글은 상세 창의 댓글 탭을 처음 열 때만 현재 item ID와 version 기준으로 조회합니다. `replyTo`가 확인된
+댓글은 부모 아래에 시간순으로 묶고, Wiki 형식 본문은 기존 HTML 정제와 로컬 fallback을 사용합니다.
+이미지 첨부만 기존 10MB/개·50MB/아이템 한도 안에서 자동으로 받고 다른 첨부는 사용자가 저장을 선택할
+때만 받습니다. Baseline에서는 현재 댓글 endpoint를 호출하지 않습니다.
 
 PTC 문서의 목록 응답은 `page`, `pageSize`, `total`을 포함하지만, 서버 버전과 endpoint에 따라
 요청한 페이지가 실제로 적용되지 않고 전체 결과가 반환될 수 있습니다. 계층 조회는 최대 500개씩 요청하고

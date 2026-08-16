@@ -50,6 +50,8 @@ from .tracker_item_editor_dialog import TrackerItemEditorDialog
 from .tracker_item_detail_dialog import TrackerItemDetailDialog
 from .tracker_item_detail_session import TrackerItemDetailSession
 from .tracker_item_context_service import TrackerItemContextService
+from .tracker_comment_models import ItemCommentsSnapshot
+from .tracker_comment_service import TrackerCommentService
 from .tracker_item_editor_panel import ConfirmItemDeleteDialog
 from .tracker_item_editor_panel import TrackerItemEditorPanel
 from .tracker_item_create_dialog import TrackerItemCreateDialog
@@ -496,6 +498,7 @@ class TrackerWorkspacePage(QWidget):
         service: TrackerQueryService | None = None,
         content_service: TrackerContentService | None = None,
         context_service: TrackerItemContextService | None = None,
+        comment_service: TrackerCommentService | None = None,
         editor_service: TrackerItemEditorService | None = None,
         open_settings: Callable[[], None] | None = None,
         delete_confirmer: Callable[[TrackerItemDetail], bool] | None = None,
@@ -526,6 +529,7 @@ class TrackerWorkspacePage(QWidget):
         self.service = service or TrackerQueryService()
         self.content_service = content_service or TrackerContentService()
         self.context_service = context_service or TrackerItemContextService()
+        self.comment_service = comment_service or TrackerCommentService()
         self.editor_service = editor_service or TrackerItemEditorService(
             query_service=self.service
         )
@@ -1242,6 +1246,7 @@ class TrackerWorkspacePage(QWidget):
                 clear_cache()
             self.content_service.clear_cache()
             self.context_service.clear_cache()
+            self.comment_service.clear_cache()
         if settings_changed:
             self._settings_fingerprint = fingerprint
             self._clear_context_state()
@@ -2595,6 +2600,10 @@ class TrackerWorkspacePage(QWidget):
                 self._selected_item_id,
             )
             self.context_service.clear_item_cache(
+                self.settings_provider(),
+                self._selected_item_id,
+            )
+            self.comment_service.clear_item_cache(
                 self.settings_provider(),
                 self._selected_item_id,
             )
@@ -4228,6 +4237,10 @@ class TrackerWorkspacePage(QWidget):
             baseline_id=self._detail_baseline_id,
             parent=self,
         )
+        dialog.comments_requested.connect(
+            lambda force=False: self._load_detail_dialog_comments(dialog, force=force)
+        )
+        dialog.comment_attachment_save_requested.connect(self._save_attachment)
         session = TrackerItemDetailSession(detail.item_id, detail.version)
         dialog.set_navigation_state(can_go_back=False, can_go_forward=False)
         dialog.context_tab_requested.connect(
@@ -4403,6 +4416,140 @@ class TrackerWorkspacePage(QWidget):
             attachments_loaded,
             lambda _exc: None,
         )
+
+    def _load_detail_dialog_comments(
+        self,
+        dialog: TrackerItemDetailDialog,
+        *,
+        force: bool = False,
+    ) -> None:
+        if dialog.baseline_id is not None:
+            return
+        detail = dialog.detail
+        item_id = detail.item_id
+        version = detail.version
+        settings = self.settings_provider()
+        dialog.set_comments_loading()
+
+        def current() -> bool:
+            return dialog.isVisible() and dialog.detail.item_id == item_id and dialog.detail.version == version
+
+        def loaded(snapshot: ItemCommentsSnapshot) -> None:
+            if not current():
+                return
+            dialog.set_comments(snapshot)
+            self._hydrate_detail_dialog_comments(dialog, detail, snapshot)
+
+        self._submit(
+            "detail_dialog_comments",
+            lambda: self.comment_service.load_comments(settings, item_id, version, force=force),
+            loaded,
+            lambda exc: dialog.set_comments_error(str(exc)) if current() else None,
+        )
+
+    def _hydrate_detail_dialog_comments(
+        self,
+        dialog: TrackerItemDetailDialog,
+        detail: TrackerItemDetail,
+        snapshot: ItemCommentsSnapshot,
+    ) -> None:
+        settings = self.settings_provider()
+        item_id = detail.item_id
+        version = detail.version
+        loaded_bytes = {"value": 0}
+        reserved = {"value": 0}
+
+        def current() -> bool:
+            return dialog.isVisible() and dialog.detail.item_id == item_id and dialog.detail.version == version
+
+        def apply_resource(comment_id: str, resource: AttachmentResource) -> None:
+            reserved["value"] = max(0, reserved["value"] - MAX_INLINE_IMAGE_BYTES)
+            if not current() or loaded_bytes["value"] + len(resource.data) > MAX_ITEM_INLINE_IMAGE_BYTES:
+                return
+            if dialog.add_comment_resource(comment_id, resource):
+                loaded_bytes["value"] += len(resource.data)
+
+        def reserve() -> bool:
+            if loaded_bytes["value"] + reserved["value"] + MAX_INLINE_IMAGE_BYTES > MAX_ITEM_INLINE_IMAGE_BYTES:
+                return False
+            reserved["value"] += MAX_INLINE_IMAGE_BYTES
+            return True
+
+        for comment in snapshot.comments:
+            if is_explicit_wiki_type(comment.format_name):
+                def rendered(result: WikiRenderResult, *, selected=comment) -> None:
+                    if not current():
+                        return
+                    dialog.set_comment_html(selected.comment_id, result.html)
+                    for reference in result.resources:
+                        if not reserve():
+                            break
+
+                        def inline_loaded(resource: AttachmentResource, *, comment_id=selected.comment_id) -> None:
+                            apply_resource(comment_id, resource)
+
+                        def inline_failed(_exc: Exception) -> None:
+                            reserved["value"] = max(0, reserved["value"] - MAX_INLINE_IMAGE_BYTES)
+
+                        self._submit(
+                            f"comment_inline:{selected.comment_id}:{reference.resource_key}",
+                            lambda value=reference: self.content_service.download_resource(
+                                settings,
+                                resource_key=value.resource_key,
+                                source_url=value.source_url,
+                            ),
+                            inline_loaded,
+                            inline_failed,
+                        )
+
+                self._submit(
+                    f"comment_wiki:{comment.comment_id}",
+                    lambda selected=comment: self.content_service.render_wiki(
+                        settings,
+                        self._wiki_context(detail, None),
+                        selected.body,
+                    ),
+                    rendered,
+                    lambda _exc: None,
+                )
+
+            for attachment in comment.attachments:
+                if not self._is_attachment_image(attachment):
+                    continue
+                if attachment.size is not None and attachment.size > MAX_INLINE_IMAGE_BYTES:
+                    continue
+                if not reserve():
+                    break
+                resource_key = f"comment-{comment.comment_id}-attachment-{attachment.attachment_id}"
+
+                def attachment_loaded(
+                    resource: AttachmentResource,
+                    *,
+                    comment_id=comment.comment_id,
+                    alias=resource_key,
+                ) -> None:
+                    normalized_mime = str(resource.mime_type or "").split(";", 1)[0].strip().casefold()
+                    if normalized_mime not in ATTACHMENT_IMAGE_MIME_TYPES:
+                        reserved["value"] = max(0, reserved["value"] - MAX_INLINE_IMAGE_BYTES)
+                        return
+                    apply_resource(
+                        comment_id,
+                        AttachmentResource(alias, resource.mime_type, resource.data),
+                    )
+
+                def attachment_failed(_exc: Exception) -> None:
+                    reserved["value"] = max(0, reserved["value"] - MAX_INLINE_IMAGE_BYTES)
+
+                self._submit(
+                    f"comment_attachment:{comment.comment_id}:{attachment.attachment_id}",
+                    lambda selected=attachment: self.content_service.download_attachment(
+                        settings,
+                        selected,
+                        max_bytes=MAX_INLINE_IMAGE_BYTES,
+                    ),
+                    attachment_loaded,
+                    attachment_failed,
+                )
 
     def _save_attachment(self, attachment: AttachmentSummary) -> None:
         output_path, _selected_filter = QFileDialog.getSaveFileName(
