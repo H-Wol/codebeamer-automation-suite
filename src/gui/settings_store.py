@@ -33,7 +33,7 @@ KEY_FILE_NAME = "gui_settings.key"
 WORKFLOW_PRESET_FILE_NAME = "gui_workflow_preset.json"
 WORKFLOW_PRESET_COLLECTION_FILE_NAME = "gui_workflow_presets.json"
 WORKFLOW_PRESET_COLLECTION_VERSION = 2
-APP_SETTINGS_VERSION = 3
+APP_SETTINGS_VERSION = 4
 
 CREDENTIAL_STORAGE_NONE = "none"
 CREDENTIAL_STORAGE_LOCAL = "local_encrypted"
@@ -60,6 +60,7 @@ class GuiSettings:
     password: str = ""
     save_password: bool = False
     offline_mode: bool = False
+    server_wiki_html_enabled: bool = False
     offline_schema_path: str = ""
     offline_tracker_configuration_path: str = ""
     offline_query_data_path: str = ""
@@ -85,6 +86,7 @@ class ConnectionProfile:
     username: str = ""
     password: str = field(default="", repr=False)
     credential_storage: str = CREDENTIAL_STORAGE_LOCAL
+    server_wiki_html_enabled: bool = False
     validated_signature: str = ""
     validated_at: str = ""
     credential_error: str = field(default="", repr=False, compare=False)
@@ -258,6 +260,9 @@ def effective_gui_settings(
                 and active_profile.credential_storage != CREDENTIAL_STORAGE_NONE
             ),
             "offline_mode": bool(app_settings.offline_mode),
+            "server_wiki_html_enabled": bool(
+                active_profile is not None and active_profile.server_wiki_html_enabled
+            ),
             "offline_schema_path": str(app_settings.offline_schema_path or ""),
             "offline_tracker_configuration_path": str(
                 app_settings.offline_tracker_configuration_path or ""
@@ -419,6 +424,7 @@ class GuiSettingsStore:
                         if legacy.save_password
                         else CREDENTIAL_STORAGE_NONE
                     ),
+                    server_wiki_html_enabled=bool(legacy.server_wiki_html_enabled),
                 )
             )
         return AppSettings(
@@ -545,6 +551,7 @@ class GuiSettingsStore:
                     "base_url": profile.base_url,
                     "username": profile.username,
                     "credential_storage": CREDENTIAL_STORAGE_NONE,
+                    "server_wiki_html_enabled": profile.server_wiki_html_enabled,
                 }
                 for profile in value.profiles
             ],
@@ -997,6 +1004,9 @@ class GuiSettingsStore:
                     credential_storage=_normalized_credential_storage(
                         raw_profile.credential_storage
                     ),
+                    server_wiki_html_enabled=bool(
+                        getattr(raw_profile, "server_wiki_html_enabled", False)
+                    ),
                     validated_signature=str(raw_profile.validated_signature or ""),
                     validated_at=str(raw_profile.validated_at or ""),
                     credential_error=str(raw_profile.credential_error or ""),
@@ -1065,6 +1075,7 @@ class GuiSettingsStore:
                 "base_url": profile.base_url,
                 "username": profile.username,
                 "credential_storage": profile.credential_storage,
+                "server_wiki_html_enabled": profile.server_wiki_html_enabled,
                 "validated_signature": profile.validated_signature,
                 "validated_at": profile.validated_at,
             }
@@ -1151,6 +1162,9 @@ class GuiSettingsStore:
                     username=str(raw_profile.get("username") or ""),
                     password=password,
                     credential_storage=storage,
+                    server_wiki_html_enabled=bool(
+                        raw_profile.get("server_wiki_html_enabled", False)
+                    ),
                     validated_signature=str(raw_profile.get("validated_signature") or ""),
                     validated_at=str(raw_profile.get("validated_at") or ""),
                     credential_error=credential_error,

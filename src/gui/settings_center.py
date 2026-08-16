@@ -290,12 +290,21 @@ class SettingsCenterPage(QWidget):
             if model_item is not None:
                 model_item.setEnabled(False)
         self.credential_storage_combo.addItem("저장하지 않음", CREDENTIAL_STORAGE_NONE)
+        self.server_wiki_html_checkbox = QCheckBox("서버 Wiki HTML 렌더링 사용")
         form.addRow("프로필 이름", self.profile_name_edit)
         form.addRow("Base URL", self.base_url_edit)
         form.addRow("Username", self.username_edit)
         form.addRow("Password", self.password_edit)
         form.addRow("비밀번호 저장", self.credential_storage_combo)
+        form.addRow("Wiki HTML", self.server_wiki_html_checkbox)
         details_layout.addLayout(form)
+        self.wiki_html_help_label = QLabel(
+            "서버가 /v3/projects/{projectId}/wiki2html을 제공할 때만 켜세요. "
+            "끄면 서버 호출 없이 제한된 로컬 Wiki 렌더러를 사용합니다."
+        )
+        self.wiki_html_help_label.setObjectName("section_label")
+        self.wiki_html_help_label.setWordWrap(True)
+        details_layout.addWidget(self.wiki_html_help_label)
         self.credential_help_label = QLabel("")
         self.credential_help_label.setObjectName("section_label")
         self.credential_help_label.setWordWrap(True)
@@ -314,6 +323,7 @@ class SettingsCenterPage(QWidget):
         self.credential_storage_combo.currentIndexChanged.connect(
             self._profile_fields_changed
         )
+        self.server_wiki_html_checkbox.toggled.connect(self._profile_fields_changed)
         return page
 
     def _build_appearance_page(self) -> QWidget:
@@ -601,6 +611,7 @@ class SettingsCenterPage(QWidget):
                 self.username_edit,
                 self.password_edit,
                 self.credential_storage_combo,
+                self.server_wiki_html_checkbox,
                 self.profile_remove_button,
                 self.profile_activate_button,
             ):
@@ -619,11 +630,15 @@ class SettingsCenterPage(QWidget):
                     "연결 프로필이 없습니다. '추가'로 첫 프로필을 만들 수 있습니다."
                 )
                 self.credential_help_label.setText("")
+                self.server_wiki_html_checkbox.setChecked(False)
                 return
             self.profile_name_edit.setText(profile.name)
             self.base_url_edit.setText(profile.base_url)
             self.username_edit.setText(profile.username)
             self.password_edit.setText(profile.password)
+            self.server_wiki_html_checkbox.setChecked(
+                bool(profile.server_wiki_html_enabled)
+            )
             storage_index = self.credential_storage_combo.findData(
                 profile.credential_storage
             )
@@ -739,6 +754,9 @@ class SettingsCenterPage(QWidget):
         profile.password = self.password_edit.text()
         profile.credential_storage = str(
             self.credential_storage_combo.currentData() or CREDENTIAL_STORAGE_LOCAL
+        )
+        profile.server_wiki_html_enabled = bool(
+            self.server_wiki_html_checkbox.isChecked()
         )
         if profile_validation_signature(profile) != previous_signature:
             profile.validated_signature = ""

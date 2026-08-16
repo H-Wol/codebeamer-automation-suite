@@ -24,7 +24,8 @@
 - 트래커 전체 query와 최상위 목록을 결합한 계층 Excel snapshot
 - Baseline 전체 query만으로 재구성한 단일 시점 계층과 읽기 전용 상세
 
-쓰기, 상태 전환, 관계·댓글·첨부·이력은 이 서비스의 범위가 아닙니다.
+쓰기, 상태 전환, 관계·댓글·첨부·이력은 이 서비스의 범위가 아닙니다. Wiki 렌더링, 첨부 목록과
+인증 바이너리 다운로드는 별도 `TrackerContentService`가 담당합니다.
 단건 생성, 선택 필드 수정, 상태 전환과 삭제는 [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)의
 별도 서비스 계약을 사용합니다.
 
@@ -41,6 +42,8 @@
 | Baseline 단일 계층 | `GET /v3/items/query?baselineId={baselineId}` | `TrackerQueryService.load_baseline_hierarchy_snapshot()` |
 | 상세 | `GET /v3/items/{itemId}` | `CodebeamerClient.get_item()` |
 | schema | `GET /v3/trackers/{trackerId}/schema` | `CodebeamerClient.get_tracker_schema()` |
+| Wiki HTML | `POST /v3/projects/{projectId}/wiki2html` | `TrackerContentService.render_wiki()` |
+| 첨부 목록 | 서버 Swagger 확인 필요 | `TrackerContentService.load_attachments()` |
 
 PTC 문서의 목록 응답은 `page`, `pageSize`, `total`을 포함하지만, 서버 버전과 endpoint에 따라
 요청한 페이지가 실제로 적용되지 않고 전체 결과가 반환될 수 있습니다. 계층 조회는 최대 500개씩 요청하고
@@ -135,3 +138,6 @@ Qt widget은 서버 원본 dict를 직접 탐색하지 않고 위 모델만 사�
 - tracker 검색은 선택 tracker ID로 `TrackerQuery`를 만들며 빈 검색 조건은 화면에서 차단합니다.
 - ID 바로 열기는 `resolve_item_context()` 후 `load_ancestor_path()`를 호출해 선택 컨텍스트와 경로를 함께 전환합니다.
 - 설정·선택이 바뀐 뒤 늦게 끝난 요청이 화면을 덮지 않도록 작업 종류별 request token과 현재 tracker/item을 비교합니다.
+- Wiki 캐시는 연결, project, item, version, Baseline과 원문 digest를 함께 사용합니다. 현재와 Baseline
+  상세는 같은 item ID여도 캐시와 첨부를 공유하지 않으며 명시적 상세 새로고침은 해당 item의 content
+  캐시를 비웁니다.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from copy import deepcopy
 import os
 from pathlib import Path
@@ -17,6 +18,9 @@ from src.gui.settings_store import GuiSettings
 from src.gui.tracker_baseline_compare import BaselineComparisonKind
 from src.gui.tracker_baseline_compare import BaselineComparisonSource
 from src.gui.tracker_baseline_compare import compare_tracker_items
+from src.gui.tracker_content_models import AttachmentResource
+from src.gui.tracker_content_models import WikiRenderResult
+from src.gui.tracker_content_models import WikiResourceReference
 from src.gui.tracker_item_create_dialog import TrackerItemCreateRequest
 from src.gui.tracker_item_editor import TrackerItemEditorService
 from src.gui.tracker_item_editor import TrackerItemFieldChange
@@ -1106,6 +1110,168 @@ class TrackerWorkspacePageTest(unittest.TestCase):
             self.page.detail_description.toPlainText(),
             "%%(color:red)원문%%",
         )
+
+    def test_current_detail_lists_embedded_attachment_metadata(self) -> None:
+        detail = TrackerItemDetail.from_raw(
+            {
+                "id": 1202,
+                "name": "Attachment detail",
+                "version": 3,
+                "tracker": {
+                    "id": 24680001,
+                    "name": "Offline Requirements",
+                    "project": {"id": 246800, "name": "Offline Project"},
+                },
+                "attachments": [
+                    {
+                        "id": 28,
+                        "name": "sample.png",
+                        "size": 2048,
+                        "mimeType": "image/png",
+                        "modifiedAt": "2026-08-13T10:00:00Z",
+                        "uri": "/attachment/28",
+                    }
+                ],
+            }
+        )
+
+        self.page._render_detail(detail)
+
+        self.assertEqual(self.page.attachment_table.rowCount(), 1)
+        self.assertEqual(self.page.attachment_table.item(0, 0).text(), "sample.png")
+        self.assertEqual(self.page.attachment_table.item(0, 1).text(), "2.0 KB")
+        self.assertIsNotNone(self.page.attachment_table.cellWidget(0, 3))
+
+    def test_current_detail_automatically_renders_image_attachment_in_memory(self) -> None:
+        self.settings.offline_mode = False
+        self.settings.base_url = "https://example.test/cb"
+        self.settings.username = "sample"
+        self.settings.password = "placeholder"
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        calls = []
+        self.page.content_service.download_attachment = (
+            lambda _settings, attachment, *, max_bytes: calls.append(
+                (attachment.attachment_id, max_bytes)
+            )
+            or AttachmentResource(
+                f"attachment-{attachment.attachment_id}",
+                "image/png",
+                png,
+            )
+        )
+        detail = TrackerItemDetail.from_raw(
+            {
+                "id": 1205,
+                "name": "Image preview",
+                "version": 1,
+                "tracker": {
+                    "id": 24680001,
+                    "name": "Offline Requirements",
+                    "project": {"id": 246800, "name": "Offline Project"},
+                },
+                "attachments": [
+                    {
+                        "id": 28,
+                        "name": "sample.png",
+                        "size": len(png),
+                        "mimeType": "image/png",
+                    },
+                    {
+                        "id": 29,
+                        "name": "sample.pdf",
+                        "size": 100,
+                        "mimeType": "application/pdf",
+                    },
+                ],
+            }
+        )
+
+        self.page._render_detail(detail)
+
+        self.assertTrue(self.page.attachment_preview.isVisible())
+        self.assertIn("cb-attachment://attachment-28", self.page.attachment_preview.text())
+        self.assertTrue(self.page.attachment_preview_button.isVisible())
+        self.assertTrue(self.page.attachment_preview_button.isEnabled())
+        self.assertEqual(calls, [(28, 10 * 1024 * 1024)])
+        self.assertEqual(self.page._inline_image_bytes, len(png))
+
+        with patch("src.gui.tracker_workspace.WikiContentDialog") as dialog_class:
+            self.page._open_attachment_preview()
+
+        dialog_class.assert_called_once()
+        dialog_class.return_value.resize.assert_called_once_with(1100, 760)
+        dialog_class.return_value.view.add_attachment_resource.assert_called_once()
+        dialog_class.return_value.exec.assert_called_once()
+        self.assertEqual(calls, [(28, 10 * 1024 * 1024)])
+
+        with patch("src.gui.tracker_workspace.TrackerItemDetailDialog") as detail_dialog:
+            self.page._open_detail_dialog()
+
+        detail_dialog.assert_called_once()
+        detail_kwargs = detail_dialog.call_args.kwargs
+        self.assertEqual(detail_kwargs["attachments"], self.page._attachments)
+        self.assertEqual(len(detail_kwargs["image_resources"]), 1)
+        detail_dialog.return_value.exec.assert_called_once()
+
+    def test_baseline_detail_does_not_mix_current_attachment_metadata(self) -> None:
+        detail = TrackerItemDetail.from_raw(
+            {
+                "id": 1203,
+                "name": "Historical detail",
+                "version": 2,
+                "tracker": {
+                    "id": 24680001,
+                    "name": "Offline Requirements",
+                    "project": {"id": 246800, "name": "Offline Project"},
+                },
+                "attachments": [{"id": 28, "name": "latest.png"}],
+            }
+        )
+
+        self.page._render_detail(detail, baseline_id=24681001)
+
+        self.assertEqual(self.page.attachment_table.rowCount(), 0)
+        self.assertIn("Baseline", self.page.attachment_status_label.text())
+        self.assertFalse(self.page.attachment_reload_button.isEnabled())
+
+    def test_inline_image_budget_limits_scheduled_downloads_to_five_images(self) -> None:
+        detail = TrackerItemDetail.from_raw(
+            {
+                "id": 1204,
+                "name": "Image detail",
+                "version": 1,
+                "tracker": {
+                    "id": 24680001,
+                    "name": "Offline Requirements",
+                    "project": {"id": 246800, "name": "Offline Project"},
+                },
+            }
+        )
+        self.page._render_detail(detail)
+        tasks: list[_DeferredTask] = []
+        self.page.synchronous = False
+        self.page.task_factory = lambda operation: tasks.append(
+            _DeferredTask(operation)
+        ) or tasks[-1]
+        self.page.content_service.download_resource = lambda *args, **kwargs: AttachmentResource(
+            kwargs["resource_key"],
+            "image/png",
+            b"not-executed",
+        )
+        result = WikiRenderResult(
+            html="<p>images</p>",
+            resources=tuple(
+                WikiResourceReference(f"image-{index}", f"https://example.test/cb/attachment/{index}")
+                for index in range(6)
+            ),
+        )
+
+        self.page._load_inline_resources(result, self.page.detail_description, detail, None)
+
+        self.assertEqual(len(tasks), 5)
+        self.assertEqual(len(self.page._inline_resource_reservations), 5)
 
     def test_test_mode_editor_loads_schema_but_disables_write_actions(self) -> None:
         self.page.activate()

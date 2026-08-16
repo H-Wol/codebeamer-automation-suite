@@ -85,7 +85,7 @@
 | Phase 1B-3 | TableField 편집 | 실제 다중 row 구조를 유지하는 전용 grid 편집 | 상태 전환 |
 | Phase 2 | 워크플로우에 맞게 상태 변경 | 가능한 transition 조회, 필수 입력 검증, 상태 전환 | 상태 option 직접 수정, 임의 상태 건너뛰기 |
 | Phase 3 | 작업공간에서 아이템 한 건 생성 | schema 기반 단건 신규 생성 | 대량 생성, 대량 파괴 작업 |
-| 후속 순서 미정 | 아이템 맥락과 변경 근거 확인 | 관계, 댓글, 첨부 메타데이터, 변경 이력 조회 | 댓글·첨부·관계 변경 |
+| 부분 구현 | 아이템 맥락과 문서 내용 확인 | 선택형 Wiki table 서버 렌더링, 읽기 전용 아이템 상세 창, 첨부 이미지 자동 표시와 확대·축소, ID 기반 첨부 메타데이터와 저장 | 댓글·첨부·관계 변경, Baseline 과거 첨부 |
 | 이후 | 협업과 대량 작업 | 댓글·첨부, 관계 변경, 조회 결과 내보내기, 선택 항목 배치 작업 연결 | 트래커 관리자 설정 |
 | 마지막 후속 | 잘못 만든 아이템을 안전하게 제거 | 권한 확인, 영향 요약, 명시적 확인을 거친 단건 삭제 | 이동·복사, 목록·검색 결과의 대량 삭제 |
 | 후속 검토 | Excel과 서버 데이터 비교 | 신규·변경·누락 비교, update 전 검증 | Phase 1 완료 조건에 포함하지 않음 |
@@ -333,7 +333,8 @@ flowchart LR
 │                                                                              │
 │ 부모  1001 · Vehicle requirements       직접 자식 3개             [보기]    │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ 후속 제공: 관계·참조 · 댓글·첨부 · 변경 이력                               │
+│ 현재 제공: Wiki table·이미지 · 현재 item 첨부 목록·저장                    │
+│ 후속 제공: 관계·참조 · 댓글 · 변경 이력 · Baseline 과거 첨부               │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -349,7 +350,8 @@ flowchart LR
 - 알 수 없는 field/value model은 원본 JSON에 보존하고 지원되는 것처럼 편집하지 않습니다.
 - field-level update와 version 충돌 검증이 구현되기 전까지는 `조회 전용`으로 명확히 표시합니다.
 - schema field 중 편집 계약이 검증된 유형만 활성화하고 나머지는 값과 비활성 사유를 함께 표시합니다.
-- 관계·참조, 댓글·첨부, 변경 이력 탭은 Phase 1A에서 빈 탭으로 노출하지 않고 순서가 확정된 후속 단계에서 추가합니다.
+- 첨부 목록은 개요 안에서 제공하며 별도 협업 탭을 만들지 않습니다. 관계·참조, 댓글과 변경 이력 탭은
+  빈 탭으로 노출하지 않고 순서가 확정된 후속 단계에서 추가합니다.
 - 상세 헤더의 `상태 전환`은 Phase 2에서 활성화하며 일반 `편집`과 같은 저장 동작으로 합치지 않습니다.
 
 ID로 바로 연 아이템도 같은 상세 화면을 사용합니다. 대상 프로젝트·트래커와 트리 경로를 자동으로
@@ -360,11 +362,12 @@ ID로 바로 연 아이템도 같은 상세 화면을 사용합니다. 대상 �
 | 탭 | 표시 내용 | 후속 단계 동작 |
 | --- | --- | --- |
 | 관계·참조 | downstream/upstream reference, association | 대상 아이템 상세로 이동 |
-| 댓글·첨부 | 댓글 스레드, 첨부 메타데이터 | 읽기와 다운로드 가능 여부를 서버별 검증 |
+| 댓글·첨부 | 첨부 메타데이터·저장 부분 구현, 댓글 없음 | 첨부 목록 endpoint와 Baseline revision은 서버별 검증 |
 | 변경 이력 | 버전, 변경자, 변경 시각, 변경 필드 | 버전 간 차이 표시 |
 
-부모·자식 요약과 원본 JSON은 Phase 1A에 포함합니다. 상세 관계·참조, 댓글·첨부,
-변경 이력은 구현 순서를 별도로 확정한 뒤 endpoint와 권한 모델을 검증하고 탭을 추가합니다.
+부모·자식 요약과 원본 JSON은 Phase 1A에 포함합니다. 현재 item 첨부 목록과 저장은 개요에서 읽기
+기능으로 제공하며, 상세 관계·참조, 댓글, 변경 이력과 Baseline 과거 첨부는 구현 순서를 별도로
+확정한 뒤 endpoint와 권한 모델을 검증합니다.
 
 ### S05. schema 기반 광범위 편집
 
@@ -663,7 +666,7 @@ Snapshot 검증         schema 정상 · tracker 2개 · 민감값 검사 완료
 | schema | helper 존재 | `GET /v3/trackers/{trackerId}/schema` 또는 fields endpoint 차이 확인 |
 | 계층 | tracker children helper 일부 | item children, tracker outline endpoint의 버전별 지원 확인 |
 | 관계 | 없음 | item relations endpoint와 reference/association 구분 |
-| 댓글·첨부 | 없음 | comments/attachments endpoint와 다운로드 정책 |
+| 댓글·첨부 | 현재 item 첨부 목록·저장, Wiki 인라인 이미지 | comments endpoint와 Baseline attachment revision 검증 |
 | 변경 이력 | 없음 | item history endpoint와 revision 모델 |
 | 단건 일부 필드 수정 | 없음 | `PUT /v3/items/{itemId}/fields` 우선 검토 |
 | 동시 편집 | 없음 | version 비교 및 soft lock endpoint 지원 확인 |
@@ -733,7 +736,7 @@ src/gui/
 | 7 | `feature/tracker-item-editor-table` | 다중 row TableField 전용 편집 | TableField live payload 검증 |
 | 8 | `feature/tracker-item-transition` | 가능한 transition 조회·실행 | editor merge, workflow smoke test |
 | 9 | `feature/tracker-item-create` | schema 기반 단건 아이템 생성 | editor 모델과 필수 필드 계약 검증 |
-| 후속 순서 미정 | `feature/tracker-item-context` | 관계·참조, 댓글·첨부, 이력 읽기 | browser merge, 대상 endpoint 검증 |
+| 후속 순서 미정 | `feature/tracker-item-context` | 관계·참조, 댓글, 이력, Baseline 과거 첨부 읽기 | browser merge, 대상 endpoint 검증 |
 | 이후 | `feature/tracker-item-collaboration` | 댓글·첨부·관계 쓰기 | 권한·파일 보안 정책 확정 |
 | 이후 | `feature/tracker-bulk-actions` | 내보내기와 선택 항목 배치 연결 | 조회·쓰기 안정화 |
 | 마지막 기능 | `feature/tracker-item-delete` | 권한·영향 확인과 명시적 확인을 거친 단건 삭제 | 대상 endpoint와 삭제 제약 live 검증 |
@@ -789,7 +792,7 @@ src/gui/
 - 상세 화면에서 설명을 포함한 전체 builtin/custom field를 확인할 수 있습니다.
 - 부모와 직접 자식의 ID·요약·개수를 확인하고 같은 상세 화면으로 이동할 수 있습니다.
 - 원본 JSON에서 서버 응답과 정규화 결과를 구분하고 민감값을 마스킹합니다.
-- 관계·참조, 댓글·첨부, 변경 이력은 Phase 1A에서 지원되는 것처럼 빈 탭으로 노출하지 않습니다.
+- 관계·참조, 댓글과 변경 이력은 지원되는 것처럼 빈 탭으로 노출하지 않습니다. 현재 item 첨부는 개요에만 표시합니다.
 - 상세 요청이 늦게 도착해도 현재 선택을 덮어쓰지 않습니다.
 - 인증 실패, 권한 없음, 429, 빈 결과, 상세 일부 실패를 구분합니다.
 - 테스트 모드에서 두 개 이상의 익명 tracker fixture로 검색 결과가 선택 tracker 밖으로 새지 않는지 검증합니다.
@@ -813,7 +816,7 @@ src/gui/
 | 조건 검색 범위 | 현재 선택한 tracker | 사용자 결정 완료, ID 직접 접근과 명확히 분리 |
 | 검색 모드 | `간편 / 상세 조건 / CbQL` 분리, 상세 조건은 별도 큰 창 | 사용자 결정 완료, 활성 모드 하나만 실행 |
 | 조건 논리식 | 묶음 안의 모든 조건 충족, 여러 묶음 중 하나 이상 충족의 1단계 구조 | 사용자 결정 완료, 복잡한 중첩은 CbQL 사용 |
-| 상세 조회 1차 범위 | 전체 필드·설명·custom field, 부모·자식 요약, 원본 JSON | 사용자 결정 완료, 관계·댓글·첨부·이력은 후속 읽기 기능 |
+| 상세 조회 1차 범위 | 전체 필드·설명·custom field, 부모·자식 요약, 원본 JSON | 현재 item 첨부 읽기·저장 부분 구현, 관계·댓글·이력과 Baseline 첨부는 후속 |
 | 광범위 편집 이후 순서 | 상태 전환, 단건 아이템 생성 | 사용자 결정 완료, 관계·댓글·첨부·이력 조회 순서는 미정 |
 | 상태 전환 진입점 | 상세 헤더와 편집 Status 영역에서 같은 전용 전환 창 실행 | 사용자 결정 완료, 일반 필드 저장과 분리 |
 | 미저장 변경과 상태 전환 | 저장 또는 변경 취소로 편집 상태를 먼저 정리 | 사용자 결정 완료, 필드 저장이 전부 성공해야 전환 시작 |

@@ -4,6 +4,8 @@ import base64
 from contextvars import ContextVar
 import time
 from typing import Any
+from urllib.parse import urljoin
+from urllib.parse import urlparse
 
 import requests
 
@@ -73,6 +75,97 @@ class CodebeamerClient:
     def _delete(self, path: str, params: dict | None = None) -> Any:
         """DELETE 요청을 보내고 본문이 없으면 빈 객체를 돌려준다."""
         return self._request_json("DELETE", path, params=params, empty_ok=True)
+
+    def _request_binary(self, source_url: str, *, max_bytes: int) -> tuple[str, bytes]:
+        """같은 Codebeamer origin의 첨부 리소스를 제한된 크기로 가져온다."""
+        normalized_limit = max(int(max_bytes), 1)
+        base = urlparse(self.base_url)
+        absolute = urljoin(f"{self.base_url}/", str(source_url or "").strip())
+        parsed = urlparse(absolute)
+        if (parsed.scheme.casefold(), parsed.netloc.casefold()) != (
+            base.scheme.casefold(),
+            base.netloc.casefold(),
+        ):
+            raise ValueError("Codebeamer와 다른 서버의 리소스는 다운로드할 수 없습니다.")
+        lowered_target = f"{parsed.path}?{parsed.query}".casefold()
+        if "attachment" not in lowered_target and "displaydocument" not in lowered_target:
+            raise ValueError("확인되지 않은 Codebeamer 리소스 경로입니다.")
+
+        retry_context = _API_REQUEST_CONTEXT.get()
+        request_kind, attempt, max_attempts = (
+            (f"GET {normalize_api_path(parsed.path)}", 1, 1)
+            if retry_context is None
+            else retry_context
+        )
+        monitor_handle = self.api_monitor.start_request(
+            request_kind=request_kind,
+            method="GET",
+            path=parsed.path,
+            attempt=attempt,
+            max_attempts=max_attempts,
+        )
+        response = None
+        status_code = None
+        outcome = API_OUTCOME_SUCCESS
+        error_kind = None
+        try:
+            with self._session() as session:
+                response = session.get(
+                    absolute,
+                    headers={"Accept": "*/*"},
+                    stream=True,
+                    allow_redirects=False,
+                )
+                status_code = self._response_status_code(response)
+                if status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("Location", "")
+                    redirected = urljoin(absolute, location)
+                    redirected_url = urlparse(redirected)
+                    if (redirected_url.scheme.casefold(), redirected_url.netloc.casefold()) != (
+                        base.scheme.casefold(),
+                        base.netloc.casefold(),
+                    ):
+                        raise ValueError("첨부 다운로드가 다른 서버로 이동하려고 합니다.")
+                    redirected_target = f"{redirected_url.path}?{redirected_url.query}".casefold()
+                    if "attachment" not in redirected_target and "displaydocument" not in redirected_target:
+                        raise ValueError("첨부 다운로드가 확인되지 않은 경로로 이동하려고 합니다.")
+                    response.close()
+                    response = session.get(
+                        redirected,
+                        headers={"Accept": "*/*"},
+                        stream=True,
+                        allow_redirects=False,
+                    )
+                    status_code = self._response_status_code(response)
+                response.raise_for_status()
+                content_length = response.headers.get("Content-Length")
+                if content_length not in (None, "") and int(content_length) > normalized_limit:
+                    raise ValueError("첨부 리소스가 허용 크기를 초과합니다.")
+                chunks: list[bytes] = []
+                received = 0
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    received += len(chunk)
+                    if received > normalized_limit:
+                        raise ValueError("첨부 리소스가 허용 크기를 초과합니다.")
+                    chunks.append(chunk)
+                return str(response.headers.get("Content-Type") or ""), b"".join(chunks)
+        except Exception as exc:
+            status_code = self._response_status_code(response, exc)
+            is_retry = self._is_rate_limited(exc) and attempt < max_attempts
+            outcome = API_OUTCOME_RETRY if is_retry else API_OUTCOME_FAILED
+            error_kind = self._monitor_error_kind(exc, status_code)
+            raise
+        finally:
+            if response is not None:
+                response.close()
+            self.api_monitor.finish_request(
+                monitor_handle,
+                status_code=status_code,
+                outcome=outcome,
+                error_kind=error_kind,
+            )
 
     @staticmethod
     def _response_status_code(response: object | None, exc: Exception | None = None) -> int | None:
@@ -303,6 +396,123 @@ class CodebeamerClient:
         return self._run_rate_limited_request(
             "get_tracker_schema",
             lambda: self._get(f"/v3/trackers/{tracker_id}/schema"),
+        )
+
+    def render_wiki_to_html(
+        self,
+        project_id: int,
+        *,
+        context_id: int,
+        context_version: int,
+        markup: str,
+        rendering_context_type: str = "TRACKER_ITEM",
+    ) -> str:
+        """Codebeamer Wiki 엔진으로 문맥이 있는 markup을 HTML로 변환한다."""
+        payload = self._run_rate_limited_request(
+            "render_wiki_to_html",
+            lambda: self._post(
+                f"/v3/projects/{int(project_id)}/wiki2html",
+                json_body={
+                    "contextId": int(context_id),
+                    "contextVersion": int(context_version),
+                    "markup": str(markup or ""),
+                    "renderingContextType": str(rendering_context_type or "TRACKER_ITEM"),
+                },
+            ),
+        )
+        if isinstance(payload, str):
+            return payload
+        if isinstance(payload, dict):
+            for key in ("html", "value", "renderedMarkup", "markup"):
+                if isinstance(payload.get(key), str):
+                    return payload[key]
+        raise ValueError("Wiki HTML 응답 형식을 해석할 수 없습니다.")
+
+    def get_item_attachments(self, item_id: int) -> Any:
+        """아이템 첨부 메타데이터를 조회한다.
+
+        이 v3 경로는 대상 서버 Swagger에서 반드시 확인해야 하며, 미지원 서버의
+        404는 상위 content service가 사용자에게 명시적인 조회 실패로 전달한다.
+        """
+        page = 1
+        page_size = 500
+        collected: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        while True:
+            payload = self._run_rate_limited_request(
+                "get_item_attachments",
+                lambda current_page=page: self._get(
+                    f"/v3/items/{int(item_id)}/attachments",
+                    params={"page": current_page, "pageSize": page_size},
+                ),
+            )
+            references = self._extract_attachment_references(payload)
+            added = 0
+            for reference in references:
+                identity = str(reference.get("id") or reference.get("attachmentId") or "").strip()
+                if not identity or identity in seen_ids:
+                    continue
+                seen_ids.add(identity)
+                collected.append(reference)
+                added += 1
+            if isinstance(payload, list):
+                break
+            raw_total = payload.get("total") if isinstance(payload, dict) else None
+            try:
+                total = int(raw_total) if raw_total is not None else None
+            except (TypeError, ValueError):
+                total = None
+            if total is not None and len(collected) >= max(total, 0):
+                break
+            raw_response_page_size = (
+                payload.get("pageSize") if isinstance(payload, dict) else None
+            )
+            try:
+                response_page_size = int(raw_response_page_size)
+            except (TypeError, ValueError):
+                response_page_size = page_size
+            if not references or (
+                total is None and len(references) < max(response_page_size, 1)
+            ):
+                break
+            if added == 0:
+                raise RuntimeError("서버가 첨부 목록의 다음 페이지를 적용하지 않았습니다.")
+            page += 1
+        return collected
+
+    @staticmethod
+    def _extract_attachment_references(payload: Any) -> list[dict[str, Any]]:
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if not isinstance(payload, dict):
+            return []
+        for key in ("attachments", "attachmentRefs", "items", "references", "content"):
+            values = payload.get(key)
+            if isinstance(values, list):
+                return [item for item in values if isinstance(item, dict)]
+        return []
+
+    def download_authenticated_resource(
+        self,
+        source_url: str,
+        *,
+        max_bytes: int,
+    ) -> tuple[str, bytes]:
+        return self._run_rate_limited_request(
+            "download_attachment_resource",
+            lambda: self._request_binary(source_url, max_bytes=max_bytes),
+        )
+
+    def download_attachment_content(
+        self,
+        attachment_id: int,
+        *,
+        max_bytes: int,
+    ) -> tuple[str, bytes]:
+        """첨부 ID로 공식 v3 content endpoint의 바이너리를 가져온다."""
+        return self.download_authenticated_resource(
+            f"{self.base_url}/v3/attachments/{int(attachment_id)}/content",
+            max_bytes=max_bytes,
         )
 
     def get_tracker_configuration(self, tracker_id: int) -> Any:

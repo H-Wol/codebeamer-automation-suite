@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import replace
+from html import escape
 import json
 from typing import Any
 from typing import Callable
@@ -29,7 +30,6 @@ try:
     from PySide6.QtWidgets import QTableWidgetItem
     from PySide6.QtWidgets import QTreeWidget
     from PySide6.QtWidgets import QTreeWidgetItem
-    from PySide6.QtWidgets import QTextBrowser
     from PySide6.QtWidgets import QVBoxLayout
     from PySide6.QtWidgets import QWidget
 except ImportError as exc:  # pragma: no cover - GUI dependency guard
@@ -47,6 +47,7 @@ from .tracker_item_editor import TrackerItemEditorService
 from .tracker_item_editor import TrackerItemFieldChange
 from .tracker_item_editor import TrackerItemWriteError
 from .tracker_item_editor_dialog import TrackerItemEditorDialog
+from .tracker_item_detail_dialog import TrackerItemDetailDialog
 from .tracker_item_editor_panel import ConfirmItemDeleteDialog
 from .tracker_item_editor_panel import TrackerItemEditorPanel
 from .tracker_item_create_dialog import TrackerItemCreateDialog
@@ -68,6 +69,13 @@ from .tracker_query_models import TrackerSearchMode
 from .tracker_query_models import TrackerQueryServiceError
 from .tracker_query_models import TrackerSummary
 from .tracker_query_service import TrackerQueryService
+from .tracker_content_models import AttachmentResource
+from .tracker_content_models import AttachmentSummary
+from .tracker_content_models import WikiRenderContext
+from .tracker_content_models import WikiRenderResult
+from .tracker_content_service import MAX_ITEM_INLINE_IMAGE_BYTES
+from .tracker_content_service import MAX_INLINE_IMAGE_BYTES
+from .tracker_content_service import TrackerContentService
 from .tracker_baseline_compare import BaselineComparisonKind
 from .tracker_baseline_compare import BaselineComparisonResult
 from .tracker_baseline_compare import BaselineComparisonSource
@@ -89,6 +97,8 @@ from .worker import BulkUpdateWorker
 from .wiki_renderer import codebeamer_wiki_to_html
 from .wiki_renderer import is_explicit_wiki_type
 from .wiki_renderer import payload_uses_wiki
+from .wiki_content_view import WikiContentDialog
+from .wiki_content_view import WikiContentView
 
 
 ITEM_SUMMARY_ROLE = int(Qt.ItemDataRole.UserRole) + 1
@@ -97,6 +107,14 @@ CHILDREN_LOADED_ROLE = int(Qt.ItemDataRole.UserRole) + 3
 BASELINE_COMPARISON_ROLE = int(Qt.ItemDataRole.UserRole) + 4
 HIERARCHY_FETCH_PAGE_SIZE = 500
 DEFAULT_SEARCH_PAGE_SIZE = 50
+ATTACHMENT_IMAGE_MIME_TYPES = {
+    "image/bmp",
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+}
+ATTACHMENT_IMAGE_SUFFIXES = (".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp")
 
 REQUEST_BUSY_MESSAGES = {
     "projects": "프로젝트 목록을 불러오는 중입니다.",
@@ -473,6 +491,7 @@ class TrackerWorkspacePage(QWidget):
         *,
         settings_provider: Callable[[], GuiSettings],
         service: TrackerQueryService | None = None,
+        content_service: TrackerContentService | None = None,
         editor_service: TrackerItemEditorService | None = None,
         open_settings: Callable[[], None] | None = None,
         delete_confirmer: Callable[[TrackerItemDetail], bool] | None = None,
@@ -501,6 +520,7 @@ class TrackerWorkspacePage(QWidget):
         self.setObjectName("tracker_workspace_page")
         self.settings_provider = settings_provider
         self.service = service or TrackerQueryService()
+        self.content_service = content_service or TrackerContentService()
         self.editor_service = editor_service or TrackerItemEditorService(
             query_service=self.service
         )
@@ -553,6 +573,13 @@ class TrackerWorkspacePage(QWidget):
         self._detail_baseline_id: int | None = None
         self._description_text = ""
         self._description_uses_wiki = False
+        self._description_render_result: WikiRenderResult | None = None
+        self._attachments: tuple[AttachmentSummary, ...] = ()
+        self._attachment_preview_resources: dict[str, AttachmentResource] = {}
+        self._inline_image_bytes = 0
+        self._wiki_resource_generation = 0
+        self._inline_resource_reservations: set[tuple[int, str, int]] = set()
+        self._loaded_inline_resources: set[tuple[int, str, int]] = set()
         self._pre_editor_splitter_sizes: list[int] | None = None
         self._create_busy = False
         self._editor_dialog: TrackerItemEditorDialog | None = None
@@ -687,6 +714,10 @@ class TrackerWorkspacePage(QWidget):
         self.detail_title = QLabel("아이템 상세")
         self.detail_title.setObjectName("tracker_detail_title")
         detail_heading.addWidget(self.detail_title, 1)
+        self.detail_open_button = QPushButton("상세 크게 보기", detail_panel)
+        self.detail_open_button.setEnabled(False)
+        self.detail_open_button.clicked.connect(self._open_detail_dialog)
+        detail_heading.addWidget(self.detail_open_button)
         self.detail_refresh_button = QPushButton("상세 새로고침", detail_panel)
         self.detail_refresh_button.setToolTip("현재 아이템의 최신 version과 필드를 다시 조회합니다.")
         self.detail_refresh_button.clicked.connect(self._reload_current_detail)
@@ -1081,13 +1112,52 @@ class TrackerWorkspacePage(QWidget):
         self.description_source_toggle.toggled.connect(self._render_description)
         description_header.addWidget(self.description_source_toggle)
         layout.addLayout(description_header)
-        self.detail_description = QTextBrowser(tab)
+        self.detail_description = WikiContentView(tab)
         self.detail_description.setObjectName("tracker_detail_description")
         self.detail_description.setReadOnly(True)
         self.detail_description.setOpenExternalLinks(False)
         self.detail_description.setPlaceholderText("아이템을 선택하면 설명을 표시합니다.")
         self.detail_description.setMaximumHeight(150)
         layout.addWidget(self.detail_description)
+
+        attachment_header = QHBoxLayout()
+        attachment_label = QLabel("첨부 파일")
+        attachment_label.setObjectName("tracker_detail_section_title")
+        attachment_header.addWidget(attachment_label, 1)
+        self.attachment_reload_button = QPushButton("첨부 불러오기", tab)
+        self.attachment_reload_button.setObjectName("tracker_attachment_reload")
+        self.attachment_reload_button.setEnabled(False)
+        self.attachment_reload_button.clicked.connect(self._load_attachments)
+        attachment_header.addWidget(self.attachment_reload_button)
+        self.attachment_preview_button = QPushButton("이미지 크게 보기", tab)
+        self.attachment_preview_button.setObjectName("tracker_attachment_preview_open")
+        self.attachment_preview_button.setEnabled(False)
+        self.attachment_preview_button.setVisible(False)
+        self.attachment_preview_button.clicked.connect(self._open_attachment_preview)
+        attachment_header.addWidget(self.attachment_preview_button)
+        layout.addLayout(attachment_header)
+        self.attachment_status_label = QLabel("아이템을 선택하면 첨부를 확인할 수 있습니다.", tab)
+        self.attachment_status_label.setWordWrap(True)
+        layout.addWidget(self.attachment_status_label)
+        self.attachment_preview = WikiContentView(tab)
+        self.attachment_preview.setObjectName("tracker_attachment_preview")
+        self.attachment_preview.setReadOnly(True)
+        self.attachment_preview.setOpenExternalLinks(False)
+        self.attachment_preview.setMaximumHeight(260)
+        self.attachment_preview.setVisible(False)
+        layout.addWidget(self.attachment_preview)
+        self.attachment_table = QTableWidget(0, 4, tab)
+        self.attachment_table.setObjectName("tracker_attachment_table")
+        self.attachment_table.setHorizontalHeaderLabels(["파일명", "크기", "수정 시각", "작업"])
+        self.attachment_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.attachment_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.attachment_table.verticalHeader().setVisible(False)
+        self.attachment_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.attachment_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.attachment_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.attachment_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.attachment_table.setMaximumHeight(150)
+        layout.addWidget(self.attachment_table)
 
         fields_label = QLabel("필드")
         fields_label.setObjectName("tracker_detail_section_title")
@@ -1130,6 +1200,7 @@ class TrackerWorkspacePage(QWidget):
     def _settings_key(settings: GuiSettings) -> tuple[Any, ...]:
         return (
             bool(settings.offline_mode),
+            bool(getattr(settings, "server_wiki_html_enabled", False)),
             str(settings.base_url or "").strip().rstrip("/"),
             str(settings.username or "").strip(),
             bool(settings.password),
@@ -1164,6 +1235,7 @@ class TrackerWorkspacePage(QWidget):
             clear_cache = getattr(self.service, "clear_cache", None)
             if callable(clear_cache):
                 clear_cache()
+            self.content_service.clear_cache()
         if settings_changed:
             self._settings_fingerprint = fingerprint
             self._clear_context_state()
@@ -1435,6 +1507,8 @@ class TrackerWorkspacePage(QWidget):
 
     def _start_request_busy(self, key: str) -> object | None:
         if not callable(self.busy_started):
+            return None
+        if key.startswith(("wiki_", "attachments", "attachment_save:")):
             return None
         message = REQUEST_BUSY_MESSAGES.get(key)
         if message is None and key.startswith("children:"):
@@ -2452,6 +2526,10 @@ class TrackerWorkspacePage(QWidget):
 
     def _reload_current_detail(self) -> None:
         if self._selected_item_id is not None:
+            self.content_service.clear_item_cache(
+                self.settings_provider(),
+                self._selected_item_id,
+            )
             self._load_detail(
                 self._selected_item_id,
                 baseline_id=self._detail_baseline_id,
@@ -3681,15 +3759,439 @@ class TrackerWorkspacePage(QWidget):
             "렌더링 보기" if show_source else "Wiki 원문"
         )
         if self._description_uses_wiki and not show_source:
-            self.detail_description.setHtml(
-                codebeamer_wiki_to_html(self._description_text)
-            )
+            if self._description_render_result is not None:
+                self.detail_description.set_render_result(self._description_render_result)
+                if self._current_detail is not None:
+                    self._load_inline_resources(
+                        self._description_render_result,
+                        self.detail_description,
+                        self._current_detail,
+                        self._detail_baseline_id,
+                    )
+            else:
+                self.detail_description.setHtml(codebeamer_wiki_to_html(self._description_text))
             return
         self.detail_description.setPlainText(self._description_text)
 
+    @staticmethod
+    def _wiki_context(
+        detail: TrackerItemDetail,
+        baseline_id: int | None,
+    ) -> WikiRenderContext | None:
+        if detail.summary.project_id is None or detail.version is None:
+            return None
+        return WikiRenderContext(
+            project_id=int(detail.summary.project_id),
+            item_id=detail.item_id,
+            item_version=int(detail.version),
+            baseline_id=baseline_id,
+        )
+
+    def _request_description_render(
+        self,
+        detail: TrackerItemDetail,
+        baseline_id: int | None,
+    ) -> None:
+        if not self._description_uses_wiki:
+            return
+        settings = self.settings_provider()
+        item_id = detail.item_id
+        version = detail.version
+        context = self._wiki_context(detail, baseline_id)
+
+        def loaded(result: WikiRenderResult) -> None:
+            current = self._current_detail
+            if (
+                current is None
+                or current.item_id != item_id
+                or current.version != version
+                or self._detail_baseline_id != baseline_id
+            ):
+                return
+            self._description_render_result = result
+            if not self.description_source_toggle.isChecked():
+                self.detail_description.set_render_result(result)
+                self._load_inline_resources(result, self.detail_description, detail, baseline_id)
+            if result.warning:
+                existing = self.detail_warning.text().strip()
+                lines = [line for line in (existing, result.warning) if line]
+                self.detail_warning.setText("\n".join(lines))
+                self.detail_warning.show()
+
+        self._submit(
+            "wiki_description",
+            lambda: self.content_service.render_wiki(
+                settings,
+                context,
+                self._description_text,
+            ),
+            loaded,
+            lambda _exc: None,
+        )
+
+    def _load_inline_resources(
+        self,
+        result: WikiRenderResult,
+        view: WikiContentView,
+        detail: TrackerItemDetail,
+        baseline_id: int | None,
+    ) -> None:
+        if baseline_id is not None:
+            return
+        settings = self.settings_provider()
+        item_id = detail.item_id
+        version = detail.version
+        for reference in result.resources:
+            if (
+                self._inline_image_bytes
+                + len(self._inline_resource_reservations) * MAX_INLINE_IMAGE_BYTES
+                + MAX_INLINE_IMAGE_BYTES
+                > MAX_ITEM_INLINE_IMAGE_BYTES
+            ):
+                break
+            reservation = (
+                self._wiki_resource_generation,
+                reference.resource_key,
+                id(view),
+            )
+            if reservation in self._loaded_inline_resources:
+                continue
+            if reservation in self._inline_resource_reservations:
+                continue
+            self._inline_resource_reservations.add(reservation)
+
+            def loaded(
+                resource,
+                *,
+                target=view,
+                expected_id=item_id,
+                expected_version=version,
+                reserved=reservation,
+            ) -> None:
+                self._inline_resource_reservations.discard(reserved)
+                current = self._current_detail
+                if current is None or current.item_id != expected_id or current.version != expected_version:
+                    return
+                if self._inline_image_bytes + len(resource.data) > MAX_ITEM_INLINE_IMAGE_BYTES:
+                    return
+                if target.add_attachment_resource(resource):
+                    self._inline_image_bytes += len(resource.data)
+                    self._loaded_inline_resources.add(reserved)
+
+            def failed(_exc: Exception, *, reserved=reservation) -> None:
+                self._inline_resource_reservations.discard(reserved)
+
+            self._submit(
+                (
+                    f"wiki_resource:{reservation[0]}:"
+                    f"{reservation[2]}:{reference.resource_key}"
+                ),
+                lambda selected=reference: self.content_service.download_resource(
+                    settings,
+                    resource_key=selected.resource_key,
+                    source_url=selected.source_url,
+                ),
+                loaded,
+                failed,
+            )
+
+    def _open_wiki_field(self, field: TrackerFieldValue) -> None:
+        detail = self._current_detail
+        if detail is None:
+            return
+        settings = self.settings_provider()
+        item_id = detail.item_id
+        version = detail.version
+        baseline_id = self._detail_baseline_id
+        context = self._wiki_context(detail, baseline_id)
+
+        def loaded(result: WikiRenderResult) -> None:
+            current = self._current_detail
+            if current is None or current.item_id != item_id or current.version != version:
+                return
+            dialog = WikiContentDialog(field.name, field.display_value, result, self)
+            self._load_inline_resources(result, dialog.view, detail, baseline_id)
+            dialog.exec()
+
+        self._submit(
+            f"wiki_field:{field.field_id or field.name}",
+            lambda: self.content_service.render_wiki(settings, context, field.display_value),
+            loaded,
+            lambda exc: self._show_error(exc, prefix="Wiki 필드 렌더링 실패"),
+        )
+
     def _open_table_field(self, field: TrackerFieldValue) -> None:
-        dialog = TrackerTableFieldDialog(field, self)
+        detail = self._current_detail
+        if detail is None:
+            return
+        settings = self.settings_provider()
+        context = self._wiki_context(detail, self._detail_baseline_id)
+        request_index = 0
+
+        def request(markup: str, completed: Callable[[WikiRenderResult], None]) -> None:
+            nonlocal request_index
+            request_index += 1
+            self._submit(
+                f"wiki_table:{detail.item_id}:{request_index}",
+                lambda source=markup: self.content_service.render_wiki(settings, context, source),
+                completed,
+                lambda _exc, source=markup: completed(
+                    WikiRenderResult(
+                        html=codebeamer_wiki_to_html(source),
+                        used_fallback=True,
+                        warning="서버 Wiki 렌더링에 실패했습니다.",
+                    )
+                ),
+            )
+
+        dialog = TrackerTableFieldDialog(
+            field,
+            self,
+            wiki_render_request=request,
+            wiki_resource_loader=lambda result, view: self._load_inline_resources(
+                result,
+                view,
+                detail,
+                self._detail_baseline_id,
+            ),
+        )
         dialog.exec()
+
+    @staticmethod
+    def _attachment_size_text(size: int | None) -> str:
+        if size is None:
+            return "-"
+        value = float(size)
+        for unit in ("B", "KB", "MB", "GB"):
+            if value < 1024 or unit == "GB":
+                return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+            value /= 1024
+        return f"{size} B"
+
+    def _load_attachments(self, _checked: bool = False) -> None:
+        detail = self._current_detail
+        if detail is None:
+            return
+        if self._detail_baseline_id is not None:
+            self.attachment_status_label.setText(
+                "과거 첨부 revision 계약이 확인되지 않아 Baseline 첨부 목록은 표시하지 않습니다."
+            )
+            self.attachment_table.setRowCount(0)
+            return
+        settings = self.settings_provider()
+        item_id = detail.item_id
+        version = detail.version
+        self.attachment_reload_button.setEnabled(False)
+        self.attachment_status_label.setText("첨부 파일을 불러오는 중입니다.")
+
+        def loaded(attachments: tuple[AttachmentSummary, ...]) -> None:
+            current = self._current_detail
+            if current is None or current.item_id != item_id or current.version != version:
+                return
+            previews_need_refresh = attachments != self._attachments
+            self._attachments = attachments
+            self.attachment_reload_button.setEnabled(True)
+            if previews_need_refresh:
+                self._load_attachment_previews(attachments, detail)
+            self.attachment_table.setRowCount(len(attachments))
+            for row, attachment in enumerate(attachments):
+                self.attachment_table.setItem(row, 0, QTableWidgetItem(attachment.name))
+                self.attachment_table.setItem(row, 1, QTableWidgetItem(self._attachment_size_text(attachment.size)))
+                self.attachment_table.setItem(row, 2, QTableWidgetItem(attachment.modified_at or "-"))
+                save_button = QPushButton("저장", self.attachment_table)
+                save_button.clicked.connect(
+                    lambda _checked=False, selected=attachment: self._save_attachment(selected)
+                )
+                self.attachment_table.setCellWidget(row, 3, save_button)
+            self.attachment_status_label.setText(
+                f"첨부 파일 {len(attachments)}개" if attachments else "첨부 파일이 없습니다."
+            )
+
+        def failed(exc: Exception) -> None:
+            current = self._current_detail
+            if current is None or current.item_id != item_id:
+                return
+            self.attachment_reload_button.setEnabled(True)
+            self.attachment_status_label.setText("첨부 목록을 불러오지 못했습니다.")
+            self._show_error(exc, prefix="첨부 목록 조회 실패")
+
+        self._submit(
+            "attachments",
+            lambda: self.content_service.load_attachments(
+                settings,
+                item_id,
+                raw_payload=detail.raw_payload,
+            ),
+            loaded,
+            failed,
+        )
+
+    @staticmethod
+    def _is_attachment_image(attachment: AttachmentSummary) -> bool:
+        mime_type = str(attachment.mime_type or "").split(";", 1)[0].strip().casefold()
+        if mime_type:
+            return mime_type in ATTACHMENT_IMAGE_MIME_TYPES
+        return str(attachment.name or "").strip().casefold().endswith(
+            ATTACHMENT_IMAGE_SUFFIXES
+        )
+
+    def _load_attachment_previews(
+        self,
+        attachments: tuple[AttachmentSummary, ...],
+        detail: TrackerItemDetail,
+    ) -> None:
+        settings = self.settings_provider()
+        if bool(settings.offline_mode) or self._detail_baseline_id is not None:
+            self._attachment_preview_resources.clear()
+            self.attachment_preview_button.setEnabled(False)
+            self.attachment_preview_button.setVisible(False)
+            self.attachment_preview.clear()
+            self.attachment_preview.setVisible(False)
+            return
+        available_slots = max(
+            (
+                MAX_ITEM_INLINE_IMAGE_BYTES
+                - self._inline_image_bytes
+                - len(self._inline_resource_reservations) * MAX_INLINE_IMAGE_BYTES
+            )
+            // MAX_INLINE_IMAGE_BYTES,
+            0,
+        )
+        candidates = [
+            attachment
+            for attachment in attachments
+            if self._is_attachment_image(attachment)
+            and (attachment.size is None or attachment.size <= MAX_INLINE_IMAGE_BYTES)
+        ][:available_slots]
+        if not candidates:
+            self._attachment_preview_resources.clear()
+            self.attachment_preview_button.setEnabled(False)
+            self.attachment_preview_button.setVisible(False)
+            self.attachment_preview.clear()
+            self.attachment_preview.setVisible(False)
+            return
+
+        blocks = []
+        for attachment in candidates:
+            resource_key = f"attachment-{attachment.attachment_id}"
+            blocks.append(
+                "<p><b>"
+                f"{escape(attachment.name)}"
+                "</b><br>"
+                f'<img src="cb-attachment://{resource_key}" alt="{escape(attachment.name)}">'
+                "</p>"
+            )
+        self._attachment_preview_resources.clear()
+        self.attachment_preview_button.setEnabled(False)
+        self.attachment_preview_button.setVisible(True)
+        self.attachment_preview.setHtml("".join(blocks))
+        self.attachment_preview.setVisible(True)
+        item_id = detail.item_id
+        version = detail.version
+
+        for attachment in candidates:
+            reservation = (
+                self._wiki_resource_generation,
+                f"attachment-{attachment.attachment_id}",
+                id(self.attachment_preview),
+            )
+            if reservation in self._loaded_inline_resources:
+                continue
+            if reservation in self._inline_resource_reservations:
+                continue
+            self._inline_resource_reservations.add(reservation)
+
+            def loaded(resource, *, reserved=reservation) -> None:
+                self._inline_resource_reservations.discard(reserved)
+                current = self._current_detail
+                if current is None or current.item_id != item_id or current.version != version:
+                    return
+                if self._inline_image_bytes + len(resource.data) > MAX_ITEM_INLINE_IMAGE_BYTES:
+                    return
+                if self.attachment_preview.add_attachment_resource(resource):
+                    self._inline_image_bytes += len(resource.data)
+                    self._loaded_inline_resources.add(reserved)
+                    self._attachment_preview_resources[resource.resource_key] = resource
+                    self.attachment_preview_button.setEnabled(True)
+
+            def failed(_exc: Exception, *, reserved=reservation) -> None:
+                self._inline_resource_reservations.discard(reserved)
+
+            self._submit(
+                f"attachment_preview:{self._wiki_resource_generation}:{attachment.attachment_id}",
+                lambda selected=attachment: self.content_service.download_attachment(
+                    settings,
+                    selected,
+                    max_bytes=MAX_INLINE_IMAGE_BYTES,
+                ),
+                loaded,
+                failed,
+            )
+
+    def _open_attachment_preview(self, _checked: bool = False) -> None:
+        if not self._attachment_preview_resources:
+            return
+        result = WikiRenderResult(html=self.attachment_preview.text())
+        dialog = WikiContentDialog("첨부 이미지", "", result, self)
+        dialog.resize(1100, 760)
+        for resource in self._attachment_preview_resources.values():
+            dialog.view.add_attachment_resource(resource)
+        dialog.exec()
+
+    def _open_detail_dialog(self, _checked: bool = False) -> None:
+        detail = self._current_detail
+        if detail is None:
+            return
+        if self._description_uses_wiki:
+            description_html = (
+                self._description_render_result.html
+                if self._description_render_result is not None
+                else codebeamer_wiki_to_html(self._description_text)
+            )
+        else:
+            description_html = (
+                "<p>" + escape(self._description_text).replace("\n", "<br>") + "</p>"
+            )
+        dialog = TrackerItemDetailDialog(
+            detail,
+            description_html=description_html,
+            attachments=self._attachments,
+            image_resources=tuple(self._attachment_preview_resources.values()),
+            baseline_id=self._detail_baseline_id,
+            parent=self,
+        )
+        dialog.exec()
+
+    def _save_attachment(self, attachment: AttachmentSummary) -> None:
+        output_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "첨부 파일 저장",
+            attachment.name,
+            "모든 파일 (*)",
+        )
+        if not output_path:
+            return
+        settings = self.settings_provider()
+        item_id = self._selected_item_id
+        self.attachment_status_label.setText(f"{attachment.name} 저장 중입니다.")
+
+        def completed(byte_count: int) -> None:
+            if self._selected_item_id != item_id:
+                return
+            self.attachment_status_label.setText(
+                f"{attachment.name} 저장 완료 · {self._attachment_size_text(byte_count)}"
+            )
+
+        self._submit(
+            f"attachment_save:{attachment.attachment_id}",
+            lambda: self.content_service.save_attachment(
+                settings,
+                attachment,
+                output_path,
+            ),
+            completed,
+            lambda exc: self._show_error(exc, prefix="첨부 파일 저장 실패"),
+        )
 
     def _render_detail(
         self,
@@ -3711,6 +4213,7 @@ class TrackerWorkspacePage(QWidget):
             else summary.name
         )
         self.detail_refresh_button.setEnabled(True)
+        self.detail_open_button.setEnabled(True)
         self.detail_refresh_button.setToolTip(
             "선택한 Baseline 시점의 아이템 상세를 다시 조회합니다."
             if historical
@@ -3737,11 +4240,32 @@ class TrackerWorkspacePage(QWidget):
         self.detail_warning.setVisible(bool(warnings))
         self._description_text = detail.description
         self._description_uses_wiki = is_explicit_wiki_type(detail.description_format)
+        self._description_render_result = None
+        self._inline_image_bytes = 0
+        self._wiki_resource_generation += 1
+        self._inline_resource_reservations.clear()
+        self._loaded_inline_resources.clear()
+        self._attachments = ()
+        self._attachment_preview_resources.clear()
+        self.attachment_preview_button.setEnabled(False)
+        self.attachment_preview_button.setVisible(False)
+        self.attachment_preview.clear()
+        self.attachment_preview.setVisible(False)
+        self.attachment_table.setRowCount(0)
+        self.attachment_reload_button.setEnabled(not historical)
+        self.attachment_reload_button.setText("첨부 다시 불러오기")
+        self.attachment_status_label.setText(
+            "Baseline 첨부는 실서버 revision 계약 확인 후 제공됩니다."
+            if historical
+            else "첨부 파일을 불러오는 중입니다."
+        )
         self.description_source_toggle.blockSignals(True)
         self.description_source_toggle.setChecked(False)
         self.description_source_toggle.blockSignals(False)
         self.description_source_toggle.setVisible(self._description_uses_wiki)
         self._render_description(False)
+        self._request_description_render(detail, baseline_id)
+        self._load_attachments()
         self.detail_raw_json.setPlainText(
             json.dumps(detail.raw_payload, ensure_ascii=False, indent=2, default=str)
         )
@@ -3795,14 +4319,12 @@ class TrackerWorkspacePage(QWidget):
                 or payload_uses_wiki(field.raw_value)
             ):
                 continue
-            label = QLabel(self.detail_fields_table)
+            label = QPushButton("Wiki 내용 · 열어보기", self.detail_fields_table)
             label.setObjectName("tracker_wiki_cell")
-            label.setTextFormat(Qt.TextFormat.RichText)
-            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            label.setWordWrap(True)
-            label.setMargin(6)
-            label.setMinimumHeight(32)
-            label.setText(codebeamer_wiki_to_html(text))
+            label.setToolTip(text)
+            label.clicked.connect(
+                lambda _checked=False, selected=field: self._open_wiki_field(selected)
+            )
             value_item.setText("")
             self.detail_fields_table.setCellWidget(row, 1, label)
             self.detail_fields_table.setRowHeight(
@@ -3833,12 +4355,20 @@ class TrackerWorkspacePage(QWidget):
         self._detail_baseline_id = None
         self._description_text = ""
         self._description_uses_wiki = False
+        self._description_render_result = None
+        self._attachments = ()
+        self._attachment_preview_resources.clear()
+        self._inline_image_bytes = 0
+        self._wiki_resource_generation += 1
+        self._inline_resource_reservations.clear()
+        self._loaded_inline_resources.clear()
         self.description_source_toggle.blockSignals(True)
         self.description_source_toggle.setChecked(False)
         self.description_source_toggle.blockSignals(False)
         self.description_source_toggle.setVisible(False)
         self.detail_title.setText("아이템 상세")
         self.detail_refresh_button.setEnabled(False)
+        self.detail_open_button.setEnabled(False)
         self.detail_refresh_button.setToolTip(
             "현재 아이템의 최신 version과 필드를 다시 조회합니다."
         )
@@ -3847,6 +4377,14 @@ class TrackerWorkspacePage(QWidget):
         self.detail_warning.clear()
         self.detail_warning.hide()
         self.detail_description.clear()
+        self.attachment_reload_button.setEnabled(False)
+        self.attachment_reload_button.setText("첨부 불러오기")
+        self.attachment_status_label.setText("아이템을 선택하면 첨부를 확인할 수 있습니다.")
+        self.attachment_preview_button.setEnabled(False)
+        self.attachment_preview_button.setVisible(False)
+        self.attachment_preview.clear()
+        self.attachment_preview.setVisible(False)
+        self.attachment_table.setRowCount(0)
         self.detail_fields_table.setRowCount(0)
         self.detail_raw_json.clear()
         self.editor_panel.clear()

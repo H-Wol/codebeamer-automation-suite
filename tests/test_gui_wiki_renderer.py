@@ -6,6 +6,7 @@ from src.gui.wiki_renderer import codebeamer_wiki_to_html
 from src.gui.wiki_renderer import is_explicit_wiki_type
 from src.gui.wiki_renderer import payload_uses_wiki
 from src.gui.wiki_renderer import sanitize_wiki_style
+from src.gui.wiki_renderer import sanitize_server_wiki_html
 
 
 class WikiRendererTest(unittest.TestCase):
@@ -51,6 +52,35 @@ class WikiRendererTest(unittest.TestCase):
         )
 
         self.assertEqual(style, "color: #336699; text-decoration: underline")
+
+    def test_simple_wiki_table_is_rendered_locally(self) -> None:
+        rendered = codebeamer_wiki_to_html(
+            "|| 이름 || 상태\n| __요구사항__ | ''완료''\n표 다음"
+        )
+
+        self.assertIn("<table", rendered)
+        self.assertIn("<th", rendered)
+        self.assertIn("<strong>요구사항</strong>", rendered)
+        self.assertIn("<em>완료</em>", rendered)
+        self.assertIn("표 다음", rendered)
+
+    def test_server_html_is_sanitized_and_only_attachment_images_are_rewritten(self) -> None:
+        result = sanitize_server_wiki_html(
+            '<script>alert(1)</script><table><tr><td colspan="2" onclick="bad()">값</td></tr></table>'
+            '<img src="/cb/displayDocument/sample.png?task_id=10&amp;artifact_id=28" onerror="bad()">'
+            '<img src="https://outside.test/image.png">'
+            '<a href="javascript:bad()">위험</a>',
+            base_url="https://example.test/cb",
+        )
+
+        self.assertNotIn("alert", result.html)
+        self.assertNotIn("onclick", result.html)
+        self.assertNotIn("javascript", result.html)
+        self.assertIn('colspan="2"', result.html)
+        self.assertIn("cb-attachment://", result.html)
+        self.assertIn("이미지 차단", result.html)
+        self.assertEqual(len(result.resources), 1)
+        self.assertEqual(result.resources[0].attachment_id, 28)
 
 
 if __name__ == "__main__":

@@ -10,9 +10,14 @@ class RecordingCodebeamerClient(CodebeamerClient):
         super().__init__("https://example.test/cb", "sample", "placeholder")
         self.get_calls: list[tuple[str, dict | None]] = []
         self.response = {"page": 1, "pageSize": 25, "total": 0, "itemRefs": []}
+        self.post_calls: list[tuple[str, dict | None, dict | None]] = []
 
     def _get(self, path: str, params: dict | None = None):
         self.get_calls.append((path, params))
+        return self.response
+
+    def _post(self, path: str, json_body: dict | None = None, params: dict | None = None):
+        self.post_calls.append((path, json_body, params))
         return self.response
 
 
@@ -147,6 +152,67 @@ class CodebeamerClientTrackerQueryTest(unittest.TestCase):
             client.get_calls,
             [("/v3/items/1001", {"baselineId": 7})],
         )
+
+    def test_wiki_render_uses_project_context_without_baseline_parameter(self) -> None:
+        client = RecordingCodebeamerClient()
+        client.response = {"html": "<p>완료</p>"}
+
+        result = client.render_wiki_to_html(
+            10,
+            context_id=1001,
+            context_version=7,
+            markup="|| 이름 || 상태",
+        )
+
+        self.assertEqual(result, "<p>완료</p>")
+        self.assertEqual(
+            client.post_calls,
+            [
+                (
+                    "/v3/projects/10/wiki2html",
+                    {
+                        "contextId": 1001,
+                        "contextVersion": 7,
+                        "markup": "|| 이름 || 상태",
+                        "renderingContextType": "TRACKER_ITEM",
+                    },
+                    None,
+                )
+            ],
+        )
+
+    def test_attachment_metadata_uses_dedicated_v3_path(self) -> None:
+        client = RecordingCodebeamerClient()
+
+        client.get_item_attachments(1001)
+
+        self.assertEqual(
+            client.get_calls,
+            [("/v3/items/1001/attachments", {"page": 1, "pageSize": 500})],
+        )
+
+    def test_attachment_metadata_collects_all_pages(self) -> None:
+        client = PagedBaselineClient(
+            {
+                1: {
+                    "page": 1,
+                    "pageSize": 1,
+                    "total": 2,
+                    "attachments": [{"id": 28, "name": "one.png"}],
+                },
+                2: {
+                    "page": 2,
+                    "pageSize": 1,
+                    "total": 2,
+                    "attachments": [{"id": 29, "name": "two.txt"}],
+                },
+            }
+        )
+
+        result = client.get_item_attachments(1001)
+
+        self.assertEqual([item["id"] for item in result], [28, 29])
+        self.assertEqual(len(client.get_calls), 2)
 
 
 if __name__ == "__main__":
