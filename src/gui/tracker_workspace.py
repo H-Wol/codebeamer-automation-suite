@@ -48,6 +48,8 @@ from .tracker_item_editor import TrackerItemFieldChange
 from .tracker_item_editor import TrackerItemWriteError
 from .tracker_item_editor_dialog import TrackerItemEditorDialog
 from .tracker_item_detail_dialog import TrackerItemDetailDialog
+from .tracker_item_detail_session import TrackerItemDetailSession
+from .tracker_item_context_service import TrackerItemContextService
 from .tracker_item_editor_panel import ConfirmItemDeleteDialog
 from .tracker_item_editor_panel import TrackerItemEditorPanel
 from .tracker_item_create_dialog import TrackerItemCreateDialog
@@ -492,6 +494,7 @@ class TrackerWorkspacePage(QWidget):
         settings_provider: Callable[[], GuiSettings],
         service: TrackerQueryService | None = None,
         content_service: TrackerContentService | None = None,
+        context_service: TrackerItemContextService | None = None,
         editor_service: TrackerItemEditorService | None = None,
         open_settings: Callable[[], None] | None = None,
         delete_confirmer: Callable[[TrackerItemDetail], bool] | None = None,
@@ -521,6 +524,7 @@ class TrackerWorkspacePage(QWidget):
         self.settings_provider = settings_provider
         self.service = service or TrackerQueryService()
         self.content_service = content_service or TrackerContentService()
+        self.context_service = context_service or TrackerItemContextService()
         self.editor_service = editor_service or TrackerItemEditorService(
             query_service=self.service
         )
@@ -1236,6 +1240,7 @@ class TrackerWorkspacePage(QWidget):
             if callable(clear_cache):
                 clear_cache()
             self.content_service.clear_cache()
+            self.context_service.clear_cache()
         if settings_changed:
             self._settings_fingerprint = fingerprint
             self._clear_context_state()
@@ -2527,6 +2532,10 @@ class TrackerWorkspacePage(QWidget):
     def _reload_current_detail(self) -> None:
         if self._selected_item_id is not None:
             self.content_service.clear_item_cache(
+                self.settings_provider(),
+                self._selected_item_id,
+            )
+            self.context_service.clear_item_cache(
                 self.settings_provider(),
                 self._selected_item_id,
             )
@@ -4160,7 +4169,181 @@ class TrackerWorkspacePage(QWidget):
             baseline_id=self._detail_baseline_id,
             parent=self,
         )
+        session = TrackerItemDetailSession(detail.item_id, detail.version)
+        dialog.set_navigation_state(can_go_back=False, can_go_forward=False)
+        dialog.context_tab_requested.connect(
+            lambda kind, force=False: self._load_detail_dialog_context(
+                dialog, session, kind, force=force
+            )
+        )
+        dialog.related_item_requested.connect(
+            lambda item_id: self._navigate_detail_dialog(dialog, session, item_id)
+        )
+        dialog.navigate_back_requested.connect(
+            lambda: self._navigate_detail_dialog_history(dialog, session, back=True)
+        )
+        dialog.navigate_forward_requested.connect(
+            lambda: self._navigate_detail_dialog_history(dialog, session, back=False)
+        )
+        dialog.finished.connect(lambda _result: session.invalidate())
         dialog.exec()
+
+    def _load_detail_dialog_context(
+        self,
+        dialog: TrackerItemDetailDialog,
+        session: TrackerItemDetailSession,
+        kind: str,
+        *,
+        force: bool = False,
+    ) -> None:
+        if dialog.baseline_id is not None or kind not in {"relations", "history"}:
+            return
+        detail = dialog.detail
+        generation = session.generation
+        dialog.set_context_loading(kind)
+        settings = self.settings_provider()
+
+        def current() -> bool:
+            return (
+                dialog.isVisible()
+                and session.generation == generation
+                and session.current.item_id == detail.item_id
+            )
+
+        def loaded(result) -> None:
+            if not current():
+                return
+            if kind == "relations":
+                dialog.set_relations(result)
+            else:
+                dialog.set_history(result)
+
+        def failed(exc: Exception) -> None:
+            if current():
+                dialog.set_context_error(kind, str(exc))
+
+        if kind == "relations":
+            operation = lambda: self.context_service.load_relations(
+                settings,
+                detail.item_id,
+                detail.version,
+                force=force,
+            )
+        else:
+            operation = lambda: self.context_service.load_history(
+                settings,
+                detail.item_id,
+                detail.version,
+                force=force,
+            )
+        self._submit(f"detail_dialog_{kind}", operation, loaded, failed)
+
+    def _navigate_detail_dialog(
+        self,
+        dialog: TrackerItemDetailDialog,
+        session: TrackerItemDetailSession,
+        item_id: int,
+    ) -> None:
+        session.navigate(int(item_id))
+        self._load_detail_dialog_item(dialog, session)
+
+    def _navigate_detail_dialog_history(
+        self,
+        dialog: TrackerItemDetailDialog,
+        session: TrackerItemDetailSession,
+        *,
+        back: bool,
+    ) -> None:
+        target = session.back() if back else session.forward()
+        if target is not None:
+            self._load_detail_dialog_item(dialog, session)
+
+    def _load_detail_dialog_item(
+        self,
+        dialog: TrackerItemDetailDialog,
+        session: TrackerItemDetailSession,
+    ) -> None:
+        generation = session.generation
+        item_id = session.current.item_id
+        settings = self.settings_provider()
+        dialog.set_navigation_state(
+            can_go_back=session.can_go_back,
+            can_go_forward=session.can_go_forward,
+        )
+
+        def is_current() -> bool:
+            return dialog.isVisible() and session.generation == generation and session.current.item_id == item_id
+
+        def loaded(detail: TrackerItemDetail) -> None:
+            if not is_current():
+                return
+            description_html = (
+                codebeamer_wiki_to_html(detail.description)
+                if is_explicit_wiki_type(detail.description_format)
+                else "<p>" + escape(detail.description).replace("\n", "<br>") + "</p>"
+            )
+            dialog.replace_detail(detail, description_html=description_html)
+            dialog.set_navigation_state(
+                can_go_back=session.can_go_back,
+                can_go_forward=session.can_go_forward,
+            )
+            self._hydrate_detail_dialog(dialog, session, detail, generation)
+
+        self._submit(
+            "detail_dialog_item",
+            lambda: self.service.load_detail(settings, item_id),
+            loaded,
+            lambda exc: dialog.set_context_error("relations", f"관련 아이템을 열지 못했습니다: {exc}") if is_current() else None,
+        )
+
+    def _hydrate_detail_dialog(
+        self,
+        dialog: TrackerItemDetailDialog,
+        session: TrackerItemDetailSession,
+        detail: TrackerItemDetail,
+        generation: int,
+    ) -> None:
+        settings = self.settings_provider()
+
+        def current() -> bool:
+            return dialog.isVisible() and session.generation == generation and dialog.detail.item_id == detail.item_id
+
+        if is_explicit_wiki_type(detail.description_format):
+            self._submit(
+                "detail_dialog_wiki",
+                lambda: self.content_service.render_wiki(settings, self._wiki_context(detail, None), detail.description),
+                lambda result: dialog.set_description_html(result.html) if current() else None,
+                lambda _exc: None,
+            )
+
+        def attachments_loaded(attachments: tuple[AttachmentSummary, ...]) -> None:
+            if not current():
+                return
+            images = tuple(value for value in attachments if self._is_attachment_image(value) and (value.size is None or value.size <= MAX_INLINE_IMAGE_BYTES))
+            if not images:
+                dialog.set_images(attachments, ())
+                return
+
+            def resources_loaded(resources: tuple[AttachmentResource, ...]) -> None:
+                if current():
+                    dialog.set_images(attachments, resources)
+
+            self._submit(
+                "detail_dialog_images",
+                lambda: tuple(
+                    self.content_service.download_attachment(settings, image, max_bytes=MAX_INLINE_IMAGE_BYTES)
+                    for image in images[: max(1, MAX_ITEM_INLINE_IMAGE_BYTES // MAX_INLINE_IMAGE_BYTES)]
+                ),
+                resources_loaded,
+                lambda _exc: dialog.set_images(attachments, ()) if current() else None,
+            )
+
+        self._submit(
+            "detail_dialog_attachments",
+            lambda: self.content_service.load_attachments(settings, detail.item_id, raw_payload=detail.raw_payload),
+            attachments_loaded,
+            lambda _exc: None,
+        )
 
     def _save_attachment(self, attachment: AttachmentSummary) -> None:
         output_path, _selected_filter = QFileDialog.getSaveFileName(

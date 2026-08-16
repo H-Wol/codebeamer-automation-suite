@@ -654,6 +654,20 @@ class CodebeamerClient:
             lambda: self._get(f"/v3/items/{item_id}", params=params),
         )
 
+    def get_item_relations(self, item_id: int) -> dict:
+        """현재 아이템의 참조와 association을 한 번에 조회한다."""
+        return self._run_rate_limited_request(
+            "get_item_relations",
+            lambda: self._get(f"/v3/items/{int(item_id)}/relations"),
+        )
+
+    def get_item_history(self, item_id: int) -> dict:
+        """현재 아이템의 버전 이력 메타데이터를 조회한다."""
+        return self._run_rate_limited_request(
+            "get_item_history",
+            lambda: self._get(f"/v3/items/{int(item_id)}/history"),
+        )
+
     def search_items(
         self,
         *,

@@ -153,6 +153,20 @@ class CodebeamerClientTrackerQueryTest(unittest.TestCase):
             [("/v3/items/1001", {"baselineId": 7})],
         )
 
+    def test_item_context_uses_current_item_read_endpoints(self) -> None:
+        client = RecordingCodebeamerClient()
+
+        client.get_item_relations(1001)
+        client.get_item_history(1001)
+
+        self.assertEqual(
+            client.get_calls,
+            [
+                ("/v3/items/1001/relations", None),
+                ("/v3/items/1001/history", None),
+            ],
+        )
+
     def test_wiki_render_uses_project_context_without_baseline_parameter(self) -> None:
         client = RecordingCodebeamerClient()
         client.response = {"html": "<p>완료</p>"}

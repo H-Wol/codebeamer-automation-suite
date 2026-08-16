@@ -25,7 +25,8 @@
 - Baseline 전체 query만으로 재구성한 단일 시점 계층과 읽기 전용 상세
 
 쓰기, 상태 전환, 관계·댓글·첨부·이력은 이 서비스의 범위가 아닙니다. Wiki 렌더링, 첨부 목록과
-인증 바이너리 다운로드는 별도 `TrackerContentService`가 담당합니다.
+인증 바이너리 다운로드는 별도 `TrackerContentService`가 담당합니다. 현재 아이템의 관계·참조와 변경 이력은
+`TrackerItemContextService`가 담당하며 상세 창에서 각 탭을 처음 열 때만 조회합니다.
 단건 생성, 선택 필드 수정, 상태 전환과 삭제는 [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)의
 별도 서비스 계약을 사용합니다.
 
@@ -41,9 +42,17 @@
 | Baseline 전체 비교 | `GET /v3/items/query?baselineId={baselineId}` | `TrackerQueryService.compare_tracker_at_sources()` |
 | Baseline 단일 계층 | `GET /v3/items/query?baselineId={baselineId}` | `TrackerQueryService.load_baseline_hierarchy_snapshot()` |
 | 상세 | `GET /v3/items/{itemId}` | `CodebeamerClient.get_item()` |
+| 관계·참조 | `GET /v3/items/{itemId}/relations` | `TrackerItemContextService.load_relations()` |
+| 변경 이력 | `GET /v3/items/{itemId}/history` | `TrackerItemContextService.load_history()` |
 | schema | `GET /v3/trackers/{trackerId}/schema` | `CodebeamerClient.get_tracker_schema()` |
 | Wiki HTML | `POST /v3/projects/{projectId}/wiki2html` | `TrackerContentService.render_wiki()` |
 | 첨부 목록 | 서버 Swagger 확인 필요 | `TrackerContentService.load_attachments()` |
+
+관계 응답은 하위·상위 참조와 들어오는·나가는 association 네 그룹을 그대로 보존합니다. 관계 ID는 서버
+버전에 따라 숫자 또는 문자열일 수 있으므로 문자열 식별자로 유지하고, `itemRevision.id`가 양의 정수로
+확인된 항목만 상세 이동을 허용합니다. 목록을 표시하기 위한 관계별 추가 상세 요청은 하지 않습니다.
+관계·이력 캐시는 연결 설정, item ID와 version으로 구분하며 설정 변경과 명시적 상세 새로고침 때
+무효화합니다. Baseline 상세에서는 현재 상태 endpoint를 호출하지 않습니다.
 
 PTC 문서의 목록 응답은 `page`, `pageSize`, `total`을 포함하지만, 서버 버전과 endpoint에 따라
 요청한 페이지가 실제로 적용되지 않고 전체 결과가 반환될 수 있습니다. 계층 조회는 최대 500개씩 요청하고
