@@ -214,6 +214,25 @@ class CodebeamerClientTrackerQueryTest(unittest.TestCase):
         self.assertEqual([item["id"] for item in result], [28, 29])
         self.assertEqual(len(client.get_calls), 2)
 
+    def test_comments_use_v3_path_and_collect_all_pages(self) -> None:
+        client = PagedBaselineClient(
+            {
+                1: {"page": 1, "pageSize": 1, "total": 2, "comments": [{"id": 1, "comment": "one"}]},
+                2: {"page": 2, "pageSize": 1, "total": 2, "comments": [{"id": "2", "comment": "two"}]},
+            }
+        )
+
+        result = client.get_item_comments(1001)
+
+        self.assertEqual([item["id"] for item in result], [1, "2"])
+        self.assertEqual(
+            client.get_calls,
+            [
+                ("/v3/items/1001/comments", {"page": 1, "pageSize": 500}),
+                ("/v3/items/1001/comments", {"page": 2, "pageSize": 500}),
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

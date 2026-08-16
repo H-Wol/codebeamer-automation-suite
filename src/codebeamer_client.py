@@ -480,6 +480,62 @@ class CodebeamerClient:
             page += 1
         return collected
 
+    def get_item_comments(self, item_id: int) -> list[dict[str, Any]]:
+        """아이템 댓글을 서버 페이지 끝까지 수집한다."""
+        page = 1
+        page_size = 500
+        collected: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        while True:
+            payload = self._run_rate_limited_request(
+                "get_item_comments",
+                lambda current_page=page: self._get(
+                    f"/v3/items/{int(item_id)}/comments",
+                    params={"page": current_page, "pageSize": page_size},
+                ),
+            )
+            references = self._extract_comment_references(payload)
+            added = 0
+            for reference in references:
+                identity = str(reference.get("id") or reference.get("commentId") or "").strip()
+                if not identity or identity in seen_ids:
+                    continue
+                seen_ids.add(identity)
+                collected.append(reference)
+                added += 1
+            if isinstance(payload, list):
+                break
+            raw_total = payload.get("total") if isinstance(payload, dict) else None
+            try:
+                total = int(raw_total) if raw_total is not None else None
+            except (TypeError, ValueError):
+                total = None
+            if total is not None and len(collected) >= max(total, 0):
+                break
+            raw_response_page_size = payload.get("pageSize") if isinstance(payload, dict) else None
+            try:
+                response_page_size = int(raw_response_page_size)
+            except (TypeError, ValueError):
+                response_page_size = page_size
+            if not references or (total is None and len(references) < max(response_page_size, 1)):
+                break
+            if added == 0:
+                raise RuntimeError("서버가 댓글 목록의 다음 페이지를 적용하지 않았습니다.")
+            page += 1
+        return collected
+
+    @staticmethod
+    def _extract_comment_references(payload: Any) -> list[dict[str, Any]]:
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if not isinstance(payload, dict):
+            return []
+        for key in ("comments", "items", "content"):
+            values = payload.get(key)
+            if isinstance(values, list):
+                return [item for item in values if isinstance(item, dict)]
+        return []
+
     @staticmethod
     def _extract_attachment_references(payload: Any) -> list[dict[str, Any]]:
         if isinstance(payload, list):

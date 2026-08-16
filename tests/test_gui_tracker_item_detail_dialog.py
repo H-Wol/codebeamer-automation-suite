@@ -8,6 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from src.gui.tracker_content_models import AttachmentResource
 from src.gui.tracker_content_models import AttachmentSummary
+from src.gui.tracker_comment_models import ItemCommentsSnapshot
 from src.gui.tracker_item_detail_dialog import TrackerItemDetailDialog
 from src.gui.tracker_query_models import TrackerItemDetail
 
@@ -74,6 +75,50 @@ class TrackerItemDetailDialogTest(unittest.TestCase):
         self.assertEqual(dialog.image_combo.count(), 0)
         self.assertFalse(dialog.image_combo.isEnabled())
         self.assertIn("없습니다", dialog.image_status.text())
+
+    def test_comments_tab_loads_lazily_and_renders_reply_attachment(self) -> None:
+        dialog = TrackerItemDetailDialog(self.detail(), description_html="<p>설명</p>")
+        requested = []
+        saved = []
+        dialog.comments_requested.connect(requested.append)
+        dialog.comment_attachment_save_requested.connect(saved.append)
+        dialog.show()
+        dialog.tabs.setCurrentWidget(dialog.comments_tab)
+        self.app.processEvents()
+
+        self.assertEqual(requested, [False])
+        snapshot = ItemCommentsSnapshot.from_raw(
+            [
+                {"id": 1, "createdAt": "2026-01-01", "commentFormat": "Wiki", "comment": "|| A || B ||"},
+                {
+                    "id": 2,
+                    "replyTo": {"id": 1},
+                    "createdAt": "2026-01-02",
+                    "comment": "reply",
+                    "attachments": [{"id": 29, "name": "sample.pdf", "mimeType": "application/pdf"}],
+                },
+            ]
+        )
+        dialog.set_comments(snapshot)
+        self.assertEqual(set(dialog.comment_views), {"1", "2"})
+        self.assertEqual(dialog.comments_layout.count(), 3)
+        buttons = dialog.comments_container.findChildren(type(dialog.comments_retry))
+        save_button = next(button for button in buttons if button.text() == "저장")
+        save_button.click()
+        self.assertEqual(saved[0].attachment_id, 29)
+        dialog.close()
+
+    def test_baseline_comments_tab_never_requests_current_comments(self) -> None:
+        dialog = TrackerItemDetailDialog(self.detail(), description_html="", baseline_id=7)
+        requested = []
+        dialog.comments_requested.connect(requested.append)
+        dialog.show()
+        dialog.tabs.setCurrentWidget(dialog.comments_tab)
+        self.app.processEvents()
+
+        self.assertEqual(requested, [])
+        self.assertIn("현재 댓글을 대신 조회하지 않습니다", dialog.comments_status.text())
+        dialog.close()
 
 
 if __name__ == "__main__":

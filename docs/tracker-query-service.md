@@ -25,7 +25,8 @@
 - Baseline 전체 query만으로 재구성한 단일 시점 계층과 읽기 전용 상세
 
 쓰기, 상태 전환, 관계·댓글·첨부·이력은 이 서비스의 범위가 아닙니다. Wiki 렌더링, 첨부 목록과
-인증 바이너리 다운로드는 별도 `TrackerContentService`가 담당합니다.
+인증 바이너리 다운로드는 별도 `TrackerContentService`가 담당합니다. 현재 아이템 댓글 목록은
+`TrackerCommentService`가 정규화하고 본문·첨부 리소스는 content service를 재사용합니다.
 단건 생성, 선택 필드 수정, 상태 전환과 삭제는 [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)의
 별도 서비스 계약을 사용합니다.
 
@@ -41,9 +42,15 @@
 | Baseline 전체 비교 | `GET /v3/items/query?baselineId={baselineId}` | `TrackerQueryService.compare_tracker_at_sources()` |
 | Baseline 단일 계층 | `GET /v3/items/query?baselineId={baselineId}` | `TrackerQueryService.load_baseline_hierarchy_snapshot()` |
 | 상세 | `GET /v3/items/{itemId}` | `CodebeamerClient.get_item()` |
+| 댓글 | `GET /v3/items/{itemId}/comments` | `TrackerCommentService.load_comments()` |
 | schema | `GET /v3/trackers/{trackerId}/schema` | `CodebeamerClient.get_tracker_schema()` |
 | Wiki HTML | `POST /v3/projects/{projectId}/wiki2html` | `TrackerContentService.render_wiki()` |
 | 첨부 목록 | 서버 Swagger 확인 필요 | `TrackerContentService.load_attachments()` |
+
+댓글은 상세 창의 댓글 탭을 처음 열 때만 현재 item ID와 version 기준으로 조회합니다. `replyTo`가 확인된
+댓글은 부모 아래에 시간순으로 묶고, Wiki 형식 본문은 기존 HTML 정제와 로컬 fallback을 사용합니다.
+이미지 첨부만 기존 10MB/개·50MB/아이템 한도 안에서 자동으로 받고 다른 첨부는 사용자가 저장을 선택할
+때만 받습니다. Baseline에서는 현재 댓글 endpoint를 호출하지 않습니다.
 
 PTC 문서의 목록 응답은 `page`, `pageSize`, `total`을 포함하지만, 서버 버전과 endpoint에 따라
 요청한 페이지가 실제로 적용되지 않고 전체 결과가 반환될 수 있습니다. 계층 조회는 최대 500개씩 요청하고

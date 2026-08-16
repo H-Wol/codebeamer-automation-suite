@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
+from html import escape
 
 try:
     from PySide6.QtCore import Qt
+    from PySide6.QtCore import Signal
     from PySide6.QtGui import QImage
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QAbstractItemView
     from PySide6.QtWidgets import QComboBox
     from PySide6.QtWidgets import QDialog
     from PySide6.QtWidgets import QDialogButtonBox
+    from PySide6.QtWidgets import QFrame
     from PySide6.QtWidgets import QGraphicsPixmapItem
     from PySide6.QtWidgets import QGraphicsScene
     from PySide6.QtWidgets import QGraphicsView
@@ -18,6 +21,7 @@ try:
     from PySide6.QtWidgets import QLabel
     from PySide6.QtWidgets import QPlainTextEdit
     from PySide6.QtWidgets import QPushButton
+    from PySide6.QtWidgets import QScrollArea
     from PySide6.QtWidgets import QSplitter
     from PySide6.QtWidgets import QTabWidget
     from PySide6.QtWidgets import QTableWidget
@@ -29,7 +33,11 @@ except ImportError as exc:  # pragma: no cover
 
 from .tracker_content_models import AttachmentResource
 from .tracker_content_models import AttachmentSummary
+from .tracker_comment_models import ItemComment
+from .tracker_comment_models import ItemCommentsSnapshot
 from .tracker_query_models import TrackerItemDetail
+from .wiki_renderer import codebeamer_wiki_to_html
+from .wiki_renderer import is_explicit_wiki_type
 from .wiki_content_view import WikiContentView
 
 
@@ -96,6 +104,9 @@ class ZoomableImageView(QGraphicsView):
 
 
 class TrackerItemDetailDialog(QDialog):
+    comments_requested = Signal(bool)
+    comment_attachment_save_requested = Signal(object)
+
     def __init__(
         self,
         detail: TrackerItemDetail,
@@ -112,6 +123,11 @@ class TrackerItemDetailDialog(QDialog):
         self.image_resources = {
             resource.resource_key: resource for resource in image_resources
         }
+        self.baseline_id = baseline_id
+        self._comments_state = "idle"
+        self.comment_views: dict[str, WikiContentView] = {}
+        self._comment_image_html: dict[str, str] = {}
+        self._comment_resources: dict[str, dict[str, AttachmentResource]] = {}
         self.setWindowTitle(f"아이템 상세 · #{detail.item_id} {detail.summary.name}")
         self.setMinimumSize(860, 620)
         self.resize(1200, 820)
@@ -141,12 +157,21 @@ class TrackerItemDetailDialog(QDialog):
         context.setObjectName("tracker_detail_breadcrumb")
         layout.addWidget(context)
 
-        tabs = QTabWidget(self)
-        tabs.addTab(self._build_overview_tab(description_html), "개요")
+        self.tabs = QTabWidget(self)
+        self.tabs.addTab(self._build_overview_tab(description_html), "개요")
+        self.comments_tab = self._build_comments_tab()
+        self.tabs.addTab(self.comments_tab, "댓글")
         self.image_tab = self._build_image_tab()
-        tabs.addTab(self.image_tab, "첨부 이미지")
-        tabs.addTab(self._build_raw_tab(), "원본 JSON")
-        layout.addWidget(tabs, 1)
+        self.tabs.addTab(self.image_tab, "첨부 이미지")
+        self.tabs.addTab(self._build_raw_tab(), "원본 JSON")
+        self.tabs.currentChanged.connect(self._comments_tab_changed)
+        layout.addWidget(self.tabs, 1)
+
+        if baseline_id is not None:
+            self.comments_status.setText(
+                "과거 시점의 댓글 조회를 지원하지 않습니다. 현재 댓글을 대신 조회하지 않습니다."
+            )
+            self.comments_retry.setEnabled(False)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
         close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
@@ -154,6 +179,129 @@ class TrackerItemDetailDialog(QDialog):
             close_button.setText("닫기")
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _build_comments_tab(self) -> QWidget:
+        tab = QWidget(self)
+        layout = QVBoxLayout(tab)
+        toolbar = QHBoxLayout()
+        self.comments_status = QLabel("탭을 열면 댓글을 조회합니다.", tab)
+        self.comments_status.setWordWrap(True)
+        toolbar.addWidget(self.comments_status, 1)
+        self.comments_retry = QPushButton("다시 시도", tab)
+        self.comments_retry.hide()
+        self.comments_retry.clicked.connect(lambda: self.comments_requested.emit(True))
+        toolbar.addWidget(self.comments_retry)
+        layout.addLayout(toolbar)
+        self.comments_scroll = QScrollArea(tab)
+        self.comments_scroll.setWidgetResizable(True)
+        self.comments_container = QWidget(self.comments_scroll)
+        self.comments_layout = QVBoxLayout(self.comments_container)
+        self.comments_layout.addStretch(1)
+        self.comments_scroll.setWidget(self.comments_container)
+        layout.addWidget(self.comments_scroll, 1)
+        return tab
+
+    def _comments_tab_changed(self, _index: int) -> None:
+        if self.baseline_id is not None:
+            return
+        if self.tabs.currentWidget() is self.comments_tab and self._comments_state == "idle":
+            self.set_comments_loading()
+            self.comments_requested.emit(False)
+
+    def set_comments_loading(self) -> None:
+        self._comments_state = "loading"
+        self.comments_status.setText("댓글을 불러오는 중입니다.")
+        self.comments_retry.hide()
+
+    def set_comments_error(self, message: str) -> None:
+        self._comments_state = "error"
+        self.comments_status.setText(str(message))
+        self.comments_retry.show()
+
+    @staticmethod
+    def _comment_depth(comment: ItemComment, by_id: dict[str, ItemComment]) -> int:
+        depth = 0
+        parent_id = comment.reply_to_id
+        visited: set[str] = set()
+        while parent_id and parent_id in by_id and parent_id not in visited and depth < 4:
+            visited.add(parent_id)
+            depth += 1
+            parent_id = by_id[parent_id].reply_to_id
+        return depth
+
+    @staticmethod
+    def _comment_attachment_is_image(attachment: AttachmentSummary) -> bool:
+        mime = str(attachment.mime_type or "").split(";", 1)[0].strip().casefold()
+        if mime:
+            return mime.startswith("image/")
+        return attachment.name.casefold().endswith((".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"))
+
+    def set_comments(self, snapshot: ItemCommentsSnapshot) -> None:
+        self._comments_state = "loaded"
+        while self.comments_layout.count() > 1:
+            item = self.comments_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.comment_views.clear()
+        self._comment_image_html.clear()
+        self._comment_resources.clear()
+        by_id = {comment.comment_id: comment for comment in snapshot.comments if comment.comment_id}
+        for comment in snapshot.comments:
+            frame = QFrame(self.comments_container)
+            frame.setObjectName("tracker_comment_card")
+            frame_layout = QVBoxLayout(frame)
+            depth = self._comment_depth(comment, by_id)
+            frame_layout.setContentsMargins(12 + depth * 24, 10, 12, 10)
+            meta = QLabel(
+                " · ".join(value for value in (comment.author or "작성자 없음", comment.created_at or "시각 없음", f"답글 → {comment.reply_to_id}" if comment.reply_to_id else "") if value),
+                frame,
+            )
+            meta.setObjectName("tracker_comment_meta")
+            frame_layout.addWidget(meta)
+            view = WikiContentView(frame)
+            source_html = (
+                codebeamer_wiki_to_html(comment.body)
+                if is_explicit_wiki_type(comment.format_name)
+                else "<p>" + escape(comment.body).replace("\n", "<br>") + "</p>"
+            )
+            image_blocks = []
+            for attachment in comment.attachments:
+                if self._comment_attachment_is_image(attachment):
+                    resource_key = f"comment-{comment.comment_id}-attachment-{attachment.attachment_id}"
+                    image_blocks.append(
+                        f'<p><b>{escape(attachment.name)}</b><br><img src="cb-attachment://{resource_key}" alt="{escape(attachment.name)}"></p>'
+                    )
+                else:
+                    row = QHBoxLayout()
+                    row.addWidget(QLabel(f"첨부: {attachment.name}", frame), 1)
+                    save = QPushButton("저장", frame)
+                    save.clicked.connect(lambda _checked=False, value=attachment: self.comment_attachment_save_requested.emit(value))
+                    row.addWidget(save)
+                    frame_layout.addLayout(row)
+            view.setHtml(source_html + "".join(image_blocks))
+            view.setMinimumHeight(100)
+            frame_layout.insertWidget(1, view)
+            self.comment_views[comment.comment_id] = view
+            self._comment_image_html[comment.comment_id] = "".join(image_blocks)
+            self._comment_resources[comment.comment_id] = {}
+            self.comments_layout.insertWidget(self.comments_layout.count() - 1, frame)
+        self.comments_status.setText(f"댓글 {len(snapshot.comments)}개" if snapshot.comments else "댓글이 없습니다.")
+        self.comments_retry.hide()
+
+    def set_comment_html(self, comment_id: str, html: str) -> None:
+        view = self.comment_views.get(str(comment_id))
+        if view is not None:
+            view.setHtml(str(html or "") + self._comment_image_html.get(str(comment_id), ""))
+            for resource in self._comment_resources.get(str(comment_id), {}).values():
+                view.add_attachment_resource(resource)
+
+    def add_comment_resource(self, comment_id: str, resource: AttachmentResource) -> bool:
+        view = self.comment_views.get(str(comment_id))
+        if view is None or not view.add_attachment_resource(resource):
+            return False
+        self._comment_resources.setdefault(str(comment_id), {})[resource.resource_key] = resource
+        return True
 
     def _build_overview_tab(self, description_html: str) -> QWidget:
         tab = QWidget(self)
