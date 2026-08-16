@@ -3,7 +3,7 @@ from __future__ import annotations
 from tests.gui_service_fixtures import *
 
 class GuiLookupPipelineServiceTest(unittest.TestCase):
-    def test_prepare_mapping_context_uses_tracker_configuration_for_query_defaults(self) -> None:
+    def test_prepare_mapping_context_uses_id_extraction_for_tracker_item_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             TrackerItemQueryFakeClient.all_search_calls = []
             path = Path(tmp_dir) / "sample.xlsx"
@@ -11,7 +11,7 @@ class GuiLookupPipelineServiceTest(unittest.TestCase):
             sheet = workbook.active
             sheet.title = "Main"
             sheet.append(["Summary", "연관 요구사항"])
-            sheet.append(["REQ-001", "REQ-100"])
+            sheet.append(["REQ-001", "[REQ:100]"])
             workbook.save(path)
             workbook.close()
 
@@ -43,15 +43,7 @@ class GuiLookupPipelineServiceTest(unittest.TestCase):
 
             self.assertEqual(
                 mapping_context.selected_tracker_item_settings["연관 요구사항"]["mode"],
-                "query",
-            )
-            self.assertEqual(
-                mapping_context.selected_tracker_item_settings["연관 요구사항"]["query_match_strategy"],
-                "best",
-            )
-            self.assertEqual(
-                mapping_context.selected_tracker_item_settings["연관 요구사항"]["source_tracker_ids"],
-                [13526611],
+                "regex",
             )
 
     def test_prepare_mapping_context_uses_tracker_configuration_reference_id_when_name_differs(self) -> None:
@@ -61,7 +53,7 @@ class GuiLookupPipelineServiceTest(unittest.TestCase):
             sheet = workbook.active
             sheet.title = "Main"
             sheet.append(["Summary", "SUDS 링크"])
-            sheet.append(["REQ-001", "REQ-100"])
+            sheet.append(["REQ-001", "[REQ:100]"])
             workbook.save(path)
             workbook.close()
 
@@ -93,15 +85,7 @@ class GuiLookupPipelineServiceTest(unittest.TestCase):
 
             self.assertEqual(
                 mapping_context.selected_tracker_item_settings["SUDS 링크"]["mode"],
-                "query",
-            )
-            self.assertEqual(
-                mapping_context.selected_tracker_item_settings["SUDS 링크"]["query_match_strategy"],
-                "best",
-            )
-            self.assertEqual(
-                mapping_context.selected_tracker_item_settings["SUDS 링크"]["source_tracker_ids"],
-                [13526611],
+                "regex",
             )
             tracker_field_row = mapping_context.schema_df[
                 mapping_context.schema_df["field_name"] == "SUDS 링크"
@@ -116,7 +100,7 @@ class GuiLookupPipelineServiceTest(unittest.TestCase):
             sheet = workbook.active
             sheet.title = "Main"
             sheet.append(["Summary", "연관 요구사항"])
-            sheet.append(["REQ-001", "REQ-100"])
+            sheet.append(["REQ-001", "[REQ:100]"])
             workbook.save(path)
             workbook.close()
 
@@ -150,14 +134,6 @@ class GuiLookupPipelineServiceTest(unittest.TestCase):
                 mapping_context.selected_tracker_item_settings["연관 요구사항"]["mode"],
                 "regex",
             )
-            self.assertEqual(
-                mapping_context.selected_tracker_item_settings["연관 요구사항"]["query_match_strategy"],
-                "best",
-            )
-            self.assertEqual(
-                mapping_context.selected_tracker_item_settings["연관 요구사항"]["source_tracker_ids"],
-                [],
-            )
             tracker_item_candidate = next(
                 candidate
                 for candidate in mapping_context.tracker_item_field_candidates
@@ -165,7 +141,7 @@ class GuiLookupPipelineServiceTest(unittest.TestCase):
             )
             self.assertEqual(tracker_item_candidate.query_status, "unsupported")
 
-    def test_validate_mapping_uses_query_mode_for_tracker_item_choice_field(self) -> None:
+    def test_validate_mapping_uses_id_extraction_without_tracker_item_query(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             TrackerItemQueryFakeClient.all_search_calls = []
             path = Path(tmp_dir) / "sample.xlsx"
@@ -173,7 +149,7 @@ class GuiLookupPipelineServiceTest(unittest.TestCase):
             sheet = workbook.active
             sheet.title = "Main"
             sheet.append(["Summary", "연관 요구사항"])
-            sheet.append(["REQ-001", "REQ-100"])
+            sheet.append(["REQ-001", "[REQ:100]"])
             workbook.save(path)
             workbook.close()
 
@@ -217,7 +193,7 @@ class GuiLookupPipelineServiceTest(unittest.TestCase):
             )
             self.assertEqual(
                 TrackerItemQueryFakeClient.all_search_calls,
-                [(13526611, "REQ-100")],
+                [],
             )
 
     def test_prepare_mapping_context_includes_user_reference_field_in_default_value_candidates(self) -> None:
@@ -394,69 +370,3 @@ class GuiLookupPipelineServiceTest(unittest.TestCase):
             }
             self.assertIn("연관 요구사항", default_candidates)
             self.assertTrue(default_candidates["연관 요구사항"].allows_custom_value)
-
-    def test_prime_tracker_item_lookup_cache_deduplicates_values_across_files(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            TrackerItemQueryFakeClient.all_search_calls = []
-            path_a = Path(tmp_dir) / "a.xlsx"
-            workbook = Workbook()
-            sheet = workbook.active
-            sheet.title = "Main"
-            sheet.append(["Summary", "연관 요구사항"])
-            sheet.append(["REQ-001", "REQ-100"])
-            workbook.save(path_a)
-            workbook.close()
-
-            path_b = Path(tmp_dir) / "b.xlsx"
-            workbook = Workbook()
-            sheet = workbook.active
-            sheet.title = "Main"
-            sheet.append(["Summary", "연관 요구사항"])
-            sheet.append(["REQ-002", "REQ-100"])
-            sheet.append(["REQ-003", "REQ-200"])
-            workbook.save(path_b)
-            workbook.close()
-
-            service = GuiUploadPipelineService(
-                client_factory=TrackerItemQueryFakeClient,
-                reader_cls=FakeExcelReader,
-            )
-            settings = GuiSettings(
-                base_url="https://example.com/cb",
-                username="user",
-                password="secret",
-                default_project_id="10",
-                default_tracker_id="1000",
-                excel_header_row=1,
-                summary_column="Summary",
-                excel_sheet_name="Main",
-            )
-
-            mapping_context = service.prepare_mapping_context(
-                settings,
-                {
-                    "file_path": str(path_a),
-                    "file_paths": [str(path_a), str(path_b)],
-                    "preview_file_path": str(path_a),
-                    "sheet_name": "Main",
-                    "header_row": 1,
-                    "summary_column": "Summary",
-                },
-            )
-            service.validate_mapping(
-                mapping_context,
-                {"Summary": "Summary", "연관 요구사항": "연관 요구사항"},
-                selected_tracker_item_settings=mapping_context.selected_tracker_item_settings,
-            )
-
-            service._prime_tracker_item_lookup_cache_for_batch(settings, mapping_context)
-
-            self.assertEqual(
-                TrackerItemQueryFakeClient.all_search_calls,
-                [(13526611, "REQ-100"), (13526611, "REQ-200")],
-            )
-            self.assertEqual(
-                sorted(mapping_context.tracker_item_lookup_cache.keys()),
-                [("연관 요구사항", "req-100"), ("연관 요구사항", "req-200")],
-            )
-

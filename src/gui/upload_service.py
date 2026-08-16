@@ -12,7 +12,6 @@ from src.hierarchy_processor import HierarchyProcessor
 from src.mapping_service import MappingService
 from src.models import OptionMapKind
 from src.models import PayloadStatus
-from src.models import TrackerItemResolutionMode
 from src.upload_pipeline import load_tracker_schema_df
 from src.upload_pipeline import prepare_upload_dataframe
 from src.upload_pipeline import run_validation_pipeline
@@ -555,6 +554,10 @@ class GuiUploadPipelineService:
             selected_tracker_item_settings=selected_tracker_item_settings,
             tracker_item_field_candidates=tracker_item_field_candidates,
             tracker_item_lookup_cache={},
+            user_lookup_cache={},
+            member_lookup_cache={},
+            group_lookup_cache={},
+            tracker_role_cache={},
             list_cols=list_cols,
             file_paths=file_paths,
             representative_file_path=representative_file_path,
@@ -726,20 +729,6 @@ class GuiUploadPipelineService:
         )
 
     @staticmethod
-    def _tracker_item_query_mapping(mapping_context: MappingContext) -> dict[str, str]:
-        return BatchUploadService._tracker_item_query_mapping(mapping_context)
-
-    def _prime_tracker_item_lookup_cache_for_batch(
-        self,
-        settings,
-        mapping_context: MappingContext,
-    ) -> None:
-        self.batch_upload._prime_tracker_item_lookup_cache_for_batch(
-            settings,
-            mapping_context,
-        )
-
-    @staticmethod
     def _batch_output_dir(output_dir: str, file_path: str, index: int) -> str:
         return BatchUploadService._batch_output_dir(output_dir, file_path, index)
 
@@ -816,6 +805,24 @@ class GuiUploadPipelineService:
             dry_run=dry_run,
             continue_on_error=continue_on_error,
             output_dir=output_dir,
+            event_callback=event_callback,
+            cancel_requested=cancel_requested,
+            pause_requested=pause_requested,
+        )
+
+    def run_failed_upload_retry(
+        self,
+        retry_context,
+        *,
+        continue_on_error: bool,
+        event_callback=None,
+        cancel_requested=None,
+        pause_requested=None,
+    ) -> dict[str, Any]:
+        """현재 세션에 캐시된 실패/미해결 항목만 다시 실행한다."""
+        return self.batch_upload.run_failed_upload_retry(
+            retry_context,
+            continue_on_error=continue_on_error,
             event_callback=event_callback,
             cancel_requested=cancel_requested,
             pause_requested=pause_requested,

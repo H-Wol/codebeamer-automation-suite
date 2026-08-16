@@ -2,7 +2,7 @@
 
 Excel 기반 계층형 데이터를 Codebeamer Tracker Item으로 변환하고 업로드하는 자동화 도구입니다.
 
-현재 기본 실행 경로는 `cli_main.py`이며, GUI 엔트리 포인트는 `gui_main.py` 입니다.
+현재 기본 실행 경로는 `gui_main.py`이며, `cli_main.py`는 유지보수와 보조 실행에 사용합니다.
 예전 `v2` 경로의 개선 사항은 원본 모듈에 반영되어 있고, GUI도 같은 업로드 파이프라인을 재사용합니다.
 
 ## 현재 지원하는 핵심 기능
@@ -14,20 +14,32 @@ Excel 기반 계층형 데이터를 Codebeamer Tracker Item으로 변환하고 �
 - 정적 option 값을 Codebeamer reference payload로 변환
 - `UserChoiceField`, `UserReference` 필드에 대해 사용자 이름 우선 lookup 후 reference로 변환
 - `MemberField` 는 `USER/ROLE/GROUP` 타입별 후보를 이름으로 찾아 mixed reference로 변환
-- `TrackerItemChoiceField` 및 builtin `subjects` 필드에 대해 정규식 ID 추출 또는 configuration 기반 tracker item query lookup 지원
-- 사용자 lookup 결과를 프로젝트 단위 임시 캐시에 저장해 반복 요청 최소화
+- `TrackerItemChoiceField` 및 builtin `subjects` 필드에서 정규식으로 ID를 추출해 참조값으로 사용
+- 사용자·Member lookup 결과를 검증부터 다중 파일 업로드까지 이어지는 공용 캐시에 저장해 반복 요청 최소화
 - `TableFieldName.ColumnName` 형식 헤더를 이용한 `TableField` 조립
 - row별 payload cache 생성과 preview/upload 재사용
 - parent-first 순서 보장 업로드
 - 실행 결과와 중간 산출물 저장
-- PySide6 기반 단계형 GUI
-- GUI 설정 저장 및 암호화된 비밀번호 저장
-- GUI 전체 설정 저장/불러오기와 테마 선택
-- GUI 테스트 모드용 offline schema/config snapshot 로딩
+- `트래커 작업공간`, `배치 작업`, `실행 기록`, `설정`을 전환하는 PySide6 앱 셸
+- 데이터 영역을 넓게 쓸 수 있는 접이식 좌측 앱 메뉴와 실행 간 접힘 상태 복원
+- `배치 작업` 안에서 기존 9단계 create/update/upsert 마법사 보존
+- 이름이 있는 다중 연결 프로필과 활성 프로필 하나를 관리하는 전용 설정 센터
+- 비밀번호의 로컬 암호화 저장을 기본으로 하고 OS 자격증명 저장소 또는 미저장 방식 선택
+- 명시적 검증·저장·적용, credential 제외 설정 가져오기/내보내기와 legacy 설정 migration
+- 전역 설정 페이지에서 테마와 테스트 모드용 offline schema/config/조회 데이터 snapshot 관리
+- `설정 > 개발자`에서 여는 세션 진단 로그·안전한 진단 ZIP과 최근 500개 호출의 API 상태·지연 통계
+- 현재 tracker 범위를 강제하는 CbQL, 계층 전체 수집, 검색 pagination과 상세 정규화 조회 서비스
+- 프로젝트·트래커 선택, 전체 스크롤 확장형 트리, tracker 범위 검색과 ID 바로 열기를 제공하는 작업공간
+- 간편 검색과 별도 큰 창에서 설정하는 상세 조건 검색, 묶음 안의 모든 조건 충족·여러 묶음 중 하나 이상 충족 및 조건별 제외 방식 지원
+- 전용 Baseline 비교 탭에서 현재 트래커 계층을 탐색하고, 선택한 단일 아이템의 표준·메타·사용자 정의 필드를 `기준`과 `비교` 시점으로 상세 비교하며 변경 색상·열 정렬·사용자 친화적 값 표시와 탭 이동 중 선택 및 결과 유지
+- 기본 계층 탭에서 현재 상태 또는 Baseline을 선택하고, Baseline 전체 query의 `parent`·`children`·`ordinal`만으로 과거 계층과 읽기 전용 상세 조회
+- 페이지를 넘는 선택과 검색 결과 전체 선택, 상태·일반 필드·TableField의 청크 단위 일괄 수정 및 실패 재시도
+- schema 기반 최상위·하위 단건 생성, TableField 행 편집을 포함한 선택 필드 부분 수정, 단건 상태 전환, version 충돌 확인과 ID 재입력 삭제
+- 단건 쓰기와 배치 최종 결과를 최근 500건까지 보관하는 필터형 통합 실행 기록
 - GUI에서 프로젝트/트래커 조회, 다중 Excel 파일 선택, 시트/미리보기 조회
 - GUI에서 상단 데이터 생성 여부, 파일명 정규식 파싱, 루트 필드 매핑 설정
-- GUI에서 컬럼 매핑, 기본값 설정, tracker item query/regex 전략 선택
-- GUI에서 파일/검증/업로드 단계의 백그라운드 실행과 로딩 오버레이 표시
+- GUI에서 컬럼 매핑, 기본값 설정, Tracker Item ID 추출 정규식 설정
+- GUI에서 API·파일·검증 작업을 백그라운드로 실행하고 중복 작업을 막는 전역 spinner 오버레이 표시
 - GUI에서 단계별 `다음` 버튼 활성화 조건과 검증 차단 정책 적용
 - GUI 검증/결과 화면에서 내부 생성 컬럼 숨김
 - GUI 업로드 화면에서 총 건수, 항목별 로그, 시작/완료 시각, 소요 시간 표시
@@ -37,21 +49,22 @@ Excel 기반 계층형 데이터를 Codebeamer Tracker Item으로 변환하고 �
 ## 권장 실행 명령
 
 ```bash
-py -3 cli_main.py
+py -3 gui_main.py
 ```
 
-GUI 실행:
+CLI 보조 실행:
 
 ```bash
-py -3 gui_main.py
+py -3 cli_main.py
 ```
 
 ## GUI 오프라인 예시 데이터
 
-GUI `테스트 모드`를 바로 눌러볼 수 있는 샘플 세트는 `data/gui-offline-sample/` 에 있습니다.
+GUI의 최상위 `설정 > 테스트 모드`에서 사용할 수 있는 샘플 세트는 `data/gui-offline-sample/` 에 있습니다.
 
 - `offline_schema.json`
 - `offline_tracker_configuration.json`
+- `offline_tracker_items.json`
 - `files/SAMPLE_MODULE_A_TC_001.xlsx`
 - `files/SAMPLE_MODULE_B_TC_002.xlsx`
 - `files/SAMPLE_LOOKUP_TC_003.xlsx`
@@ -60,21 +73,71 @@ GUI `테스트 모드`를 바로 눌러볼 수 있는 샘플 세트는 `data/gui
 
 ## GUI 구현 현황
 
-현재 GUI는 아래 단계를 실제 업로드 흐름으로 연결합니다.
+GUI를 실행하면 최상위 앱 셸이 열리고 `트래커 작업공간`, `배치 작업`, `실행 기록`, `설정`을 전환할 수 있습니다.
+좌측 앱 메뉴는 상단 화살표로 접거나 펼칠 수 있습니다. 접힌 상태에서는 `조회`, `배치`, `기록`, `설정`의 짧은 이름과 전체 이름 툴팁을 제공하며, 상태는 다음 실행에도 복원됩니다.
+현재 실제 업로드 흐름은 `배치 작업` 안에서 아래 9단계 마법사로 이어집니다.
 
-- 설정 화면
-  - Base URL, 계정, 비밀번호 암호화 저장
-  - `케피코` / `이글루` 테마 선택
-  - 테스트 모드 토글과 snapshot 경로 지정
-  - `추가 설정` 접기
-  - 전체 설정 저장 / 불러오기
+- 최상위 설정 화면
+  - `연결`, `화면`, `네트워크·저장소`, `테스트 모드`, `개발자`, `데이터 관리` 영역 전환
+  - 여러 연결 프로필과 활성 프로필 하나 관리
+  - 연결 또는 snapshot 검증 후 명시적으로 저장·적용
+  - 로컬 암호화, OS 자격증명 저장소, 미저장 중 비밀번호 저장 방식 선택
+  - 전역 설정 가져오기/내보내기에서 credential 제외
+  - 테스트 모드의 익명 `조회 데이터 Snapshot` 선택과 검증
+  - 개발자 영역에서 개발자 도구 열기, API 모니터 사용 여부와 느린 요청 기준 관리
+- 개발자 도구
+  - 별도 최대화 가능 창에서 세션 진단 로그와 기존 API 모니터를 탭으로 제공
+  - 원본 비덮어쓰기 Excel 검사·값 전용 변환, 현재 검증 payload, schema 지원·변경 비교와 cache 개수 관리
+  - endpoint를 고정하고 현재 tracker 범위를 강제하는 읽기 전용 `/v3/items/query` 도구
+  - 진단 로그는 작업·오류의 안전한 메타데이터를 최대 2,000건까지 메모리에 보관하고 진단 ID, 필터, 일시정지와 ZIP 내보내기 지원
+  - API 탭에서 요청 종류, method, 정규화 경로, status code, 소요 시간, 재시도와 진단 ID 표시
+  - 최근 최대 500개 HTTP 시도 기준 성공률, 오류, 평균·P50·P95·최대 지연, 최근 1분 요청과 429 통계
+  - 검색·method·status·결과·느린 요청 필터, 화면 일시정지, 자동 스크롤, 선택 행 복사와 기록 지우기
+  - 요청·응답 본문, header, query 값, host, 실제 ID와 원본 오류 문자열은 수집·저장하지 않음
+- 트래커 작업공간
+  - 프로젝트·트래커, 최상위 아이템 전체와 직접 하위 아이템 전체를 ID·요약 중심 계층으로 조회
+  - 서버 페이지를 백그라운드에서 끝까지 합쳐 하나의 스크롤 트리로 표시
+  - 노드를 펼칠 때 직접 하위 전체를 조회하고 화면 세션 동안 결과 캐시
+  - 트래커 전체 `items` query와 최상위 목록을 일괄 수집해 단건 조회 없이 부모·자식 계층을 재구성하고, 고정 계층 열과 선택한 schema 필드를 Excel로 내보내기
+  - 계층 Excel에서 Summary 들여쓰기·상위 ID·계층 단계·행 그룹과 TableField 행·열 순서를 보존하고, 불완전한 계층 응답은 누락된 파일로 저장하지 않고 차단
+  - 트래커 메타데이터와 schema를 연결·트래커 단위로 재사용하고 설정 적용 또는 명시적 새로고침 시 초기화
+  - 선택한 tracker 안에서 ID/요약·상태·담당자 간편 검색
+  - 전역 아이템 ID 바로 열기와 프로젝트·트래커·조상 경로 전환
+  - 선택 아이템 설명, builtin/custom field와 민감값이 마스킹된 원본 JSON 조회
+  - 상세 ID 배지를 클릭해 숫자 ID만 클립보드에 복사
+  - 명시적 Wiki 형식 설명·필드 rich text 표시와 원문 전환
+  - `TableField` 행·열 전용 보기와 Wiki로 선언된 셀만 선택적 렌더링
+  - 현재 상태와 Baseline을 `/v3/items/query` 전체 pagination으로 명시적으로 조회하는 전용 비교 탭
+  - 현재 계층과 신규·삭제·변경·동일 전체 결과를 함께 제공하고, 결과 유형·ID/이름·단일 변경 필드를 AND 조건으로 캐시에서 필터링
+  - tracker schema의 필드 이름·유형·TableField 열 정의를 우선 사용하되 응답 이름과 안전한 사용자 정의 필드 이름으로 보완하며 내부 `custom:<id>` 키는 노출하지 않음
+  - 현재 필터에 표시된 아이템만 대상으로 기준·비교 2단 병합 헤더, 일반 list 줄바꿈과 TableField 다중 행·열 구조를 보존하는 Excel 내보내기
+  - Excel 셀 한도를 넘는 긴 값은 비교표에 미리보기 링크를 두고 `긴 값 전체보기` 시트에 기준·비교 원문을 안전하게 분할
+  - 검색 페이지 메타데이터와 늦게 끝난 백그라운드 요청을 구분하는 request token 적용
+  - 선택 tracker schema 기반 최상위 또는 선택 아이템 하위 단건 생성과 TableField 행 입력
+  - 생성 필수 필드 자동 포함, 선택 필드 명시 선택과 생성 직후 트리·상세 전환
+  - 새 아이템 입력 창 전체 화면과 미지원 필드 숨김, 필수 미지원 필드 상단 차단 안내
+  - schema 유형별 입력 widget과 변경할 필드 명시 선택
+  - TableField 행 추가·복제·삭제·순서 변경, Wiki 미리보기, 숨김 셀 보존과 전체 화면 편집
+  - 수정 탭의 미저장 입력 상태를 유지하는 별도 창·전체 화면 전환
+  - 전체 리소스 교체가 아닌 `fieldValues` 부분 수정과 저장 전 version 재확인
+  - 일반 필드 저장과 분리된 상태 전환, ID 재입력 확인이 필요한 삭제
+  - 테스트 모드에서는 편집 구조만 표시하고 생성·수정·상태 전환·삭제 이중 차단
+- 배치 설정 화면
+  - 작업 모드, Header Row, Summary Column, Sheet Name 관리
+  - 현재 연결 프로필(또는 테스트 모드)·프로젝트·트래커별로 이름 있는 전체 업로드 설정을 저장·불러오기·이름 변경·기본 지정·삭제
+  - 파일 옵션, 상단 구조, 매핑, 기본값과 Tracker Item 처리 설정을 함께 보존
+  - 이름 있는 설정에는 연결 정보, credential, 전역 경로와 최근 Excel 파일 경로를 저장하지 않음
+  - 현재 전역 실행 환경 확인과 `전역 설정 열기`
 - 프로젝트 화면
   - 온라인 모드 프로젝트/트래커 조회
   - 테스트 모드 snapshot 기반 프로젝트/트래커 자동 채움
 - 파일 화면
   - 여러 Excel 파일 동시 선택
   - 대표 파일 미리보기 선택
-  - `데이터 불러오기` 버튼으로만 시트/헤더/미리보기 재생성
+  - 파일 선택 시 대표 파일의 시트 정보만 먼저 조회
+  - 선택 시트의 제한 행 미리보기 후, 명시적인 `전체 데이터 불러오기`에서만 모든 파일 로드
+  - Summary 컬럼은 제한 행 미리보기에서 확인된 실제 헤더 중 하나만 선택
+  - 경로·크기·수정 시각과 파일 옵션이 같으면 전체 로드 데이터를 재사용하고 파일 변경 시 무효화
   - Summary 컬럼 자동 제안
 - 상단 데이터 화면
   - 파일별 상단 부모 데이터 생성 여부 선택
@@ -84,12 +147,12 @@ GUI `테스트 모드`를 바로 눌러볼 수 있는 샘플 세트는 `data/gui
 - 매핑 화면
   - `id`, `parent`, 내부 생성 컬럼 제외
   - 기본값 설정
-  - `TrackerItemChoiceField` 별 regex/query 방식 선택
-  - query 다건 결과 처리 전략 선택
+  - `TrackerItemChoiceField` 별 ID 추출 정규식 설정
 - 검증 화면
   - 차단 이슈와 안내 이슈 분리
   - 다중 파일일 때 선택 파일 수와 전체 예상 항목 수 표시
   - 대표 파일 검증 결과 표시
+  - 사용자용 검증 결과 Excel과 현재 트래커 스키마 기반 업로드 템플릿 내보내기
 - 업로드 화면
   - Dry Run / continue on error
   - 총 건수, 현재 항목, 성공/실패/재시도 수 표시
@@ -98,23 +161,48 @@ GUI `테스트 모드`를 바로 눌러볼 수 있는 샘플 세트는 `data/gui
 - 결과 화면
   - 성공 / 실패 / 미해결 탭
   - 내부 생성 컬럼 숨김
+  - 원본 payload·응답·경로를 제외한 실패/미해결 보고서 Excel 내보내기
+  - 현재 세션의 payload·lookup cache와 이미 생성된 상위 항목 ID를 재사용하는 실패 항목만 재시도
+  - 오류 시 중단하거나 사용자가 취소해 실행하지 않은 준비 완료 행을 미해결로 보존하고 세션 재시도 대상으로 유지
+  - 로컬 상태 파일 저장이 실패해도 서버 처리 결과와 세션 재시도 정보는 유지하고 실시간 로그에 안전한 경고 표시
 
 ## 최근 GUI 보완 사항
 
-- 연결 테스트, 프로젝트/트래커 조회, Excel 미리보기, 매핑 준비, 검증은 `BackgroundTask` 기반으로 실행하고 작업 중 로딩 오버레이와 대기 커서를 표시합니다.
+- 최상위 앱 셸을 추가하고 기존 9단계 마법사를 `배치 작업` 컨테이너에 그대로 보존했습니다.
+- 최상위 좌측 앱 메뉴를 접고 펼칠 수 있으며, 접힘 상태를 전역 설정에 저장하도록 구성했습니다.
+- 전용 설정 센터를 구현하고 전역 연결·테마·재시도·출력·테스트 설정을 배치 preset에서 분리했습니다.
+- 트래커 조회용 query/detail/page 모델과 최상위·하위·ID 경로 서비스를 추가하고, 두 tracker 익명 fixture로 범위 분리를 검증했습니다.
+- `트래커 작업공간`에 프로젝트·트래커 선택, 페이지 구분 없는 전체 스크롤 계층, tracker 범위 검색, ID 직접 접근과 상세 화면을 연결했습니다.
+- 계층 탭에서 일반 필드는 기본 선택하고 TableField는 필요할 때 선택해 트래커 전체를 Excel로 내보낼 수 있습니다. 전체 query와 최상위 목록만 사용하며 단건 item/children 호출로 전환하지 않습니다.
+- Wiki로 명시된 설명과 custom field만 안전한 rich text로 표시하고 `TableField` 행·열 전용 보기를 연결했습니다.
+- 상세 `수정` 탭에 schema 기반 광범위 필드 편집, 단건 상태 전환과 안전한 삭제를 연결했습니다.
+- `TableField` 중첩 행 구조를 보존하는 전용 편집기를 단건 생성·수정 화면에서 공유하고 확대 작업 흐름을 추가했습니다.
+- Baseline 비교는 사용자가 전체 비교 실행을 확인한 경우에만 트래커 전체를 query로 조회해 결과를 캐시합니다. 결과 유형·ID/이름·변경 필드 필터는 캐시에서 AND 조건으로 동작하고 신규·삭제 아이템도 해당 필드가 있으면 포함합니다. 상세는 선택 아이템의 전체 필드를 유지하며 Excel은 현재 표시 결과만 내보냅니다. 셀 길이 또는 줄바꿈 한도를 넘는 값은 `긴 값 전체보기` 시트에 분할하므로 원문이 잘리지 않습니다.
+- Baseline 단일 계층은 기본 계층 탭의 `조회 기준`에서 Baseline을 고른 뒤 명시적으로 불러옵니다. 과거 시점 query를 모든 페이지에서 수집해 메모리 트리로 구성하며 현재 root/children API를 섞지 않습니다. Baseline 상세는 같은 `baselineId`로 조회하고 생성·수정·삭제·상태 전환·일괄 수정은 차단합니다.
+- `실행 기록`에 단건 쓰기와 배치 작업의 최종 결과를 최근 500건까지 안전하게 보관하고 필터링하는 화면을 연결했습니다.
+- 검색 결과의 선택 상태를 페이지 간 유지하고, 전체 검색 결과를 제한 없이 수집해 네이티브 Bulk fields API로 수정하는 흐름을 추가했습니다. 실행 값은 저장하지 않고 실패·롤백 ID와 설정만 보관해 재시도 시 값을 다시 입력합니다.
+- 개발자용 API 모니터를 추가해 모든 공통 HTTP 호출과 429 재시도 시도를 메타데이터만으로 실시간 집계합니다.
+- 진단 로그와 API 모니터를 하나의 개발자 도구 창으로 묶고, 작업·오류 진단 ID와 민감정보를 제외한 원자적 진단 ZIP 내보내기를 추가했습니다.
+- 저장된 연결 또는 snapshot은 검증 signature가 현재 값과 일치할 때만 앱 시작 시 활성 환경으로 복원합니다.
+- 연결 테스트, 프로젝트/트래커/아이템 조회·검색·쓰기, Excel 미리보기, 매핑 준비와 검증은 `BackgroundTask` 기반으로 실행합니다. API 응답을 기다리는 동안에는 전역 spinner 오버레이가 앱 입력을 차단하며, 중첩 작업이 모두 끝난 뒤 해제됩니다.
 - 설정, 프로젝트, 파일, 검증 단계는 필수 입력이나 선행 작업이 완료되기 전까지 `다음` 버튼을 비활성화합니다.
-- 파일 단계는 값이 바뀔 때마다 Excel 을 다시 열지 않고, 사용자가 `데이터 불러오기`를 눌렀을 때만 미리보기를 갱신합니다.
-- 다중 파일 업로드 시 tracker item query 대상 값은 전체 파일에서 중복 제거 후 한 번만 사전 조회해 캐시에 올립니다.
+- 파일 단계는 `시트 정보 → 선택 시트 제한 행 미리보기 → 전체 파일 데이터` 순서로 진행합니다. 전체 데이터는 명시적으로 불러오며 같은 파일 signature와 옵션에서는 캐시를 재사용합니다.
+- Tracker Item 이름·summary 조회는 대량 검증의 API 호출을 줄이기 위해 비활성화되어 있으며, 입력값에서 ID를 추출합니다.
 - 테스트 모드에서는 실제 업로드를 막고 Dry Run만 허용합니다.
 - 기본 창 크기는 `1160x780`, 최소 크기는 `860x620`이며, 페이지 내용이 길면 내부 스크롤을 사용하고 창 높이는 화면 높이의 88%를 넘지 않도록 제한합니다.
-- 알림은 커스텀 다이얼로그로 표시하며, 테마와 톤을 맞춘 상태로 오류/안내를 구분합니다.
+- 입력 검증 오류는 관련 화면 가까이에 표시하고, 작업 실패는 상태 표시와 오류 다이얼로그를 함께 사용합니다.
+- Qt 슬롯이나 Python thread에서 처리되지 않은 예외도 콘솔 traceback을 유지하면서 민감값을 제거한 전역 오류 알림으로 전달합니다.
 - `QComboBox` 는 기본 시스템 화살표 대신 커스텀 chevron 아이콘을 사용합니다.
 
 ## 프로젝트 구조
 
-- `cli_main.py`: 현재 권장 대화형 CLI
+- `gui_main.py`: 현재 기본 GUI 실행 경로
+- `cli_main.py`: 유지보수와 보조 실행용 대화형 CLI
 - `main.py`: 과거 엔트리 포인트, 현재 비권장
 - `src/codebeamer_client.py`: Codebeamer REST API 클라이언트
+- `src/api_monitor.py`: 최근 API 호출 메타데이터의 thread-safe 메모리 버퍼와 통계
+- `src/diagnostics.py`: 세션 진단 이벤트, 진단 ID context, 민감정보 마스킹과 진단 ZIP 생성
+- `src/gui/developer_tools_window.py`: 진단 로그와 재사용 API 모니터를 담는 확장 가능한 개발자 도구 창
 - `src/excel_reader.py`: Excel 파일을 raw DataFrame으로 읽는 입력 계층
 - `src/hierarchy_processor.py`: raw DataFrame을 merged/hierarchy/upload DataFrame으로 후처리
 - `src/excel_processor.py`: 기존 import 호환용 통합 래퍼
@@ -125,8 +213,8 @@ GUI `테스트 모드`를 바로 눌러볼 수 있는 샘플 세트는 `data/gui
 - `src/wizard.py`: 업로드 오케스트레이션 façade
   내부 구현은 데이터, lookup, option 해석, create/update payload, payload cache, 실행 서비스로 분리
 - `src/models/`: reference, field value, tracker item, user info, wizard state 모델
-- `src/gui/`: PySide6 기반 단계형 GUI, 서비스 계층, upload worker
-  내부 구현은 `pages.py`/`main_window.py`/`services.py` façade 아래에 `page_*`, `window_*`, `service_*` 모듈로 분리
+- `src/gui/`: PySide6 기반 앱 셸, 단계형 배치 GUI, 서비스 계층, upload worker
+  `main_window.py`는 최상위 작업 영역을 전환하고 `batch_window.py`는 기존 9단계 마법사를 보존하며, 세부 구현은 `page_*`, `window_*`, `service_*` 모듈로 분리
 - `data/gui-offline-sample/`: GUI 테스트 모드용 snapshot, 다중 Excel 샘플, 사용 안내
 - `docs/`: 사용 가이드와 아키텍처 문서
 
@@ -171,10 +259,9 @@ py -3 cli_main.py
 6. 정적 option 필드는 reference payload로 변환합니다.
 7. 사용자 선택 필드는 사용자 이름을 우선 조회하고, 숫자 입력일 때만 사용자 ID fallback 을 사용합니다.
 8. `MemberField` 는 `USER/ROLE/GROUP` 후보를 이름으로 찾아 mixed reference 로 변환합니다.
-9. `TrackerItemChoiceField` 는 configuration 에 source tracker 정보가 있으면 이름/summary query lookup 을, 없으면 정규식 ID 추출을 사용합니다.
+9. `TrackerItemChoiceField` 는 configuration 정보와 관계없이 입력값에서 정규식으로 ID를 추출합니다. 이름·summary 조회는 비활성화되어 있습니다.
 10. GUI 상단 데이터 설정이 켜져 있으면 파일별 루트 parent item payload 를 먼저 준비합니다.
 11. row별 payload를 먼저 cache하고 preview와 upload가 같은 payload를 재사용합니다.
-12. 다중 파일 업로드 시 tracker item query 값은 전체 파일 기준으로 중복 제거 후 사전 조회합니다.
 13. 업로드 시점에는 파일별 루트 parent item을 먼저 만들고, 이후 child row 의 `parentItemId` 를 `created_map[parent_row_id]` 또는 루트 item 기준으로 결정합니다.
 14. `Status` 는 transition 기반 후처리로 옮겨야 하므로 현재 TODO 로 남겨두고 있습니다.
 15. 실행 결과와 중간 dataframe, schema, payload cache, 검증 결과를 `output/`에 저장할 수 있습니다.
@@ -187,6 +274,7 @@ py -3 cli_main.py
 - [Codebeamer 프로젝트 시작 패키지](./docs/codebeamer-project-start-kit.md)
 - [CLI 사용 가이드](./docs/cli-guide.md)
 - [GUI 사용 가이드](./docs/gui-plan.md)
+- [Codebeamer API 모니터](./docs/api-monitor.md)
 - [변경 이력 성격의 v2 문서](./docs/v2-changes.md)
 - [트러블슈팅](./docs/troubleshooting.md)
 
@@ -210,7 +298,7 @@ powershell -ExecutionPolicy Bypass -File scripts/render_uml.ps1
 - 정적 option이 없는 일반 reference 필드는 아직 자동 lookup을 모두 지원하지 않습니다.
 - 사용자 관련 필드는 이름을 우선 사용하고, 숫자 입력일 때만 사용자 ID fallback 을 사용합니다.
 - `MemberField` 의 `ROLE` 은 field permission matrix, `GROUP` 은 `/v3/users/groups` 전체 목록에서 이름으로 찾습니다.
-- `TrackerItemChoiceField` 는 tracker configuration 의 `fields` 목록에서 `referenceId == schema.field_id` 로 우선 매칭하고, source tracker가 확인되면 query lookup 을 사용할 수 있습니다.
+- `TrackerItemChoiceField` 는 tracker configuration 의 `fields` 목록에서 `referenceId == schema.field_id` 로 매칭 정보를 확인할 수 있지만, 업로드·검증에서는 항상 입력값의 ID 추출만 사용합니다.
 - 위 source tracker를 찾지 못하거나 offline snapshot 만 사용하는 경우에는 기본 정규식 ID 추출 방식으로 동작합니다.
 - 테스트 모드에서는 실제 업로드를 막고 Dry Run만 허용합니다.
 - `Status` 는 workflow transition 제약을 반영해야 하므로 현재 TODO 입니다.

@@ -7,6 +7,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from src.api_monitor import API_MONITOR
 from src.gui.main_window import _estimate_upload_remaining_seconds
 from src.gui.main_window import _format_clock_text
 from src.gui.main_window import _format_upload_eta_text
@@ -14,9 +15,22 @@ from src.gui.main_window import _format_upload_progress_text
 from src.gui.main_window import _merge_root_item_page_configs
 from src.gui.main_window import _merge_window_preferences
 from src.gui.main_window import _window_size_from_settings
+from src.gui.main_window import APP_ROUTE_LABELS
+from src.gui.main_window import APP_ROUTE_COLLAPSED_LABELS
+from src.gui.main_window import APPLICATION_NAVIGATION_COLLAPSED_WIDTH
 from src.gui.main_window import MainWindow
+from src.gui.main_window import ROUTE_ACTIVITY
+from src.gui.main_window import ROUTE_BATCH_UPLOAD
+from src.gui.main_window import ROUTE_SETTINGS
+from src.gui.main_window import ROUTE_TRACKER_WORKSPACE
+from src.gui.batch_window import BatchUploadWindow
+from src.gui.activity_history_page import ActivityHistoryPage
+from src.gui.settings_center import SettingsCenterPage
+from src.gui.tracker_workspace import TrackerWorkspacePage
 from src.gui.settings_store import GuiSettings
 from src.gui.settings_store import GuiSettingsStore
+from src.gui.settings_store import AppSettings
+from src.gui.settings_store import test_mode_validation_signature
 from src.gui.window_support import GuiSessionState
 from src.gui.window_support import UploadProgressState
 
@@ -115,6 +129,7 @@ class GuiMainWindowPreferencesTest(unittest.TestCase):
             window_height=900,
             window_is_maximized=False,
             window_is_fullscreen=True,
+            navigation_collapsed=True,
             theme_name="kefico",
         )
         incoming = GuiSettings(
@@ -131,6 +146,7 @@ class GuiMainWindowPreferencesTest(unittest.TestCase):
         self.assertEqual(merged.window_height, 900)
         self.assertFalse(merged.window_is_maximized)
         self.assertTrue(merged.window_is_fullscreen)
+        self.assertTrue(merged.navigation_collapsed)
         self.assertEqual(merged.theme_name, "igloo")
 
 
@@ -150,13 +166,274 @@ class GuiMainWindowSmokeTest(unittest.TestCase):
             self._app.processEvents()
 
             self.assertIs(type(window), MainWindow)
-            self.assertIsInstance(window.session_state, GuiSessionState)
-            self.assertIsInstance(window.upload_progress, UploadProgressState)
+            self.assertEqual(window.windowTitle(), "Codebeamer Automation Suite")
             self.assertTrue(window.isVisible())
-            self.assertIs(window.stack.currentWidget(), window.page_scroll_areas[window.settings_page])
+            self.assertEqual(window.route_stack.count(), len(APP_ROUTE_LABELS))
+            self.assertGreaterEqual(window.application_header.height(), 56)
+            self.assertEqual(window.current_route, ROUTE_TRACKER_WORKSPACE)
+            self.assertIs(window.route_stack.currentWidget(), window.tracker_workspace_page)
+            self.assertTrue(window.nav_buttons[ROUTE_TRACKER_WORKSPACE].isChecked())
+            self.assertIsInstance(window.tracker_workspace_page, TrackerWorkspacePage)
+            self.assertIsInstance(window.activity_page, ActivityHistoryPage)
+
+            self.assertIsInstance(window.batch_window, BatchUploadWindow)
+            self.assertIsInstance(window.batch_window.session_state, GuiSessionState)
+            self.assertIsInstance(window.batch_window.upload_progress, UploadProgressState)
+            self.assertEqual(len(window.batch_window.page_meta), 9)
+            self.assertIs(
+                window.batch_window.stack.currentWidget(),
+                window.batch_window.page_scroll_areas[window.batch_window.settings_page],
+            )
+
+            window.nav_buttons[ROUTE_BATCH_UPLOAD].click()
+            self._app.processEvents()
+            self.assertEqual(window.current_route, ROUTE_BATCH_UPLOAD)
+            self.assertIs(window.route_stack.currentWidget(), window.batch_page)
+            self.assertTrue(window.nav_buttons[ROUTE_BATCH_UPLOAD].isChecked())
+            self.assertFalse(window.statusBar().isVisible())
 
             window.close()
             self._app.processEvents()
+
+    def test_main_window_exposes_all_planned_top_level_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            window = MainWindow(GuiSettingsStore(root_dir=Path(temp_dir)))
+
+            self.assertEqual(
+                [button.text() for button in window.nav_buttons.values()],
+                ["트래커 작업공간", "배치 작업", "실행 기록", "설정"],
+            )
+            self.assertEqual(
+                set(window.route_widgets),
+                {
+                    ROUTE_TRACKER_WORKSPACE,
+                    ROUTE_BATCH_UPLOAD,
+                    ROUTE_ACTIVITY,
+                    ROUTE_SETTINGS,
+                },
+            )
+
+            for route, page in window.route_widgets.items():
+                window.nav_buttons[route].click()
+                self._app.processEvents()
+                self.assertEqual(window.current_route, route)
+                self.assertIs(window.route_stack.currentWidget(), page)
+
+            self.assertEqual(window.activity_page.table.rowCount(), 0)
+
+            window.close()
+            self._app.processEvents()
+
+    def test_global_loading_overlay_uses_reference_counted_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            window = MainWindow(GuiSettingsStore(root_dir=Path(temp_dir)))
+            window.show()
+            self._app.processEvents()
+
+            first = window._begin_busy("프로젝트를 불러오는 중입니다.")
+            second = window._begin_busy("트래커를 불러오는 중입니다.")
+            self._app.processEvents()
+
+            self.assertTrue(window.loading_overlay.isVisible())
+            self.assertEqual(window.loading_overlay.active_count, 2)
+            self.assertEqual(
+                window.loading_overlay.message_label.text(),
+                "트래커를 불러오는 중입니다.",
+            )
+            self.assertEqual(
+                window.loading_overlay.geometry(),
+                window.centralWidget().rect(),
+            )
+
+            window._end_busy(first)
+            self.assertTrue(window.loading_overlay.isVisible())
+            self.assertEqual(window.loading_overlay.active_count, 1)
+
+            window._end_busy(second)
+            self._app.processEvents()
+            self.assertFalse(window.loading_overlay.isVisible())
+            self.assertEqual(window.loading_overlay.active_count, 0)
+
+            window.close()
+            self._app.processEvents()
+
+    def test_application_navigation_can_collapse_and_restore_on_restart(self) -> None:
+        from PySide6.QtCore import QPoint
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = GuiSettingsStore(root_dir=Path(temp_dir))
+            window = MainWindow(store)
+            window.show()
+            self._app.processEvents()
+
+            self.assertFalse(window.navigation_collapsed)
+            self.assertTrue(window.navigation_title.isVisible())
+            self.assertEqual(
+                [button.text() for button in window.nav_buttons.values()],
+                list(APP_ROUTE_LABELS.values()),
+            )
+
+            window.navigation_toggle_button.click()
+            self._app.processEvents()
+
+            self.assertTrue(window.navigation_collapsed)
+            self.assertEqual(
+                window.navigation_frame.minimumWidth(),
+                APPLICATION_NAVIGATION_COLLAPSED_WIDTH,
+            )
+            self.assertEqual(
+                window.navigation_frame.maximumWidth(),
+                APPLICATION_NAVIGATION_COLLAPSED_WIDTH,
+            )
+            self.assertFalse(window.navigation_title.isVisible())
+            self.assertEqual(
+                [button.text() for button in window.nav_buttons.values()],
+                list(APP_ROUTE_COLLAPSED_LABELS.values()),
+            )
+            for route, button in window.nav_buttons.items():
+                self.assertEqual(button.toolTip(), APP_ROUTE_LABELS[route])
+                self.assertEqual(button.accessibleName(), APP_ROUTE_LABELS[route])
+            direct_button_position = window.tracker_workspace_page.direct_open_button.mapTo(
+                window,
+                QPoint(0, 0),
+            )
+            self.assertLessEqual(
+                direct_button_position.x()
+                + window.tracker_workspace_page.direct_open_button.width(),
+                window.width(),
+            )
+
+            window.close()
+            self._app.processEvents()
+            self.assertTrue(store.load_app_settings().navigation_collapsed)
+
+            restored = MainWindow(store)
+            restored.show()
+            self._app.processEvents()
+
+            self.assertTrue(restored.navigation_collapsed)
+            self.assertEqual(
+                [button.text() for button in restored.nav_buttons.values()],
+                list(APP_ROUTE_COLLAPSED_LABELS.values()),
+            )
+
+            restored.close()
+            self._app.processEvents()
+
+    def test_settings_route_uses_dedicated_center_and_batch_can_open_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            window = MainWindow(GuiSettingsStore(root_dir=Path(temp_dir)))
+
+            window.nav_buttons[ROUTE_SETTINGS].click()
+            self._app.processEvents()
+
+            self.assertEqual(window.current_route, ROUTE_SETTINGS)
+            self.assertIsInstance(window.settings_center_page, SettingsCenterPage)
+            self.assertIs(window.route_stack.currentWidget(), window.settings_center_page)
+
+            window.nav_buttons[ROUTE_BATCH_UPLOAD].click()
+            window.batch_window.settings_page.global_settings_button.click()
+            self._app.processEvents()
+
+            self.assertEqual(window.current_route, ROUTE_SETTINGS)
+            self.assertIs(window.route_stack.currentWidget(), window.settings_center_page)
+
+            window.close()
+            self._app.processEvents()
+
+    def test_mode_badge_reflects_offline_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = GuiSettingsStore(root_dir=Path(temp_dir))
+            schema_path = Path(temp_dir) / "schema.json"
+            schema_path.write_text("{}", encoding="utf-8")
+            app_settings = AppSettings(
+                offline_mode=True,
+                offline_schema_path=str(schema_path),
+            )
+            app_settings.test_mode_validated_signature = test_mode_validation_signature(
+                app_settings
+            )
+            store.save_app_settings(app_settings)
+
+            window = MainWindow(store)
+
+            self.assertEqual(window.mode_badge.text(), "테스트 모드")
+            self.assertEqual(window.mode_badge.property("mode"), "test")
+
+            window.close()
+            self._app.processEvents()
+
+    def test_batch_upload_window_still_runs_as_a_standalone_wizard(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            window = BatchUploadWindow(GuiSettingsStore(root_dir=Path(temp_dir)))
+            window.show()
+            self._app.processEvents()
+
+            self.assertTrue(window.isVisible())
+            self.assertIsInstance(window.session_state, GuiSessionState)
+            self.assertEqual(len(window.page_meta), 9)
+            self.assertIs(
+                window.stack.currentWidget(),
+                window.page_scroll_areas[window.settings_page],
+            )
+
+            window.close()
+            self._app.processEvents()
+
+    def test_enabled_api_monitor_opens_at_startup_and_follows_applied_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = GuiSettingsStore(root_dir=Path(temp_dir))
+            store.save_app_settings(
+                AppSettings(
+                    api_monitor_enabled=True,
+                    api_monitor_slow_threshold_ms=1800,
+                )
+            )
+
+            window = MainWindow(store)
+            window.show()
+            self._app.processEvents()
+
+            self.assertTrue(API_MONITOR.enabled)
+            self.assertEqual(API_MONITOR.slow_threshold_ms, 1800)
+            self.assertIsNotNone(window.api_monitor_window)
+            assert window.api_monitor_window is not None
+            self.assertTrue(window.api_monitor_window.isVisible())
+            self.assertEqual(
+                [
+                    window.api_monitor_window.tabs.tabText(index)
+                    for index in range(window.api_monitor_window.tabs.count())
+                ],
+                [
+                    "진단 로그",
+                    "API 모니터",
+                    "Excel 도구",
+                    "Payload",
+                    "스키마·캐시",
+                    "읽기 전용 Query",
+                ],
+            )
+
+            disabled = GuiSettings(
+                **{
+                    **window.batch_window.session_state.settings.__dict__,
+                    "api_monitor_enabled": False,
+                    "api_monitor_slow_threshold_ms": 2400,
+                }
+            )
+            window._on_global_settings_applied(disabled)
+
+            self.assertFalse(API_MONITOR.enabled)
+            self.assertEqual(API_MONITOR.slow_threshold_ms, 2400)
+            self.assertIn(
+                "수집 중지",
+                window.api_monitor_window.collection_state_label.text(),
+            )
+
+            window.close()
+            self._app.processEvents()
+            self.assertFalse(window.api_monitor_window.isVisible())
+            API_MONITOR.reset()
 
 
 if __name__ == "__main__":

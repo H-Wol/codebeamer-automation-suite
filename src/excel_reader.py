@@ -148,11 +148,22 @@ class ExcelReader:
         try:
             workbook = app.books.open(file_path)
             sheet = self._resolve_xlwings_sheet(workbook, sheet_name)
-            values = sheet.used_range.value
-            if not values or len(values) < self.header_row:
+            used_range = sheet.used_range
+            column_count = max(int(used_range.columns.count or 0), 0)
+            if column_count <= 0:
                 return []
-            headers = values[self.header_row - 1]
-            return self._normalize_headers(headers)
+            first_column = int(used_range.column)
+            last_column = first_column + column_count - 1
+            values = sheet.range(
+                (self.header_row, first_column),
+                (self.header_row, last_column),
+            ).value
+            rows = self._normalize_xlwings_matrix(
+                values,
+                row_count=1,
+                column_count=column_count,
+            )
+            return self._normalize_headers(rows[0] if rows else [])
         finally:
             if workbook is not None:
                 try:
@@ -170,6 +181,131 @@ class ExcelReader:
         if self._supports_openpyxl(file_path):
             return self._openpyxl_headers(file_path, sheet_name)
         return self._xlwings_headers(file_path, sheet_name)
+
+    @classmethod
+    def _normalize_xlwings_matrix(
+        cls,
+        values: Any,
+        *,
+        row_count: int,
+        column_count: int,
+    ) -> list[list[Any]]:
+        """xlwings의 scalar/1D/2D 반환값을 요청한 범위 모양으로 맞춘다."""
+        if row_count <= 0 or column_count <= 0:
+            return []
+
+        if isinstance(values, list):
+            if values and isinstance(values[0], list):
+                rows = [list(row) for row in values]
+            elif row_count == 1:
+                rows = [list(values)]
+            elif column_count == 1:
+                rows = [[value] for value in values]
+            else:
+                rows = [list(values)]
+        else:
+            rows = [[values]]
+
+        normalized = [cls._normalize_row(row, column_count) for row in rows[:row_count]]
+        while len(normalized) < row_count:
+            normalized.append([None] * column_count)
+        return normalized
+
+    def read_preview_rows(
+        self,
+        file_path: str,
+        sheet_name: str | int,
+        *,
+        max_rows: int = 10,
+    ) -> tuple[list[str], list[list[Any]]]:
+        """헤더와 제한된 데이터 행만 읽어 전체 시트 로딩을 피한다."""
+        normalized_max_rows = max(int(max_rows), 0)
+        if self._supports_openpyxl(file_path):
+            workbook = load_workbook(file_path, read_only=True, data_only=True)
+            try:
+                worksheet = self._resolve_openpyxl_sheet(workbook, sheet_name)
+                header_cells = next(
+                    worksheet.iter_rows(
+                        min_row=self.header_row,
+                        max_row=self.header_row,
+                    ),
+                    (),
+                )
+                headers = self._normalize_headers([cell.value for cell in header_cells])
+                rows: list[list[Any]] = []
+                if normalized_max_rows <= 0:
+                    return headers, rows
+                for row in worksheet.iter_rows(min_row=self.header_row + 1):
+                    normalized = self._normalize_row([cell.value for cell in row], len(headers))
+                    if all(self.is_blank(value) for value in normalized):
+                        continue
+                    rows.append([self._normalize_cell_value(value) for value in normalized])
+                    if len(rows) >= normalized_max_rows:
+                        break
+                return headers, rows
+            finally:
+                workbook.close()
+
+        app = self._create_xlwings_app()
+        workbook = None
+        try:
+            workbook = app.books.open(file_path)
+            sheet = self._resolve_xlwings_sheet(workbook, sheet_name)
+            used_range = sheet.used_range
+            column_count = max(int(used_range.columns.count or 0), 0)
+            if column_count <= 0:
+                return [], []
+            first_column = int(used_range.column)
+            last_column = first_column + column_count - 1
+            header_values = sheet.range(
+                (self.header_row, first_column),
+                (self.header_row, last_column),
+            ).value
+            header_rows = self._normalize_xlwings_matrix(
+                header_values,
+                row_count=1,
+                column_count=column_count,
+            )
+            headers = self._normalize_headers(header_rows[0] if header_rows else [])
+            if normalized_max_rows <= 0:
+                return headers, []
+
+            last_used_row = int(used_range.last_cell.row)
+            if last_used_row <= self.header_row:
+                return headers, []
+
+            rows: list[list[Any]] = []
+            next_row = self.header_row + 1
+            while next_row <= last_used_row and len(rows) < normalized_max_rows:
+                remaining = normalized_max_rows - len(rows)
+                chunk_size = max(remaining * 2, 16)
+                chunk_end_row = min(last_used_row, next_row + chunk_size - 1)
+                preview_values = sheet.range(
+                    (next_row, first_column),
+                    (chunk_end_row, last_column),
+                ).value
+                preview_rows = self._normalize_xlwings_matrix(
+                    preview_values,
+                    row_count=chunk_end_row - next_row + 1,
+                    column_count=column_count,
+                )
+                for raw_row in preview_rows:
+                    if all(self.is_blank(value) for value in raw_row):
+                        continue
+                    rows.append(
+                        [self._normalize_cell_value(value) for value in raw_row]
+                    )
+                    if len(rows) >= normalized_max_rows:
+                        break
+                next_row = chunk_end_row + 1
+            return headers, rows
+        finally:
+            if workbook is not None:
+                try:
+                    workbook.close()
+                except Exception:
+                    pass
+            app.quit()
 
     def count_upload_rows(self, file_path: str, sheet_name: str | int) -> int:
         if self._supports_openpyxl(file_path):
@@ -270,28 +406,49 @@ class ExcelReader:
             workbook = app.books.open(file_path)
             sheet = self._resolve_xlwings_sheet(workbook, sheet_name)
             used_range = sheet.used_range
-            values = used_range.value
-
-            headers = self._normalize_headers(values[self.header_row - 1])
+            column_count = max(int(used_range.columns.count or 0), 0)
+            if column_count <= 0:
+                return pd.DataFrame()
+            used_start_col = int(used_range.column)
+            last_used_col = used_start_col + column_count - 1
+            header_values = sheet.range(
+                (self.header_row, used_start_col),
+                (self.header_row, last_used_col),
+            ).value
+            header_rows = self._normalize_xlwings_matrix(
+                header_values,
+                row_count=1,
+                column_count=column_count,
+            )
+            headers = self._normalize_headers(header_rows[0] if header_rows else [])
             if self.summary_col not in headers:
                 raise ValueError(f"'{self.summary_col}' 컬럼을 찾을 수 없습니다.")
 
             summary_col_idx_1based = headers.index(self.summary_col) + 1
-            data_rows = values[self.header_row:]
-            used_start_row = used_range.row
-            used_start_col = used_range.column
+            last_used_row = int(used_range.last_cell.row)
+            if last_used_row <= self.header_row:
+                return pd.DataFrame(
+                    columns=[*headers, "_excel_row", "_summary_indent"],
+                    dtype=object,
+                )
+            data_values = sheet.range(
+                (self.header_row + 1, used_start_col),
+                (last_used_row, last_used_col),
+            ).value
+            data_rows = self._normalize_xlwings_matrix(
+                data_values,
+                row_count=last_used_row - self.header_row,
+                column_count=column_count,
+            )
 
             records = []
-            for relative_index, row in enumerate(data_rows, start=self.header_row + 1):
-                normalized_row = self._normalize_row(
-                    list(row) if isinstance(row, list) else [row],
-                    len(headers),
-                )
-
+            for excel_row, normalized_row in enumerate(
+                data_rows,
+                start=self.header_row + 1,
+            ):
                 if all(self.is_blank(value) for value in normalized_row):
                     continue
 
-                excel_row = used_start_row + (relative_index - 1)
                 excel_col = used_start_col + (summary_col_idx_1based - 1)
                 summary_cell = sheet.range((excel_row, excel_col))
                 summary_value = normalized_row[summary_col_idx_1based - 1]

@@ -11,11 +11,17 @@
 5. [CLI 사용 가이드](./cli-guide.md)
 6. [필드 지원 추가 가이드](./field-support-guide.md)
 7. [GUI 사용 가이드](./gui-plan.md)
-8. [트러블슈팅](./troubleshooting.md)
-9. [호환 경로 감사](./compatibility.md)
-10. [샘플 데이터 및 자격증명 감사](./security-audit.md)
-11. [GUI 리팩토링 진행 및 검증 기록](./refactoring-progress.md)
-12. [v2 변경 사항](./v2-changes.md)
+8. [트래커 작업공간 GUI 기획 및 스토리보드](./tracker-workspace-gui-storyboard.md)
+9. [트래커 조회 서비스 계약](./tracker-query-service.md)
+10. [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)
+11. [통합 실행 기록](./activity-history.md)
+12. [Codebeamer API 모니터](./api-monitor.md)
+13. [개발자 도구와 진단 패키지](./developer-tools.md)
+14. [트러블슈팅](./troubleshooting.md)
+15. [호환 경로 감사](./compatibility.md)
+16. [샘플 데이터 및 자격증명 감사](./security-audit.md)
+17. [GUI 리팩토링 진행 및 검증 기록](./refactoring-progress.md)
+18. [v2 변경 사항](./v2-changes.md)
 
 ## 문서별 역할
 
@@ -38,7 +44,24 @@
   새로운 schema field type 또는 reference field를 지원할 때 수정해야 하는 코드 경로와 구현 순서를 설명합니다.
 
 - [GUI 사용 가이드](./gui-plan.md)
-  사용자용 GUI 의 실제 단계별 사용 흐름, 테스트 모드, 다중 파일 업로드, 상단 데이터 설정, 현재 구현 범위를 정리합니다.
+  최상위 앱 셸, 배치 작업의 실제 단계별 사용 흐름, 테스트 모드, 다중 파일 업로드, 상단 데이터 설정, 현재 구현 범위를 정리합니다.
+- [GUI 오류 처리 감사](./gui-error-handling.md)
+  Qt 슬롯, 백그라운드 worker, 사용자 입력과 보조 저장 경로의 오류 표시·정리 계약을 정리합니다.
+- [트래커 조회 서비스 계약](./tracker-query-service.md)
+  tracker 범위 검색, 계층·상세·ID 경로 모델, pagination 차이와 익명 조회 fixture 계약을 정리합니다.
+- [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)
+  schema 기반 단건 생성과 부분 수정, version 충돌 확인, 상태 전환과 삭제 안전장치를 정리합니다.
+- [통합 실행 기록](./activity-history.md)
+  단건 쓰기와 배치 결과의 로컬 저장 범위, 필터, 보안 경계와 현재 제한을 정리합니다.
+- [Codebeamer API 모니터](./api-monitor.md)
+  개발자용 실시간 호출 통계, 표 사용법, 재시도 표시와 메타데이터 수집 보안 경계를 정리합니다.
+- [개발자 도구와 진단 패키지](./developer-tools.md)
+  세션 진단 로그, 진단 ID, API 모니터 재사용, ZIP 내보내기와 개인정보 제외 계약을 정리합니다.
+- [Wiki 형식 조회 렌더링](./wiki-rendering.md)
+  설명과 TableField에서 명시적 Wiki 메타데이터만 렌더링하는 판정 규칙, 지원 문법과 보안 경계를 정리합니다.
+
+- [트래커 작업공간 GUI 기획 및 스토리보드](./tracker-workspace-gui-storyboard.md)
+  조회 중심 작업공간의 정보 구조, 화면 흐름, 단계별 구현 범위와 브랜치 전략을 정리한 설계 기준입니다.
 
 - [트러블슈팅](./troubleshooting.md)
   자주 발생하는 에러와 대응 방법을 정리합니다.
@@ -64,11 +87,31 @@
 
 ## 현재 기준 권장 코드 경로
 
+- `gui_main.py`
+- `src/gui/main_window.py`
+  접이식 좌측 메뉴를 포함한 최상위 앱 셸과 작업 영역 전환을 담당합니다.
+- `src/gui/batch_window.py`
+  기존 9단계 create/update/upsert 마법사를 보존합니다.
+- `src/gui/settings_center.py`
+  다중 연결 profile, 화면, 네트워크·저장소, 테스트 모드, 개발자 기능과 설정 데이터 관리를 담당합니다.
+- `src/api_monitor.py`, `src/gui/api_monitor_window.py`
+  API 호출 메타데이터의 제한된 메모리 수집과 실시간 통계·필터 창을 담당합니다.
+- `src/diagnostics.py`, `src/gui/developer_tools_window.py`
+  구조화 진단 이벤트, 안전한 ZIP 내보내기와 확장 가능한 개발자 도구 탭 창을 담당합니다.
+- `src/gui/tracker_query_models.py`, `src/gui/tracker_query_service.py`
+  tracker 범위 검색, pagination, 계층·상세·ID 경로의 UI 독립 조회 계약을 담당합니다.
+- `src/gui/tracker_workspace.py`
+  프로젝트·트래커 선택, 지연 로딩 확장형 트리, tracker 검색, ID 직접 접근과 상세 표시를 담당합니다.
+- `src/gui/tracker_item_editor.py`, `src/gui/tracker_item_editor_panel.py`
+  선택 필드 부분 수정, 상태 전환, 삭제 계약과 schema 기반 입력 UI를 담당합니다.
+- `src/gui/page_batch_settings.py`
+  전역 설정과 분리된 배치 작업 mode 및 Excel 해석 기준을 담당합니다.
 - `cli_main.py`
+  유지보수와 보조 실행 경로입니다.
 - `src/mapping_service.py`
   facade이며 실제 schema/reference/option 로직은 `src/mapping_reference.py`, `src/mapping_schema.py`, `src/mapping_option.py` 로 분리되어 있습니다.
 - `src/wizard.py`
   facade이며 실제 데이터 준비, lookup, option 해석, create/update payload, payload cache, 실행 로직은 책임별 모듈로 분리되어 있습니다.
 - `src/models/`
 - `src/gui/`
-  메인 진입점은 `src/gui/main_window.py`, `src/gui/pages.py`, `src/gui/services.py` 이고, 내부 책임은 page/window/service 하위 모듈로 분리되어 있습니다.
+  화면과 서비스의 내부 책임은 page/window/service 하위 모듈로 분리되어 있습니다.

@@ -44,6 +44,36 @@ class FakeExcelReader:
         finally:
             wb.close()
 
+    def read_preview_rows(
+        self,
+        file_path: str,
+        sheet_name: str | int,
+        *,
+        max_rows: int = 10,
+    ) -> tuple[list[str], list[list[object]]]:
+        from openpyxl import load_workbook
+        wb = load_workbook(file_path, read_only=True, data_only=True)
+        try:
+            ws = wb[sheet_name]
+            headers = self.read_headers(file_path, sheet_name)
+            rows: list[list[object]] = []
+            if max(int(max_rows), 0) == 0:
+                return headers, rows
+            for values in ws.iter_rows(
+                min_row=self.header_row + 1,
+                values_only=True,
+            ):
+                normalized = list(values[: len(headers)])
+                normalized += [None] * (len(headers) - len(normalized))
+                if all(value is None or str(value).strip() == "" for value in normalized):
+                    continue
+                rows.append(normalized)
+                if len(rows) >= max(int(max_rows), 0):
+                    break
+            return headers, rows
+        finally:
+            wb.close()
+
     def read_excel(self, file_path: str, sheet_name: str | int = 0, visible: bool = False) -> pd.DataFrame:
         del visible
         from openpyxl import load_workbook
@@ -399,12 +429,14 @@ class CountingBatchExcelReader(FakeExcelReader):
     read_excel_calls: list[str] = []
     read_headers_calls: list[str] = []
     list_sheet_calls: list[str] = []
+    read_preview_calls: list[str] = []
 
     @classmethod
     def reset_counts(cls) -> None:
         cls.read_excel_calls = []
         cls.read_headers_calls = []
         cls.list_sheet_calls = []
+        cls.read_preview_calls = []
 
     def list_sheet_names(self, file_path: str) -> list[str]:
         self.__class__.list_sheet_calls.append(str(file_path))
@@ -418,4 +450,16 @@ class CountingBatchExcelReader(FakeExcelReader):
         self.__class__.read_excel_calls.append(str(file_path))
         return super().read_excel(file_path, sheet_name=sheet_name, visible=visible)
 
-
+    def read_preview_rows(
+        self,
+        file_path: str,
+        sheet_name: str | int,
+        *,
+        max_rows: int = 10,
+    ) -> tuple[list[str], list[list[object]]]:
+        self.__class__.read_preview_calls.append(str(file_path))
+        return super().read_preview_rows(
+            file_path,
+            sheet_name,
+            max_rows=max_rows,
+        )

@@ -5,3 +5,4 @@ python-dotenv
 openpyxl
 PySide6
 cryptography
+keyring

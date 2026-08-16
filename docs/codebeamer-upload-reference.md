@@ -328,7 +328,7 @@ field는 아래 세 축으로 정리됩니다.
 | `UserChoiceField` | `user_reference` | 사용자 이름 우선 lookup, 숫자면 ID fallback | 지원 |
 | `ReferenceField` + `referenceType=UserReference` | `user_reference` | 위와 동일 | 지원 |
 | `MemberField` | `member_reference` | `USER/ROLE/GROUP` mixed lookup | 지원 |
-| `TrackerItemChoiceField` | `tracker_item_reference` | configuration 기반 query lookup 또는 tracker item ID direct parse | 지원 |
+| `TrackerItemChoiceField` | `tracker_item_reference` | tracker item ID direct parse | 지원 |
 | builtin `subjects` + `TrackerItemReference` | `tracker_item_reference` | tracker item ID direct parse | 지원 |
 | `TableField` | `table` | `TableFieldName.ColumnName` 헤더를 묶어 `TableFieldValue` 생성 | 지원 |
 | `ReferenceField` + 일반 `referenceType` | `generic_reference` | resolver 없음, 조기 실패 | 부분 지원 |
@@ -394,9 +394,8 @@ lookup 결과 부가 컬럼:
 규칙:
 
 - `TrackerItemChoiceField` 는 tracker configuration 의 `fields` 목록에서 `referenceId == schema.field_id` 를 우선 매칭한다.
-- matched field 가 tracker `referenceFilters` 를 제공하면 source tracker 기준 query lookup 을 사용할 수 있다.
-- query lookup 은 필요한 이름/summary 값을 업로드 전체에서 모아 중복 제거한 뒤 사전 조회한다.
-- query lookup 을 사용할 수 없으면 입력값에서 item ID를 직접 추출한다.
+- 이름·summary query lookup은 대량 검증의 API 호출을 줄이기 위해 비활성화되어 있다.
+- 입력값에서 item ID를 직접 추출한다.
 - builtin `subjects` 는 현재 direct parse만 사용한다.
 - 우선 순위:
   1. `dict.id`

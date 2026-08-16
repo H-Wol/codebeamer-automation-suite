@@ -196,6 +196,42 @@
           "type": "ChoiceOptionReference"
         }
       ]
+    },
+    {
+      "id": 13,
+      "name": "Status",
+      "label": "Status",
+      "type": "OptionChoiceField",
+      "hidden": false,
+      "valueModel": "ChoiceFieldValue<ChoiceOptionReference>",
+      "trackerItemField": "status",
+      "mandatoryInStatuses": [],
+      "options": [
+        {
+          "id": 201,
+          "name": "Open",
+          "type": "ChoiceOptionReference"
+        },
+        {
+          "id": 202,
+          "name": "Review",
+          "type": "ChoiceOptionReference"
+        },
+        {
+          "id": 203,
+          "name": "Approved",
+          "type": "ChoiceOptionReference"
+        }
+      ]
+    },
+    {
+      "id": 101,
+      "name": "Risk Level",
+      "label": "Risk Level",
+      "type": "TextField",
+      "hidden": false,
+      "valueModel": "TextFieldValue",
+      "mandatoryInStatuses": []
     }
   ]
 }

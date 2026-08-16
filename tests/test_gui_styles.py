@@ -21,12 +21,28 @@ class GuiStylesTest(unittest.TestCase):
         self.assertIn("#16B3AC", stylesheet)
         self.assertIn("QPushButton#primary_button", stylesheet)
         self.assertIn("QPushButton#mode_toggle", stylesheet)
+        self.assertIn("QPushButton#application_nav_button:checked", stylesheet)
+        self.assertIn("QPushButton#application_navigation_toggle", stylesheet)
+        self.assertIn('application_nav_button[navigationCollapsed="true"]', stylesheet)
+        self.assertIn("QFrame#application_placeholder_card", stylesheet)
+        self.assertIn("QFrame#settings_category_navigation", stylesheet)
+        self.assertIn("QPushButton#settings_category_button:checked", stylesheet)
+        self.assertIn("QFrame#tracker_workspace_panel", stylesheet)
+        self.assertIn("QTreeWidget#tracker_item_tree", stylesheet)
+        self.assertIn("QPushButton#tracker_id_copy_button", stylesheet)
+        self.assertIn("QLabel#tracker_editor_status", stylesheet)
+        self.assertIn("QDialog#tracker_delete_dialog", stylesheet)
+        self.assertIn("QDialog#tracker_item_create_dialog", stylesheet)
+        self.assertIn("QFrame#activity_summary_card", stylesheet)
+        self.assertIn("QDialog#activity_history_clear_dialog", stylesheet)
 
     def test_build_gui_stylesheet_defaults_to_kefico_when_theme_is_invalid(self) -> None:
         default_stylesheet = build_gui_stylesheet(DEFAULT_GUI_THEME)
         invalid_stylesheet = build_gui_stylesheet("nope")
 
         self.assertEqual(invalid_stylesheet, default_stylesheet)
+        self.assertIn("QWidget#application_shell_root", default_stylesheet)
+        self.assertIn("QLabel#settings_dirty_badge", default_stylesheet)
 
     def test_build_gui_stylesheet_includes_table_readability_rules(self) -> None:
         stylesheet = build_gui_stylesheet("kefico")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.diagnostics import DIAGNOSTICS
+
 from .settings_store import GuiSettingsStore
 from .styles import build_gui_stylesheet
 
@@ -13,10 +15,13 @@ def run_gui() -> int:
             "GUI 실행에는 PySide6 패키지가 필요합니다. requirements.txt 를 설치한 뒤 다시 실행해야 합니다."
         ) from exc
 
+    from .error_reporting import install_global_exception_handler
     from .main_window import MainWindow
 
-    store = GuiSettingsStore()
     app = QApplication.instance() or QApplication([])
+    DIAGNOSTICS.clear()
+    install_global_exception_handler(app, diagnostics=DIAGNOSTICS)
+    store = GuiSettingsStore()
     app.setStyleSheet(build_gui_stylesheet(store.load().theme_name))
     window = MainWindow(store)
     window.show()

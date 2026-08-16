@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from .loading_overlay import LoadingOverlay
+from .page_batch_settings import create_batch_settings_page
 from .pages import create_file_selection_page
 from .pages import create_mapping_page
 from .pages import create_project_selection_page
 from .pages import create_result_page
 from .pages import create_root_item_page
-from .pages import create_settings_page
 from .pages import create_upload_page
 from .pages import create_validation_page
 from .styles import build_gui_stylesheet
@@ -21,10 +22,9 @@ class WindowShellMixin:
         QVBoxLayout = self.qt["QVBoxLayout"]
         QHBoxLayout = self.qt["QHBoxLayout"]
         QLabel = self.qt["QLabel"]
-        QProgressBar = self.qt["QProgressBar"]
-        Qt = self.qt["Qt"]
         QFrame = self.qt["QFrame"]
         QPushButton = self.qt["QPushButton"]
+        QComboBox = self.qt["QComboBox"]
 
         self.page_scroll_areas = {}
         self.page_meta = {}
@@ -56,18 +56,39 @@ class WindowShellMixin:
         title_row.addWidget(title)
         title_row.addStretch(1)
 
-        self.load_workflow_button = QPushButton("전체 설정 불러오기")
-        self.save_workflow_button = QPushButton("전체 설정 저장")
-        title_row.addWidget(self.load_workflow_button)
-        title_row.addWidget(self.save_workflow_button)
+        self.workflow_preset_combo = QComboBox()
+        self.workflow_preset_combo.setMinimumWidth(170)
+        self.workflow_preset_combo.setToolTip(
+            "현재 연결 프로필·프로젝트·트래커에 저장된 전체 업로드 설정"
+        )
+        self.load_workflow_button = QPushButton("불러오기")
+        self.save_workflow_button = QPushButton("저장")
+        self.save_workflow_as_button = QPushButton("새로 저장")
+        self.rename_workflow_button = QPushButton("이름 변경")
+        self.default_workflow_button = QPushButton("기본 지정")
+        self.delete_workflow_button = QPushButton("삭제")
 
         header_layout.addLayout(title_row)
         header_layout.addWidget(subtitle)
 
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(6)
+        preset_label = QLabel("전체 업로드 설정")
+        preset_label.setObjectName("section_label")
+        preset_row.addWidget(preset_label)
+        preset_row.addWidget(self.workflow_preset_combo, 1)
+        preset_row.addWidget(self.load_workflow_button)
+        preset_row.addWidget(self.save_workflow_button)
+        preset_row.addWidget(self.save_workflow_as_button)
+        preset_row.addWidget(self.rename_workflow_button)
+        preset_row.addWidget(self.default_workflow_button)
+        preset_row.addWidget(self.delete_workflow_button)
+        header_layout.addLayout(preset_row)
+
         steps_row = QHBoxLayout()
         steps_row.setSpacing(6)
         self.step_labels = []
-        for step_name in ("설정", "프로젝트", "파일", "상단 구조", "상단 필드", "매핑", "검증", "업로드", "결과"):
+        for step_name in ("배치 설정", "프로젝트", "파일", "상단 구조", "상단 필드", "매핑", "검증", "업로드", "결과"):
             label = QLabel(step_name)
             label.setObjectName("step_badge")
             steps_row.addWidget(label)
@@ -93,33 +114,11 @@ class WindowShellMixin:
         root_layout.addWidget(header_card)
         root_layout.addWidget(self.stack_card, 1)
 
-        self.busy_overlay = QWidget(root)
-        self.busy_overlay.setObjectName("busy_overlay")
-        self.busy_overlay.hide()
-        overlay_layout = QVBoxLayout(self.busy_overlay)
-        overlay_layout.setContentsMargins(0, 0, 0, 0)
-        overlay_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        busy_card = QFrame(self.busy_overlay)
-        busy_card.setObjectName("busy_card")
-        busy_card_layout = QVBoxLayout(busy_card)
-        busy_card_layout.setContentsMargins(18, 16, 18, 14)
-        busy_card_layout.setSpacing(8)
-
-        busy_title = QLabel("작업 중")
-        busy_title.setObjectName("busy_title")
-        self.busy_message_label = QLabel("잠시만 기다려 주세요.")
-        self.busy_message_label.setObjectName("busy_message")
-        self.busy_message_label.setWordWrap(True)
-        self.busy_progress = QProgressBar()
-        self.busy_progress.setObjectName("busy_progress")
-        self.busy_progress.setRange(0, 0)
-        self.busy_progress.setTextVisible(False)
-
-        busy_card_layout.addWidget(busy_title)
-        busy_card_layout.addWidget(self.busy_message_label)
-        busy_card_layout.addWidget(self.busy_progress)
-        overlay_layout.addWidget(busy_card)
+        self.busy_overlay = LoadingOverlay(root)
+        self.busy_message_label = self.busy_overlay.message_label
+        self.busy_spinner = self.busy_overlay.spinner
+        self._local_busy_token = None
+        self._external_busy_token = None
 
         self.setCentralWidget(root)
         self._update_busy_overlay_geometry()
@@ -181,6 +180,8 @@ class WindowShellMixin:
         return max(self.minimumHeight(), int(available_height * 0.88))
 
     def _fit_window_to_current_page(self, *, allow_grow: bool) -> None:
+        if bool(getattr(self, "_embedded", False)):
+            return
         page = self._current_page if hasattr(self, "_current_page") else None
         if page is None:
             return
@@ -200,13 +201,16 @@ class WindowShellMixin:
 
     def _update_busy_overlay_geometry(self) -> None:
         if hasattr(self, "busy_overlay") and hasattr(self, "root_widget"):
-            self.busy_overlay.setGeometry(self.root_widget.rect())
-            self.busy_overlay.raise_()
+            self.busy_overlay.sync_geometry()
 
     def resizeEvent(self, event) -> None:
         """Qt 리사이즈 이벤트를 처리한다."""
         super().resizeEvent(event)
-        if not self.isFullScreen() and not self.isMaximized():
+        if (
+            not bool(getattr(self, "_embedded", False))
+            and not self.isFullScreen()
+            and not self.isMaximized()
+        ):
             self._last_normal_window_width = max(int(self.width()), self.minimumWidth())
             self._last_normal_window_height = max(int(self.height()), self.minimumHeight())
         self._update_busy_overlay_geometry()
@@ -214,6 +218,8 @@ class WindowShellMixin:
     def showEvent(self, event) -> None:
         """Qt 표시 이벤트를 처리한다."""
         super().showEvent(event)
+        if bool(getattr(self, "_embedded", False)):
+            return
         if self._initial_window_state_applied:
             return
         self._initial_window_state_applied = True
@@ -224,7 +230,8 @@ class WindowShellMixin:
 
     def closeEvent(self, event) -> None:
         """Qt 종료 이벤트를 처리한다."""
-        self._persist_window_preferences()
+        if bool(getattr(self, "_persist_window_preferences_on_close", True)):
+            self._persist_window_preferences()
         super().closeEvent(event)
 
     def _persist_window_preferences(self) -> None:
@@ -246,19 +253,27 @@ class WindowShellMixin:
     def _set_busy(self, busy: bool, message: str = "") -> None:
         """`set_busy` 값을 설정한다."""
         QApplication = self.qt["QApplication"]
-        Qt = self.qt["Qt"]
 
-        if busy:
-            self.busy_message_label.setText(message or "잠시만 기다려 주세요.")
-            self._update_busy_overlay_geometry()
-            self.busy_overlay.show()
-            self.busy_overlay.raise_()
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        external_start = getattr(self, "_busy_started_callback", None)
+        external_finish = getattr(self, "_busy_finished_callback", None)
+        if bool(getattr(self, "_embedded", False)) and callable(external_start):
+            if busy and self._external_busy_token is None:
+                self._external_busy_token = external_start(message)
+            elif not busy and self._external_busy_token is not None:
+                if callable(external_finish):
+                    external_finish(self._external_busy_token)
+                self._external_busy_token = None
             QApplication.processEvents()
             return
 
-        self.busy_overlay.hide()
-        QApplication.restoreOverrideCursor()
+        if busy:
+            if self._local_busy_token is None:
+                self._local_busy_token = self.busy_overlay.start(message)
+            QApplication.processEvents()
+            return
+
+        self.busy_overlay.finish(self._local_busy_token)
+        self._local_busy_token = None
         QApplication.processEvents()
 
     def _run_with_busy(self, message: str, func, *args, **kwargs):
@@ -279,9 +294,9 @@ class WindowShellMixin:
         task.failed.connect(_on_failed)
         self.busy_task = task
         self._set_busy(True, message)
-        task.start()
 
         try:
+            task.start()
             loop.exec()
         finally:
             task.wait()
@@ -298,11 +313,10 @@ class WindowShellMixin:
         return result_box.get("result")
 
     def _build_pages(self) -> None:
-        self.settings_page = create_settings_page(
-            self.settings_store,
+        self.settings_page = create_batch_settings_page(
             self.session_state.settings,
             self._on_settings_changed,
-            self._apply_theme,
+            getattr(self, "_global_settings_requested_callback", None),
         )
         self.project_page = create_project_selection_page(
             self.session_state.settings,
@@ -316,6 +330,9 @@ class WindowShellMixin:
             self._on_file_state_changed,
             self._load_file_preview,
             self._show_error_dialog,
+            on_file_metadata_requested=self._load_file_metadata,
+            on_sheet_preview_requested=self._load_sheet_preview,
+            on_full_data_requested=self._load_full_file_data,
         )
         self.root_item_structure_page = create_root_item_page(
             self._preview_root_item_config,
@@ -340,6 +357,13 @@ class WindowShellMixin:
 
         self.load_workflow_button.clicked.connect(self._load_workflow_preset)
         self.save_workflow_button.clicked.connect(self._save_workflow_preset)
+        self.save_workflow_as_button.clicked.connect(self._save_workflow_preset_as)
+        self.rename_workflow_button.clicked.connect(self._rename_workflow_preset)
+        self.default_workflow_button.clicked.connect(self._set_default_workflow_preset)
+        self.delete_workflow_button.clicked.connect(self._delete_workflow_preset)
+        self.workflow_preset_combo.currentIndexChanged.connect(
+            self._sync_workflow_preset_action_state
+        )
 
         self._attach_navigation(self.settings_page, next_page=self.project_page)
         self._attach_navigation(
@@ -400,7 +424,7 @@ class WindowShellMixin:
             self.stack.addWidget(self._create_page_scroll_area(page))
 
         self.page_meta = {
-            self.settings_page: ("설정", "연결 정보와 기본 실행 옵션을 입력합니다.", 0),
+            self.settings_page: ("배치 설정", "작업 모드와 Excel 해석 기준을 확인합니다.", 0),
             self.project_page: ("프로젝트 선택", "업로드 대상 프로젝트와 트래커를 선택합니다.", 1),
             self.file_page: ("파일 선택", "Excel 파일과 시트, 헤더 정보를 확인합니다.", 2),
             self.root_item_structure_page: ("상단 구조", "상단 폴더를 어떤 구조로 만들지 결정합니다.", 3),
@@ -428,6 +452,7 @@ class WindowShellMixin:
         else:
             self._apply_theme(self.session_state.settings.theme_name)
             self.statusBar().showMessage("GUI 스켈레톤이 준비되었습니다.")
+        self._refresh_workflow_preset_choices()
 
     def _show_page(self, page) -> None:
         self._current_page = page

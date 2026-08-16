@@ -17,9 +17,9 @@
 
 ### 엔트리 포인트
 
-- `cli_main.py`: 현재 권장 인터랙티브 CLI
+- `gui_main.py`: 현재 기본 PySide6 GUI 엔트리 포인트
+- `cli_main.py`: 유지보수와 보조 실행용 인터랙티브 CLI
 - `main.py`: 과거 엔트리 포인트, 현재 비권장
-- `gui_main.py`: PySide6 기반 GUI 엔트리 포인트
 
 ### 입력 reader
 
@@ -70,8 +70,7 @@
 - `referenceType`, `options`, `multipleValues`, `valueModel` 로 보조 판정
 - `UserChoiceField`, `UserReference` 는 사용자 이름 우선 lookup 대상으로 분류
 - `MemberField` 는 `USER/ROLE/GROUP` mixed member lookup 대상으로 분류
-- `TrackerItemChoiceField` 는 tracker configuration 에 source tracker 정보가 있으면 query lookup 가능 대상으로 분류
-- source tracker를 안전하게 결정할 수 없는 `TrackerItemChoiceField` 는 regex ID 추출 경로만 허용
+- `TrackerItemChoiceField` 는 configuration 정보와 무관하게 regex ID 추출 경로로 분류
 - `Status` 는 transition 기반 후처리가 필요하므로 TODO 로 분리
 - 정적 option이 없는 일반 reference field는 `LOOKUP_REQUIRED` 또는 `FIELD_UNSUPPORTED` 로 조기 노출
 
@@ -133,7 +132,7 @@
 - 사용자 선택 필드를 사용자 이름 우선 lookup 후 reference로 변환
 - `MemberField` 를 `USER/ROLE/GROUP` mixed reference 로 변환
 - tracker item 선택 필드를 tracker item ID parse 후 reference로 변환
-- 프로젝트 단위 user lookup cache 유지
+- 검증과 다중 파일 업로드 사이에 프로젝트 단위 user/member/group/role lookup cache 유지
 - parent-first 순서로 업로드 수행
 - 실행 산출물 저장
 - GUI upload worker가 재사용할 progress/pause/cancel hook 제공
@@ -160,34 +159,85 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 `src/gui/`
 
 주요 책임:
+- 최상위에서 `트래커 작업공간`, `배치 작업`, `실행 기록`, `설정` 전환
+- 최상위 좌측 앱 메뉴 접기·펼치기와 접힘 상태 영속화
+- 기존 9단계 create/update/upsert 마법사를 `배치 작업` 안에 보존
 - 단계형 화면 전환과 상태 유지
-- 설정 저장 및 암호화된 비밀번호 저장
-- 전체 설정 preset 저장 및 재적용
-- 테마 전환과 테스트 모드 제어
+- 전용 설정 센터에서 다중 연결 profile과 활성 profile 관리
+- 로컬 암호화 또는 OS 자격증명 저장소 선택과 안전한 저장소 전환
+- 연결·snapshot 검증, 명시적 저장·적용과 legacy 설정 migration
+- 전역 설정과 연결(또는 테스트 모드)·프로젝트·트래커 범위의 이름 있는 배치 workflow preset 분리
+- 테마 전환과 전역 테스트 모드 제어
 - 연결 테스트와 프로젝트/트래커 조회
-- 다중 Excel 파일 선택과 대표 파일 미리보기 표시
+- 현재 tracker 범위를 강제하는 CbQL 변환과 서버 pagination 메타데이터 보존
+- 트래커 최상위·직접 하위·상세·조상 경로 응답의 UI 독립 모델 정규화
+- 두 tracker 익명 조회 snapshot과 온라인 조회가 같은 서비스 계약을 사용
+- 프로젝트·트래커 선택, 지연 로딩 트리, tracker 범위 검색, ID 직접 접근과 상세 화면 연결
+- 간편·다중 조건 CbQL 검색, 페이지 독립 선택과 검색 결과 전체 ID 수집
+- 조회 요청의 화면 세션 캐시와 request token 기반 오래된 응답 차단
+- API·백그라운드 작업의 중첩 수를 추적하고 전체 입력을 차단하는 전역 spinner 오버레이
+- schema 기반 단건 생성, 선택 필드 부분 수정, version 충돌 확인, 단건 상태 전환과 삭제
+- Codebeamer Bulk fields API 기반 상태·일반 필드·TableField 청크 수정, atomic 롤백 구분과 값 비저장 재시도
+- 단건 쓰기와 배치 최종 결과의 제한된 로컬 실행 기록 및 필터 화면
+- 공통 HTTP 계층의 메타데이터 전용 API 모니터와 개발자 도구의 실시간 통계 탭
+- 논리 작업·오류를 진단 ID로 연결하는 세션 진단 로그와 안전한 진단 ZIP 내보내기
+- 테스트 모드 UI·서비스 이중 쓰기 차단
+- 다중 Excel 파일 선택과 `시트 메타데이터 → 제한 행 미리보기 → 전체 파일 데이터` 단계형 로드 및 signature cache
 - 파일명 정규식 기반 상단 데이터 preview/payload 구성
 - 매핑/검증/업로드/결과 화면 구성
 - upload worker를 통한 백그라운드 실행과 진행률 갱신
+- 중단·취소 시 완료 결과와 준비 완료 미실행 행의 세션 재시도 context 보존
+- 로컬 상태 저장 실패와 서버 처리 결과를 분리해 안전한 경고만 남기는 결과 집계
 - 항목별 로그/시간/총 건수 표시와 오류 다이얼로그 제공
 - 1080 높이 기준 내부 스크롤과 페이지 높이 상한 적용
 
 주요 모듈:
 - `src/gui/main_window.py`
+- `src/gui/batch_window.py`
 - `src/gui/pages.py`
 - `src/gui/services.py`
 - `src/gui/settings_store.py`
+- `src/gui/settings_center.py`
+- `src/gui/page_batch_settings.py`
+- `src/gui/tracker_query_models.py`
+- `src/gui/tracker_query_service.py`
+- `src/gui/tracker_workspace.py`
+- `src/gui/tracker_item_editor.py`
+- `src/gui/tracker_item_editor_panel.py`
+- `src/gui/tracker_item_create_dialog.py`
+- `src/gui/activity_history.py`
+- `src/gui/activity_history_page.py`
+- `src/gui/api_monitor_window.py`
+- `src/diagnostics.py`
+- `src/gui/developer_tools_window.py`
+- `src/gui/offline_query.py`
 - `src/gui/worker.py`
 
 현재 내부 구조:
 - 페이지 공통 요소: `src/gui/page_common.py`
-- 설정·프로젝트 화면: `src/gui/page_setup_settings.py`
+- 전역 설정 센터: `src/gui/settings_center.py`
+- 배치 설정 화면: `src/gui/page_batch_settings.py`
+- legacy 설정·프로젝트 화면: `src/gui/page_setup_settings.py`
 - 파일·루트 항목 화면: `src/gui/page_setup_file.py`
 - 매핑 화면: `src/gui/page_execution_mapping.py`
 - 검증·업로드·결과 화면: `src/gui/page_execution_run.py`
 - 페이지 호환 façade: `src/gui/page_setup.py`, `src/gui/page_execution.py`
-- 메인 윈도우 셸/워크플로/업로드 분리: `src/gui/main_window.py`, `src/gui/window_support.py`, `src/gui/window_shell.py`, `src/gui/window_workflow.py`, `src/gui/window_upload.py`
+- 최상위 앱 셸, 접이식 탐색 메뉴와 route 전환: `src/gui/main_window.py`
+- 참조 카운트형 로딩 오버레이와 회전 spinner: `src/gui/loading_overlay.py`
+- 기존 배치 마법사 조합: `src/gui/batch_window.py`, `src/gui/window_support.py`, `src/gui/window_shell.py`, `src/gui/window_workflow.py`, `src/gui/window_upload.py`
 - GUI 서비스 분리: `src/gui/service_core.py`, `src/gui/upload_service.py`
+- 트래커 조회 모델·서비스: `src/gui/tracker_query_models.py`, `src/gui/tracker_query_service.py`
+- 트래커 계층·검색·상세 화면: `src/gui/tracker_workspace.py`
+- 트래커 단건 생성·부분 수정·상태 전환·삭제 계약: `src/gui/tracker_item_editor.py`
+- schema 기반 필드 편집과 삭제 확인 UI: `src/gui/tracker_item_editor_panel.py`
+- schema 기반 최상위·하위 단건 생성 UI: `src/gui/tracker_item_create_dialog.py`
+- 실행 기록 모델·민감정보 제한·영속 저장: `src/gui/activity_history.py`
+- 실행 기록 필터·상세·비우기 화면: `src/gui/activity_history_page.py`
+- API 모니터 thread-safe 버퍼·통계: `src/api_monitor.py`
+- API 모니터 재사용 panel과 기존 window wrapper: `src/gui/api_monitor_window.py`
+- 세션 진단 이벤트·마스킹·진단 ZIP: `src/diagnostics.py`
+- 진단 로그와 API 모니터를 묶는 확장형 개발자 창: `src/gui/developer_tools_window.py`
+- 테스트 모드 CbQL subset 평가: `src/gui/offline_query.py`
 - 업로드 context 모델: `src/gui/upload_context.py`
 - TRACKER configuration 해석: `src/gui/tracker_config.py`
 - 다중 파일 cache·validation 집계: `src/gui/batch_validation.py`
@@ -201,6 +251,20 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 `BatchValidationService`, `BatchUploadService`가 담당합니다.
 
 `MainWindow` 는 런타임에 내부 클래스를 조립하지 않고 `QMainWindow`를 직접 상속합니다.
+최상위 설정 route는 `SettingsCenterPage`를 직접 포함하고, 저장·검증을 통과한 전역 설정만
+`BatchUploadWindow.apply_global_settings()`를 통해 현재 배치 세션에 반영합니다. 앱 시작 시에도
+저장된 검증 signature와 현재 profile 또는 snapshot signature가 일치해야 활성 환경으로 복원합니다.
+`TrackerQueryService`는 온라인 `CodebeamerClient`와 테스트 모드 `OfflineGuiClient`를 같은
+메서드 계약으로 사용합니다. 검색 전에는 선택 tracker ID를 CbQL에 강제로 결합하고,
+서버가 반환한 `page`, `pageSize`, `total`과 요청값을 함께 보존해 pagination 지원 차이를
+화면 계층에서 판단할 수 있게 합니다. 최상위·직접 하위·상세·parent 경로 응답은
+`tracker_query_models.py`의 불변 모델로 변환하며 원본 JSON의 credential 계열 키는 마스킹합니다.
+`TrackerWorkspacePage`는 최상위와 직접 하위를 필요할 때만 불러오고 세션 캐시를 재사용합니다.
+프로젝트·트래커·선택 아이템이 바뀐 뒤 완료되는 이전 요청은 작업별 request token과 현재
+컨텍스트를 비교해 무시하며, ID 직접 접근은 검색과 분리해 소속 tracker와 조상 경로를 먼저 확인합니다.
+`TrackerItemEditorService`는 전체 item 리소스를 대체하지 않고 schema의 `FieldValue`로 선택 필드만
+수정합니다. 쓰기 직전 item version을 재확인하고 Status는 별도 전환 동작으로 분리합니다. 삭제는
+ID 재입력 확인을 통과해야 하며, 테스트 모드에서는 UI와 서비스 계층 모두 쓰기를 차단합니다.
 세션의 mapping/validation context는 실제 dataclass 타입으로 선언하며, 업로드 건수·단계·
 시간 측정값은 `UploadProgressState` 하나에서 관리합니다. Window mixin 사이의 호출은
 현재 클래스 구성만으로 명확하므로 별도 `Protocol`은 추가하지 않습니다.
@@ -219,6 +283,12 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - 프로젝트, 트래커, schema, 아이템 조회
 - 사용자 조회 API 호출
 - 신규 tracker item 생성
+- 공통 HTTP 시도의 status·지연·재시도 문맥을 `src/api_monitor.py`에 기록
+
+모니터 계측은 요청·응답 본문, header, query parameter, host와 원본 예외 문자열을
+전달하지 않습니다. 숫자·UUID·긴 16진수 경로 segment는 `{id}`로 치환하며 최근
+최대 500개 시도만 프로세스 메모리에 유지합니다. 작업 thread는 이벤트만 기록하고
+GUI thread의 timer가 snapshot을 읽으므로 Qt widget을 worker에서 직접 갱신하지 않습니다.
 
 현재 사용자/멤버 API helper:
 - `GET /v3/users/{userId}`
@@ -230,7 +300,10 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 
 ```mermaid
 flowchart TD
-    A["CLI 또는 GUI 시작"] --> B["온라인 모드 또는 테스트 모드 결정"]
+    A["CLI 또는 GUI 시작"] --> A1{"GUI 실행?"}
+    A1 -->|GUI| A2["앱 셸에서 배치 작업 선택"]
+    A1 -->|CLI| B["온라인 모드 또는 테스트 모드 결정"]
+    A2 --> B
     B --> C["프로젝트 / 트래커 선택"]
     C --> D["하나 이상의 Excel 파일 선택"]
     D --> E["대표 파일 시트 / 헤더 / summary 결정"]
@@ -274,7 +347,7 @@ flowchart TD
 ## End-to-End 흐름
 
 1. 사용자가 `cli_main.py` 또는 `gui_main.py`를 실행합니다.
-2. 엔트리 포인트가 settings, logger, client/service, mapper, wizard를 초기화합니다.
+2. GUI는 앱 셸을 열고 `배치 작업`에서 기존 마법사를 표시하며, CLI는 기존 대화형 흐름으로 바로 진입합니다. 선택된 경로가 settings, service, mapper, wizard를 초기화합니다.
 3. GUI라면 온라인 모드와 테스트 모드 중 하나를 고르고, 테스트 모드에서는 snapshot 기반 client를 사용합니다.
 4. 사용자가 project와 tracker를 선택합니다.
 5. tracker schema를 먼저 조회합니다.
@@ -287,8 +360,8 @@ flowchart TD
 12. 정적 option은 reference dict로 해석합니다.
 13. 사용자 선택 필드는 사용자 이름으로 조회하고 필요시 숫자 입력에 한해 ID fallback 을 사용합니다.
 14. `MemberField` 는 `USER/ROLE/GROUP` 후보를 이름으로 찾아 mixed reference 로 변환합니다.
-15. `TrackerItemChoiceField` 는 configuration 에 source tracker 정보가 있으면 query lookup 후보를 모아 사전 조회하고, 아니면 regex로 `TrackerItemReference` 를 만듭니다.
-16. user/member/tracker item lookup 결과는 cache에 저장해 다음 행과 다음 파일에서 재사용합니다.
+15. `TrackerItemChoiceField` 는 regex로 ID를 추출해 `TrackerItemReference` 를 만듭니다. 이름·summary query lookup은 비활성화되어 있습니다.
+16. user/member/group/role lookup 결과는 공용 cache에 저장해 검증 이후의 파일별 업로드에서도 재사용합니다.
 17. wizard가 row별 payload를 먼저 계산해 `payload_df` cache에 저장합니다.
 18. preview는 `payload_df`를 재사용하고 upload는 같은 payload로 parent-first 업로드를 수행합니다.
 19. 상단 데이터가 켜져 있으면 파일별 root parent item을 먼저 업로드한 뒤 child row의 parent를 연결합니다.
@@ -306,7 +379,7 @@ flowchart TD
 - schema 로딩 후 `schema`, `schema_df`, `comparison_df`가 채워짐
 - option 처리 후 `option_candidates_df`, `option_maps`, `option_check_df`, `converted_upload_df`가 채워짐
 - payload 생성 후 `payload_df` 가 채워짐
-- 사용자 lookup 중간 결과는 `user_lookup_cache` 에 유지됨
+- 사용자·Member lookup 중간 결과는 `MappingContext`를 통해 검증 wizard와 파일별 업로드 wizard 사이에서 재사용됨
 - upload 수행 후 `upload_result`가 채워짐
 
 ## TableField 처리 방식
@@ -342,9 +415,8 @@ flowchart TD
 
 tracker item 선택 필드 처리:
 - `TrackerItemChoiceField` 는 tracker configuration 의 `fields` 목록에서 `referenceId == schema.field_id` 를 우선 매칭합니다.
-- matched configuration 이 `choiceOptionSetting`, `choiceConfigOptionsSetting`, `choiceConfigOptionsSetApi` 중 하나에 tracker `referenceFilters` 를 제공하면 query lookup 을 지원합니다.
-- query lookup 은 전체 파일에서 필요한 이름/summary 값을 중복 제거한 뒤 source tracker 기준으로 사전 조회합니다.
-- source tracker를 확인할 수 없거나 offline snapshot 만 사용하는 경우에는 regex ID 추출 경로만 사용합니다.
+- 이름·summary query lookup은 대량 검증의 API 호출을 줄이기 위해 비활성화되어 있습니다.
+- configuration의 source tracker 정보와 무관하게 regex ID 추출 경로를 사용합니다.
 - builtin `subjects` 는 현재 direct parse만 사용합니다.
 - 단일 값 또는 list 모두 허용
 - 각 값에서 `[:id]` 패턴을 먼저, 없으면 `[]` 안 첫 번째 integer를 추출

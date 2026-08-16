@@ -44,6 +44,10 @@ class MappingContext:
     selected_tracker_item_settings: dict[str, dict[str, Any]]
     tracker_item_field_candidates: list[TrackerItemFieldCandidate]
     tracker_item_lookup_cache: dict[tuple[str, str], tuple[Any, str | None, str | None]]
+    user_lookup_cache: dict[tuple[int | None, str], tuple[Any, Any, str, str | None]]
+    member_lookup_cache: dict[tuple[int | None, int | None, int | None, str], tuple[Any, Any, str, str | None]]
+    group_lookup_cache: dict[str, list[dict[str, Any]]]
+    tracker_role_cache: dict[tuple[int, int, int], dict[str, list[dict[str, Any]]]]
     list_cols: list[str]
     file_paths: list[str]
     representative_file_path: str
@@ -61,6 +65,7 @@ class ValidationContext:
     comparison_df: pd.DataFrame
     option_check_df: pd.DataFrame
     converted_upload_df: pd.DataFrame
+    payload_df: pd.DataFrame
     issue_df: pd.DataFrame
     has_blocking_issues: bool
     summary_stats: dict[str, int]
@@ -86,6 +91,44 @@ class RootItemUploadSpec:
     row_ids: list[int]
     parent_key: str | None = None
     kind: str = "group_root"
+
+
+@dataclass
+class FailedUploadRetryJob:
+    """현재 GUI 세션에서 다시 실행할 수 있는 실패 행과 준비 상태다."""
+
+    file_path: str
+    file_label: str
+    root_item_specs: list[RootItemUploadSpec]
+    output_dir: str
+    wizard: CodebeamerUploadWizard
+    upload_mode: str
+    retry_row_ids: set[int]
+    retry_root_keys: set[str]
+    created_row_item_ids: dict[int, Any]
+    created_parent_item_ids_by_key: dict[str, Any]
+    update_payload_prepared: bool = True
+
+    @property
+    def retry_target_count(self) -> int:
+        return len(self.retry_row_ids) + len(self.retry_root_keys)
+
+
+@dataclass
+class FailedUploadRetryContext:
+    """원본 파일을 다시 고르지 않고 실패 항목만 재시도하는 세션 캐시다."""
+
+    jobs: list[FailedUploadRetryJob]
+    success_df: pd.DataFrame
+    failed_df: pd.DataFrame
+    unresolved_df: pd.DataFrame
+    created_map_by_file: dict[str, dict[Any, Any]]
+    dry_run: bool
+    non_retryable_count: int = 0
+
+    @property
+    def retry_target_count(self) -> int:
+        return sum(job.retry_target_count for job in self.jobs)
 
 
 @dataclass

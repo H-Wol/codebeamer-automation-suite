@@ -4,7 +4,6 @@ from typing import Any
 
 import pandas as pd
 
-from src.models import TrackerItemQueryMatchStrategy
 from src.models import TrackerItemResolutionMode
 from src.upload_policy import DEFAULT_TRACKER_ITEM_ID_REGEX
 
@@ -246,14 +245,8 @@ class TrackerConfigurationService:
         settings: dict[str, dict[str, Any]] = {}
         for candidate in tracker_item_candidates:
             settings[candidate.schema_field] = {
-                "mode": (
-                    TrackerItemResolutionMode.QUERY.value
-                    if candidate.supports_query
-                    else TrackerItemResolutionMode.REGEX.value
-                ),
-                "query_match_strategy": TrackerItemQueryMatchStrategy.BEST.value,
+                "mode": TrackerItemResolutionMode.REGEX.value,
                 "regex_pattern": DEFAULT_TRACKER_ITEM_ID_REGEX,
-                "source_tracker_ids": list(candidate.source_tracker_ids),
             }
         return settings
 
@@ -272,37 +265,14 @@ class TrackerConfigurationService:
             if not isinstance(raw_setting, dict):
                 continue
             default_setting = normalized_settings[candidate.schema_field]
-            raw_mode = str(raw_setting.get("mode") or default_setting["mode"]).strip()
-            if raw_mode not in {
-                TrackerItemResolutionMode.REGEX.value,
-                TrackerItemResolutionMode.QUERY.value,
-            }:
-                raw_mode = default_setting["mode"]
-            raw_query_match_strategy = str(
-                raw_setting.get("query_match_strategy")
-                or default_setting["query_match_strategy"]
-            ).strip()
-            if raw_query_match_strategy not in {
-                TrackerItemQueryMatchStrategy.FIRST.value,
-                TrackerItemQueryMatchStrategy.LAST.value,
-                TrackerItemQueryMatchStrategy.BEST.value,
-                TrackerItemQueryMatchStrategy.ERROR.value,
-            }:
-                raw_query_match_strategy = default_setting["query_match_strategy"]
             normalized_settings[candidate.schema_field] = {
-                "mode": (
-                    raw_mode
-                    if raw_mode != TrackerItemResolutionMode.QUERY.value
-                    or candidate.supports_query
-                    else TrackerItemResolutionMode.REGEX.value
-                ),
-                "query_match_strategy": raw_query_match_strategy,
+                # 이전에 저장된 query 설정도 API 조회를 다시 활성화하지 않도록 무시한다.
+                "mode": TrackerItemResolutionMode.REGEX.value,
                 "regex_pattern": str(
                     raw_setting.get("regex_pattern")
                     or default_setting["regex_pattern"]
                 ).strip()
                 or DEFAULT_TRACKER_ITEM_ID_REGEX,
-                "source_tracker_ids": list(candidate.source_tracker_ids),
             }
 
         return candidates, normalized_settings

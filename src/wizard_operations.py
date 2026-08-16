@@ -39,6 +39,7 @@ class WizardOperationMixin:
         top_level_parent_specs: list[dict[str, Any]] | None = None,
         include_row_ids: set[int] | None = None,
         existing_row_item_ids: dict[int, Any] | None = None,
+        existing_parent_item_ids_by_key: dict[str, Any] | None = None,
         event_callback=None,
         cancel_requested=None,
         pause_requested=None,
@@ -68,6 +69,17 @@ class WizardOperationMixin:
         }
         root_item_id = None
         top_level_parent_item_ids: dict[int, Any] = {}
+        created_parent_item_ids_by_key = {
+            str(key): item_id
+            for key, item_id in dict(existing_parent_item_ids_by_key or {}).items()
+            if str(key).strip() and item_id not in (None, "")
+        }
+        for parent_spec in normalized_parent_specs:
+            parent_item_id = created_parent_item_ids_by_key.get(parent_spec["key"])
+            if parent_item_id is None:
+                continue
+            for row_id in parent_spec["row_ids"]:
+                top_level_parent_item_ids[int(row_id)] = parent_item_id
         success_logs = []
         failed_logs = [
             {
@@ -85,6 +97,7 @@ class WizardOperationMixin:
             self.state.upload_result = {
                 "root_item_id": root_item_id,
                 "created_map": created_map,
+                "parent_item_ids_by_key": dict(created_parent_item_ids_by_key),
                 "success_df": pd.DataFrame(success_logs),
                 "failed_df": pd.DataFrame(failed_logs),
                 "unresolved_df": unresolved_df,
@@ -184,8 +197,11 @@ class WizardOperationMixin:
                 return _finalize(_build_unresolved_df(ready_df))
 
         if normalized_parent_specs:
-            created_parent_item_ids_by_key: dict[str, Any] = {}
-            pending_parent_specs = list(normalized_parent_specs)
+            pending_parent_specs = [
+                parent_spec
+                for parent_spec in normalized_parent_specs
+                if parent_spec["key"] not in created_parent_item_ids_by_key
+            ]
             parent_attempt_index = 0
 
             while pending_parent_specs:
@@ -585,6 +601,7 @@ class WizardOperationMixin:
             self.state.upload_result = {
                 "root_item_id": None,
                 "created_map": {},
+                "parent_item_ids_by_key": {},
                 "success_df": pd.DataFrame(),
                 "failed_df": pd.DataFrame(),
                 "unresolved_df": pd.DataFrame(),
@@ -612,6 +629,8 @@ class WizardOperationMixin:
 
         root_item_id = None
         created_map = dict(seeded_existing_row_item_ids)
+        parent_item_ids_by_key: dict[str, Any] = {}
+        update_payload_prepared = False
         success_frames: list[pd.DataFrame | None] = []
         failed_frames: list[pd.DataFrame | None] = []
         unresolved_frames: list[pd.DataFrame | None] = []
@@ -664,13 +683,19 @@ class WizardOperationMixin:
             _emit_phase_finished("insert", create_result)
             root_item_id = create_result.get("root_item_id")
             created_map.update(create_result.get("created_map", {}))
+            parent_item_ids_by_key.update(
+                create_result.get("parent_item_ids_by_key", {})
+            )
             success_frames.append(create_result.get("success_df"))
             failed_frames.append(create_result.get("failed_df"))
             unresolved_frames.append(create_result.get("unresolved_df"))
 
             create_failed_df = create_result.get("failed_df")
             create_unresolved_df = create_result.get("unresolved_df")
-            if (
+            cancelled_after_create = bool(
+                cancel_requested is not None and cancel_requested()
+            )
+            should_stop_before_update = (
                 not continue_on_error
                 and isinstance(create_failed_df, pd.DataFrame)
                 and not create_failed_df.empty
@@ -678,10 +703,31 @@ class WizardOperationMixin:
                 not continue_on_error
                 and isinstance(create_unresolved_df, pd.DataFrame)
                 and not create_unresolved_df.empty
-            ):
+            ) or cancelled_after_create
+            if should_stop_before_update:
+                skipped_update_df = payload_df[
+                    payload_df["_row_id"].isin(sorted(update_row_ids))
+                ].copy()
+                if not skipped_update_df.empty:
+                    skipped_update_df["phase"] = "update"
+                    skipped_update_df["status"] = UploadStatus.UNRESOLVED_PARENT.value
+                    skipped_update_df["error"] = (
+                        "사용자 중단 요청으로 아직 수정 요청을 실행하지 않았습니다."
+                        if cancelled_after_create
+                        else "생성 단계 실패로 아직 수정 요청을 실행하지 않았습니다."
+                    )
+                    unresolved_frames.append(skipped_update_df)
+                    phase_results["update"] = {
+                        "total": len(skipped_update_df),
+                        "success": 0,
+                        "failed": 0,
+                        "unresolved": len(skipped_update_df),
+                    }
                 self.state.upload_result = {
                     "root_item_id": root_item_id,
                     "created_map": created_map,
+                    "parent_item_ids_by_key": parent_item_ids_by_key,
+                    "update_payload_prepared": update_payload_prepared,
                     "success_df": self._concat_result_frames(success_frames),
                     "failed_df": self._concat_result_frames(failed_frames),
                     "unresolved_df": self._concat_result_frames(unresolved_frames),
@@ -701,6 +747,7 @@ class WizardOperationMixin:
                 cancel_requested=cancel_requested,
                 pause_requested=pause_requested,
             )
+            update_payload_prepared = True
             _emit_phase_finished("update", update_result)
             success_frames.append(update_result.get("success_df"))
             failed_frames.append(update_result.get("failed_df"))
@@ -709,6 +756,8 @@ class WizardOperationMixin:
         self.state.upload_result = {
             "root_item_id": root_item_id,
             "created_map": created_map,
+            "parent_item_ids_by_key": parent_item_ids_by_key,
+            "update_payload_prepared": update_payload_prepared,
             "success_df": self._concat_result_frames(success_frames),
             "failed_df": self._concat_result_frames(failed_frames),
             "unresolved_df": self._concat_result_frames(unresolved_frames),

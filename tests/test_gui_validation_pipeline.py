@@ -122,6 +122,7 @@ class GuiValidationPipelineServiceTest(unittest.TestCase):
 
             self.assertFalse(validation_context.has_blocking_issues)
             self.assertTrue(validation_context.issue_df.empty)
+            self.assertEqual(len(validation_context.payload_df.index), 1)
             self.assertEqual(validation_context.summary_stats["total_rows"], 1)
             self.assertEqual(validation_context.summary_stats["ready_rows"], 1)
             self.assertEqual(validation_context.summary_stats["error_rows"], 0)
