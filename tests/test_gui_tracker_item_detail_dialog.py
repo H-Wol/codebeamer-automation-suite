@@ -9,6 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from src.gui.tracker_content_models import AttachmentResource
 from src.gui.tracker_content_models import AttachmentSummary
 from src.gui.tracker_item_detail_dialog import TrackerItemDetailDialog
+from src.gui.tracker_item_context_models import ItemRelationsSnapshot
 from src.gui.tracker_query_models import TrackerItemDetail
 
 
@@ -74,6 +75,43 @@ class TrackerItemDetailDialogTest(unittest.TestCase):
         self.assertEqual(dialog.image_combo.count(), 0)
         self.assertFalse(dialog.image_combo.isEnabled())
         self.assertIn("없습니다", dialog.image_status.text())
+
+    def test_context_tabs_are_lazy_and_related_item_is_opened_in_dialog(self) -> None:
+        dialog = TrackerItemDetailDialog(self.detail(), description_html="<p>설명</p>")
+        requested = []
+        opened = []
+        dialog.context_tab_requested.connect(lambda kind, force: requested.append((kind, force)))
+        dialog.related_item_requested.connect(opened.append)
+        dialog.show()
+        dialog.tabs.setCurrentWidget(dialog.relations_tab)
+        self.app.processEvents()
+
+        self.assertEqual(requested, [("relations", False)])
+        dialog.set_relations(
+            ItemRelationsSnapshot.from_raw(
+                {
+                    "downstreamReferences": [
+                        {"id": "r1", "itemRevision": {"id": 1206, "name": "Child"}}
+                    ]
+                }
+            )
+        )
+        dialog._open_selected_relation(dialog.relations_table.model().index(0, 1))
+        self.assertEqual(opened, [1206])
+        dialog.close()
+
+    def test_baseline_context_tabs_never_request_current_context(self) -> None:
+        dialog = TrackerItemDetailDialog(self.detail(), description_html="", baseline_id=7)
+        requested = []
+        dialog.context_tab_requested.connect(lambda kind, force: requested.append((kind, force)))
+        dialog.show()
+        dialog.tabs.setCurrentWidget(dialog.relations_tab)
+        dialog.tabs.setCurrentWidget(dialog.history_tab)
+        self.app.processEvents()
+
+        self.assertEqual(requested, [])
+        self.assertIn("현재 상태를 대신 조회하지 않습니다", dialog.history_status.text())
+        dialog.close()
 
 
 if __name__ == "__main__":

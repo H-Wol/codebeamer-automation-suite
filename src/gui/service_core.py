@@ -198,6 +198,8 @@ class OfflineGuiClient:
         self._offline_trackers: dict[int, dict[str, Any]] = {}
         self._offline_items: dict[int, dict[str, Any]] = {}
         self._offline_children: dict[int | None, list[int]] = {}
+        self._offline_relations: dict[str, Any] = {}
+        self._offline_history: dict[str, Any] = {}
         if self.query_data is not None:
             self._load_query_data(self.query_data)
 
@@ -321,6 +323,13 @@ class OfflineGuiClient:
                 ):
                     raise ValueError("테스트 조회 데이터의 parent는 같은 트래커에 있어야 합니다.")
             self._offline_children.setdefault(parent_id, []).append(item_id)
+
+        relations = payload.get("relationsByItemId", {})
+        history = payload.get("historyByItemId", {})
+        if not isinstance(relations, dict) or not isinstance(history, dict):
+            raise ValueError("테스트 관계·이력 데이터는 아이템 ID별 객체여야 합니다.")
+        self._offline_relations = deepcopy(relations)
+        self._offline_history = deepcopy(history)
 
         if self._offline_projects and self.project_id not in self._offline_projects:
             self.project_id = next(iter(self._offline_projects))
@@ -612,6 +621,26 @@ class OfflineGuiClient:
         if int(item_id) not in self._offline_items:
             raise KeyError(f"offline item not found: {item_id}")
         return self._item_payload(int(item_id))
+
+    def get_item_relations(self, item_id: int) -> dict[str, Any]:
+        self._require_query_data()
+        normalized = int(item_id)
+        if normalized not in self._offline_items:
+            raise KeyError(f"offline item not found: {item_id}")
+        payload = self._offline_relations.get(str(normalized), {})
+        if not isinstance(payload, dict):
+            raise ValueError("테스트 관계 데이터 형식이 올바르지 않습니다.")
+        return deepcopy(payload)
+
+    def get_item_history(self, item_id: int) -> dict[str, Any]:
+        self._require_query_data()
+        normalized = int(item_id)
+        if normalized not in self._offline_items:
+            raise KeyError(f"offline item not found: {item_id}")
+        payload = self._offline_history.get(str(normalized), {"versions": []})
+        if not isinstance(payload, dict):
+            raise ValueError("테스트 이력 데이터 형식이 올바르지 않습니다.")
+        return deepcopy(payload)
 
     def search_items(
         self,
