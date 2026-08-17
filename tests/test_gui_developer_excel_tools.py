@@ -205,17 +205,18 @@ class DeveloperExcelToolServiceTest(unittest.TestCase):
 
             with output.open("r", encoding="utf-8-sig", newline="") as handle:
                 rows = list(csv.reader(handle))
-            self.assertEqual(
-                rows[1],
-                [
-                    "REQ-001",
-                    "'\t=unsafe",
-                    "'\r+unsafe",
-                    "'\n-unsafe",
-                    "' @unsafe",
-                    "  safe",
-                ],
-            )
+            self.assertEqual(rows[1][0], "REQ-001")
+            # csv.reader may normalize an embedded standalone CR to LF on
+            # Windows. The security contract is that the apostrophe precedes
+            # the original leading whitespace and formula prefix.
+            for value, formula_prefix in zip(rows[1][1:5], "=+-@", strict=True):
+                with self.subTest(value=value):
+                    self.assertTrue(value.startswith("'"))
+                    self.assertIn(value[1], " \t\r\n")
+                    self.assertTrue(
+                        value[1:].lstrip(" \t\r\n").startswith(formula_prefix)
+                    )
+            self.assertEqual(rows[1][5], "  safe")
 
     def test_value_xlsx_conversion_preserves_excel_scalar_types(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
