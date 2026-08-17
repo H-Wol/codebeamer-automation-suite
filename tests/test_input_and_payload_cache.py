@@ -9,6 +9,7 @@ from typing import Any
 import pandas as pd
 
 from src.hierarchy_processor import HierarchyProcessor
+from src.hierarchy_processor import UPLOAD_RECORD_KEY_COLUMN
 from src.mapping_service import MappingService
 from src.models import PayloadStatus
 from src.models import UploadStatus
@@ -145,6 +146,178 @@ class HierarchyProcessorSplitTest(unittest.TestCase):
         self.assertIsInstance(merged_df.iloc[0]["코드"], int)
         self.assertEqual(upload_df["코드"].tolist(), [12, None])
         self.assertIsInstance(upload_df.iloc[0]["코드"], int)
+
+    def test_record_key_groups_repeated_rows_and_preserves_table_cell_alignment(self) -> None:
+        processor = HierarchyProcessor(summary_col="요약")
+        raw_df = pd.DataFrame(
+            [
+                {
+                    UPLOAD_RECORD_KEY_COLUMN: "REQ-1",
+                    "요약": "Requirement 1",
+                    "Priority": "High",
+                    "Steps.Action": "Open",
+                    "Steps.Expected": None,
+                    "_excel_row": 2,
+                    "_summary_indent": 0,
+                },
+                {
+                    UPLOAD_RECORD_KEY_COLUMN: "REQ-1",
+                    "요약": "Requirement 1",
+                    "Priority": "High",
+                    "Steps.Action": None,
+                    "Steps.Expected": "Opened",
+                    "_excel_row": 3,
+                    "_summary_indent": 0,
+                },
+                {
+                    UPLOAD_RECORD_KEY_COLUMN: "REQ-2",
+                    "요약": "Requirement 2",
+                    "Priority": "Low",
+                    "Steps.Action": "Close",
+                    "Steps.Expected": "Closed",
+                    "_excel_row": 4,
+                    "_summary_indent": 0,
+                },
+            ],
+            dtype=object,
+        )
+
+        merged = processor.merge_multiline_records(
+            raw_df,
+            list_cols=["Steps.Action", "Steps.Expected"],
+        )
+
+        self.assertEqual(merged["요약"].tolist(), ["Requirement 1", "Requirement 2"])
+        self.assertEqual(merged["_upload_record_key"].tolist(), ["REQ-1", "REQ-2"])
+        self.assertEqual(merged.iloc[0]["Steps.Action"], ["Open", None])
+        self.assertEqual(merged.iloc[0]["Steps.Expected"], [None, "Opened"])
+        self.assertEqual(merged.iloc[0]["Priority"], "High")
+
+    def test_record_key_rejects_conflicting_scalar_fields(self) -> None:
+        processor = HierarchyProcessor(summary_col="요약")
+        raw_df = pd.DataFrame(
+            [
+                {UPLOAD_RECORD_KEY_COLUMN: "REQ-1", "요약": "Requirement", "Priority": "High", "_excel_row": 2, "_summary_indent": 0},
+                {UPLOAD_RECORD_KEY_COLUMN: "REQ-1", "요약": "Requirement", "Priority": "Low", "_excel_row": 3, "_summary_indent": 0},
+            ],
+            dtype=object,
+        )
+
+        with self.assertRaisesRegex(ValueError, "일반 필드 'Priority' 값이 행마다 다릅니다"):
+            processor.merge_multiline_records(raw_df, list_cols=[])
+
+        blank_then_value = pd.DataFrame(
+            [
+                {UPLOAD_RECORD_KEY_COLUMN: "REQ-1", "요약": "Requirement", "Priority": None, "_excel_row": 2, "_summary_indent": 0},
+                {UPLOAD_RECORD_KEY_COLUMN: "REQ-1", "요약": "Requirement", "Priority": "High", "_excel_row": 3, "_summary_indent": 0},
+            ],
+            dtype=object,
+        )
+        with self.assertRaisesRegex(ValueError, "일반 필드 'Priority' 값이 행마다 다릅니다"):
+            processor.merge_multiline_records(blank_then_value, list_cols=[])
+
+    def test_record_key_requires_nonblank_contiguous_values(self) -> None:
+        processor = HierarchyProcessor(summary_col="요약")
+        missing = pd.DataFrame(
+            [
+                {UPLOAD_RECORD_KEY_COLUMN: "REQ-1", "요약": "One", "_excel_row": 2, "_summary_indent": 0},
+                {UPLOAD_RECORD_KEY_COLUMN: None, "요약": "Two", "_excel_row": 3, "_summary_indent": 0},
+            ],
+            dtype=object,
+        )
+        with self.assertRaisesRegex(ValueError, "값이 비어 있습니다"):
+            processor.merge_multiline_records(missing, list_cols=[])
+
+        noncontiguous = pd.DataFrame(
+            [
+                {UPLOAD_RECORD_KEY_COLUMN: "REQ-1", "요약": "One", "_excel_row": 2, "_summary_indent": 0},
+                {UPLOAD_RECORD_KEY_COLUMN: "REQ-2", "요약": "Two", "_excel_row": 3, "_summary_indent": 0},
+                {UPLOAD_RECORD_KEY_COLUMN: "REQ-1", "요약": "One", "_excel_row": 4, "_summary_indent": 0},
+            ],
+            dtype=object,
+        )
+        with self.assertRaisesRegex(ValueError, "연속해서 배치"):
+            processor.merge_multiline_records(noncontiguous, list_cols=[])
+
+    def test_record_key_rows_become_aligned_table_field_payload_rows(self) -> None:
+        schema = [
+            {
+                "id": 1,
+                "name": "Summary",
+                "type": "TextField",
+                "trackerItemField": "name",
+                "valueModel": "TextFieldValue",
+            },
+            {
+                "id": 1000,
+                "name": "Steps",
+                "type": "TableField",
+                "valueModel": "TableFieldValue",
+                "columns": [
+                    {
+                        "id": 1001,
+                        "name": "Action",
+                        "type": "WikiTextField",
+                        "valueModel": "WikiTextFieldValue",
+                    },
+                    {
+                        "id": 1002,
+                        "name": "Expected",
+                        "type": "WikiTextField",
+                        "valueModel": "WikiTextFieldValue",
+                    },
+                ],
+            },
+        ]
+        wizard = CodebeamerUploadWizard(
+            client=StaticSchemaClient(schema),
+            processor=HierarchyProcessor(summary_col="요약"),
+            mapper=MappingService(),
+        )
+        wizard.select_project(1)
+        wizard.select_tracker(2)
+        wizard.load_raw_dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        UPLOAD_RECORD_KEY_COLUMN: "REQ-1",
+                        "요약": "Requirement",
+                        "Steps.Action": "Open",
+                        "Steps.Expected": None,
+                        "_excel_row": 2,
+                        "_summary_indent": 0,
+                    },
+                    {
+                        UPLOAD_RECORD_KEY_COLUMN: "REQ-1",
+                        "요약": "Requirement",
+                        "Steps.Action": None,
+                        "Steps.Expected": "Opened",
+                        "_excel_row": 3,
+                        "_summary_indent": 0,
+                    },
+                ],
+                dtype=object,
+            ),
+            list_cols=["Steps.Action", "Steps.Expected"],
+        )
+        selected_mapping = {
+            "요약": "Summary",
+            "Steps.Action": "Steps",
+            "Steps.Expected": "Steps",
+        }
+        wizard.load_schema_and_compare(selected_mapping)
+        wizard.process_option_mapping(selected_mapping)
+
+        payload = wizard.preview_payload(0)
+
+        self.assertEqual(payload["name"], "Requirement")
+        self.assertEqual(len(payload["customFields"]), 1)
+        table_rows = payload["customFields"][0]["values"]
+        self.assertEqual(len(table_rows), 2)
+        self.assertEqual(table_rows[0][0]["name"], "Action")
+        self.assertEqual(table_rows[0][0]["value"], "Open")
+        self.assertEqual(table_rows[1][0]["name"], "Expected")
+        self.assertEqual(table_rows[1][0]["value"], "Opened")
 
 
 class PayloadCacheWizardTest(unittest.TestCase):

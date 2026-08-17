@@ -67,8 +67,11 @@ CLI는 다음 구조를 전제로 합니다.
 - 하나의 summary 컬럼이 논리 레코드의 제목 역할을 함
 - summary 셀의 들여쓰기로 계층 표현
 - 여러 물리적 행이 하나의 논리 레코드를 표현할 수 있음
+- 선택적 `Upload Record Key` 열이 있으면 같은 키가 연속된 물리적 행을 한 논리 레코드로 병합함
 - list처럼 취급할 컬럼은 수동 선택이 아니라 schema의 `multipleValues=true` 여부와 컬럼 매핑 결과로 자동 결정됨
 - `TableField` 는 `TableFieldName.ColumnName` 형식 헤더 사용
+
+`Upload Record Key`를 사용하는 경우 모든 행에 키가 있어야 하며 같은 키의 행은 연속해야 합니다. 그룹 안의 일반 필드는 첫 행 값을 사용하고, 다른 행의 값이 공백을 포함해 다르면 검증 오류가 발생합니다. `TableField` 열은 각 원본 행이 한 table row가 되며 빈 셀도 행 정렬을 위해 보존됩니다.
 
 ## 인터랙티브 흐름
 

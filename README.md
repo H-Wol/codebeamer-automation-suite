@@ -17,6 +17,7 @@ Excel 기반 계층형 데이터를 Codebeamer Tracker Item으로 변환하고 �
 - `TrackerItemChoiceField` 및 builtin `subjects` 필드에서 정규식으로 ID를 추출해 참조값으로 사용
 - 사용자·Member lookup 결과를 검증부터 다중 파일 업로드까지 이어지는 공용 캐시에 저장해 반복 요청 최소화
 - `TableFieldName.ColumnName` 형식 헤더를 이용한 `TableField` 조립
+- 선택적 `Upload Record Key` 열로 연속된 원본 행을 한 업로드 아이템으로 묶고, 원본 행 순서를 보존한 다중 행 `TableField` 조립
 - row별 payload cache 생성과 preview/upload 재사용
 - parent-first 순서 보장 업로드
 - 실행 결과와 중간 산출물 저장
@@ -319,6 +320,7 @@ powershell -ExecutionPolicy Bypass -File scripts/render_uml.ps1
 ## 참고 사항
 
 - `TableField` 컬럼은 `TableFieldName.ColumnName` 형식의 Excel 헤더를 기준으로 감지합니다.
+- 한 아이템에 여러 `TableField` 행을 넣을 때는 각 원본 행에 같은 `Upload Record Key`를 연속해서 입력합니다. 일반 필드는 그룹의 첫 행 값을 사용하며 다른 행의 값이 다르면 공백 차이도 업로드 전에 오류로 차단합니다.
 - 정적 option이 없는 일반 reference 필드는 아직 자동 lookup을 모두 지원하지 않습니다.
 - 사용자 관련 필드는 이름을 우선 사용하고, 숫자 입력일 때만 사용자 ID fallback 을 사용합니다.
 - `MemberField` 의 `ROLE` 은 field permission matrix, `GROUP` 은 `/v3/users/groups` 전체 목록에서 이름으로 찾습니다.
