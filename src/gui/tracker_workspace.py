@@ -4585,7 +4585,7 @@ class TrackerWorkspacePage(QWidget):
     ) -> None:
         if self._is_historical_read_only():
             self._set_workspace_status(
-                "Baseline 상세의 상태를 전환할 수 없습니다.",
+                "Baseline 상세의 상태 필드를 변경할 수 없습니다.",
                 tone="warning",
             )
             return
@@ -4601,7 +4601,7 @@ class TrackerWorkspacePage(QWidget):
         target_name = target_option.name if target_option is not None else str(option_id)
         self.editor_panel.set_busy(True)
         self.editor_panel.editor_status.setText(
-            f"#{item_id} 상태를 '{target_name}'(으)로 전환하는 중입니다."
+            f"#{item_id} 상태 필드를 '{target_name}'(으)로 변경하는 중입니다."
         )
 
         def loaded(updated_detail: TrackerItemDetail) -> None:
@@ -4610,7 +4610,7 @@ class TrackerWorkspacePage(QWidget):
                 ActivityResult.SUCCESS,
                 message=(
                     f"#{item_id} 상태를 "
-                    f"'{updated_detail.summary.status or target_name}'(으)로 전환했습니다."
+                    f"'{updated_detail.summary.status or target_name}'(으)로 변경했습니다."
                 ),
                 detail=updated_detail,
                 details={
@@ -4623,14 +4623,14 @@ class TrackerWorkspacePage(QWidget):
             self._refresh_visible_item(updated_detail)
             self._render_detail(updated_detail)
             self._set_workspace_status(
-                f"#{item_id} 상태를 '{updated_detail.summary.status or target_name}'(으)로 전환했습니다."
+                f"#{item_id} 상태 필드를 '{updated_detail.summary.status or target_name}'(으)로 변경했습니다."
             )
 
         def failed(exc: Exception) -> None:
             self._record_item_activity(
                 ActivityOperation.STATUS_TRANSITION,
                 ActivityResult.FAILED,
-                message=f"#{item_id} 상태 전환에 실패했습니다.",
+                message=f"#{item_id} 상태 필드 변경에 실패했습니다.",
                 detail=detail,
                 details={
                     "from_status": detail.summary.status,
@@ -4639,12 +4639,12 @@ class TrackerWorkspacePage(QWidget):
                 },
             )
             self.editor_panel.set_busy(False)
-            self.editor_panel.set_error(str(exc) or "상태 전환에 실패했습니다.")
-            self._show_error(exc, prefix="상태 전환 실패")
+            self.editor_panel.set_error(str(exc) or "상태 필드 변경에 실패했습니다.")
+            self._show_error(exc, prefix="상태 필드 변경 실패")
 
         self._submit(
             "item_write",
-            lambda: self.editor_service.transition_status(
+            lambda: self.editor_service.change_status_field(
                 settings,
                 item_id=item_id,
                 expected_version=detail.version,

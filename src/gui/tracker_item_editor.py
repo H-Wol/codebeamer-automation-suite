@@ -835,7 +835,7 @@ def classify_tracker_item_write_error(
 
 
 class TrackerItemEditorService:
-    """Schema 기반 단건 생성, 부분 수정, 상태 전환과 삭제를 실행한다."""
+    """Schema 기반 단건 생성, 부분 수정, Status 필드 변경과 삭제를 실행한다."""
 
     def __init__(
         self,
@@ -1039,7 +1039,7 @@ class TrackerItemEditorService:
         )
         return self.query_service.load_detail(settings, int(item_id))
 
-    def transition_status(
+    def change_status_field(
         self,
         settings,
         *,
@@ -1053,7 +1053,7 @@ class TrackerItemEditorService:
             raise TrackerItemWriteError(
                 TrackerItemWriteErrorKind.INVALID_VALUE,
                 "상태 필드 정의가 올바르지 않습니다.",
-                operation="transition_status",
+                operation="change_status_field",
             )
         field_value = self._run(
             "build_status_value",
@@ -1067,10 +1067,14 @@ class TrackerItemEditorService:
             lambda: self._verify_version(client, int(item_id), expected_version),
         )
         self._run(
-            "transition_status",
+            "change_status_field",
             lambda: client.update_item_fields(int(item_id), [field_value]),
         )
         return self.query_service.load_detail(settings, int(item_id))
+
+    def transition_status(self, *args, **kwargs) -> TrackerItemDetail:
+        """호환용 별칭. 실제 동작은 workflow transition이 아닌 Status 필드 변경이다."""
+        return self.change_status_field(*args, **kwargs)
 
     def delete_item(
         self,

@@ -458,8 +458,8 @@ class TrackerItemEditorServiceTest(unittest.TestCase):
         self.assertEqual(raised.exception.kind, TrackerItemWriteErrorKind.CONFLICT)
         self.assertEqual(EditorFakeClient.calls, [("get", 1001)])
 
-    def test_status_transition_uses_status_field_only(self) -> None:
-        self.service.transition_status(
+    def test_status_field_change_uses_status_field_only(self) -> None:
+        self.service.change_status_field(
             self.settings,
             item_id=1001,
             expected_version=4,
@@ -606,6 +606,7 @@ class TrackerItemEditorPanelTest(unittest.TestCase):
         self._app.processEvents()
 
         self.assertTrue(self.panel.transition_button.isEnabled())
+        self.assertEqual(self.panel.transition_button.text(), "상태 필드 변경")
         self.panel.transition_button.click()
         self.assertEqual(self.transition[0].name, "Status")
         self.assertEqual(self.transition[1], 2)

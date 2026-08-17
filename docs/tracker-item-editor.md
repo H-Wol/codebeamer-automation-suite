@@ -1,9 +1,9 @@
-# 트래커 아이템 단건 생성·수정·상태 전환·삭제
+# 트래커 아이템 단건 생성·수정·Status 필드 변경·삭제
 
 ## 목적
 
 `TrackerWorkspacePage`는 선택한 tracker schema를 기준으로 단건 생성 입력 UI를 만들고,
-`수정` 탭에서는 체크한 필드만 부분 업데이트합니다. 상태 전환과 삭제는 일반 필드 저장과 분리합니다.
+`수정` 탭에서는 체크한 필드만 부분 업데이트합니다. Status 필드 변경과 삭제는 일반 필드 저장과 분리합니다.
 관계, 댓글, 첨부와 이력 편집은 아직 이 범위에 포함하지 않습니다.
 
 ## API 계약
@@ -13,7 +13,7 @@
 | 단건 생성 | `POST /v3/trackers/{trackerId}/items` | `TrackerItemEditorService.create_item()` |
 | 선택 아이템의 하위 생성 | 위 endpoint와 `parentItemId` query | `TrackerItemEditorService.create_item()` |
 | 선택 필드 수정 | `PUT /v3/items/{itemId}/fields` | `CodebeamerClient.update_item_fields()` |
-| 상태 전환 | `PUT /v3/items/{itemId}/fields`의 Status `ChoiceFieldValue` | `TrackerItemEditorService.transition_status()` |
+| Status 필드 변경 | `PUT /v3/items/{itemId}/fields`의 Status `ChoiceFieldValue` | `TrackerItemEditorService.change_status_field()` |
 | 아이템 삭제 | `DELETE /v3/items/{itemId}` | `CodebeamerClient.delete_item()` |
 
 전체 리소스용 `PUT /v3/items/{itemId}`는 요청 본문에 없는 상태를 지울 수 있으므로 작업공간 편집에서는
@@ -39,7 +39,7 @@
 
 생성 위치는 실수로 잘못된 계층에 넣는 일을 줄이기 위해 `최상위 아이템`을 기본값으로 사용합니다.
 Status는 생성 payload에 넣지 않고 서버 기본 상태로 생성합니다. 다른 상태가 필요하면 생성 후 `수정` 탭의
-별도 상태 전환을 사용합니다. 관계와 댓글 입력은 단건 생성 화면에 아직 포함하지 않습니다.
+별도 Status 필드 변경을 사용합니다. 관계와 댓글 입력은 단건 생성 화면에 아직 포함하지 않습니다.
 
 생성할 수 없는 필드는 입력 표에서 숨깁니다. schema가 필수로 지정한 필드 중 현재 UI가 지원하지 않는
 유형이 있으면 상단 경고에 필드명을 표시하고 생성 버튼을 비활성화합니다.
@@ -59,7 +59,7 @@ Status는 생성 payload에 넣지 않고 서버 기본 상태로 생성합니�
 7. version이 같으면 체크한 필드의 `FieldValue`만 전송하고 상세를 다시 불러옵니다.
 8. 새 상세는 트리와 검색 결과에 즉시 반영되고 해당 tracker의 화면 캐시는 무효화됩니다.
 
-다른 사용자의 수정으로 version이 달라졌으면 저장·상태 전환·삭제를 실행하지 않고 최신 상세 재조회를
+다른 사용자의 수정으로 version이 달라졌으면 저장·Status 필드 변경·삭제를 실행하지 않고 최신 상세 재조회를
 요청합니다. 사용자는 상세 상단의 `상세 새로고침`으로 최신 version과 값을 다시 불러올 수 있습니다.
 이 확인은 쓰기 직전 충돌을 줄이지만 서버 lock을 획득하는 원자적 보장은 아닙니다.
 
@@ -75,7 +75,7 @@ Status는 생성 payload에 넣지 않고 서버 기본 상태로 생성합니�
 | 정적 Choice option | 단일 또는 여러 선택 | `ChoiceFieldValue.values` |
 | referenceType이 명확한 Reference | 한 줄에 참조 ID 하나 | 해당 reference type의 `values` |
 | TableField | 전용 행·열 편집기 | 중첩된 `TableFieldValue.values` |
-| Status | 별도 상태 전환 선택기 | Status `ChoiceFieldValue.values` |
+| Status | 별도 필드 변경 선택기 | Status `ChoiceFieldValue.values` |
 
 TableField 편집기는 다음 안전 규칙을 적용합니다.
 
@@ -96,15 +96,15 @@ TableField 편집기는 다음 안전 규칙을 적용합니다.
 필수 필드를 비우거나, 단일값 필드에 여러 참조를 입력하거나, schema에 없는 option을 선택하면 서버에
 요청하기 전에 차단합니다.
 
-## 상태 전환
+## Status 필드 변경
 
 - Status는 일반 필드 일괄 저장에 포함하지 않습니다.
 - schema의 Status options를 표시하고 현재 상태와 다른 값 하나만 선택할 수 있습니다.
-- 실제 workflow guard와 필수 필드 조건은 Codebeamer가 최종 검증합니다.
-- 허용되지 않은 전환이면 서버 오류를 안전한 사용자 메시지로 분류하고 기존 상세를 유지합니다.
+- 현재 구현은 `PUT /v3/items/{itemId}/fields`를 사용하는 단순 필드 변경이며 가능한 workflow transition을 조회하거나 실행하지 않습니다.
+- 따라서 화면에 보이는 option이 실제 workflow에서 허용된 전환임을 보장하지 않습니다. 서버가 거부하면 오류를 표시하고 기존 상세를 유지합니다.
 
-배치 create 후 Status transition 후처리는 별도 업로드 파이프라인 과제로 남아 있습니다. 이 화면의
-단건 상태 전환 구현이 배치 후처리까지 지원한다는 의미는 아닙니다.
+실제 workflow transition 조회·필수 입력 검증·실행과 배치 create 후 Status 후처리는 대상 서버 Swagger
+계약을 확인한 뒤 별도 기능으로 구현합니다. 현재 필드 변경을 workflow transition으로 재사용하지 않습니다.
 
 ## 삭제 안전장치
 
@@ -124,7 +124,7 @@ TableField 편집기는 다음 안전 규칙을 적용합니다.
 비활성화되며 서비스 계층에서도 한 번 더 차단합니다.
 
 - 선택 필드 저장
-- 상태 전환
+- Status 필드 변경
 - 아이템 삭제
 - 새 아이템 생성
 
