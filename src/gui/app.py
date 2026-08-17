@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 from src.diagnostics import DIAGNOSTICS
 
 from .settings_store import GuiSettingsStore
 from .styles import build_gui_stylesheet
 
 
-def run_gui() -> int:
+def run_gui(*, smoke_test: bool = False) -> int:
     """PySide6 애플리케이션을 만들고 메인 윈도우를 띄운다."""
     try:
+        from PySide6.QtCore import QTimer
         from PySide6.QtWidgets import QApplication
     except ImportError as exc:
         raise RuntimeError(
@@ -21,8 +25,22 @@ def run_gui() -> int:
     app = QApplication.instance() or QApplication([])
     DIAGNOSTICS.clear()
     install_global_exception_handler(app, diagnostics=DIAGNOSTICS)
-    store = GuiSettingsStore()
-    app.setStyleSheet(build_gui_stylesheet(store.load().theme_name))
-    window = MainWindow(store)
-    window.show()
-    return app.exec()
+    smoke_settings_dir = (
+        TemporaryDirectory(prefix="codebeamer-smoke-") if smoke_test else None
+    )
+    window = None
+    try:
+        store = GuiSettingsStore(
+            root_dir=(Path(smoke_settings_dir.name) if smoke_settings_dir else None)
+        )
+        app.setStyleSheet(build_gui_stylesheet(store.load().theme_name))
+        window = MainWindow(store)
+        window.show()
+        if smoke_test:
+            QTimer.singleShot(0, app.quit)
+        return app.exec()
+    finally:
+        if smoke_test and window is not None:
+            window.close()
+        if smoke_settings_dir is not None:
+            smoke_settings_dir.cleanup()

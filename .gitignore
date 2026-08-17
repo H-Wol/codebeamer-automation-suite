@@ -10,6 +10,9 @@ __pycache__/
 logs/*.log
 output/*
 !output/.gitkeep
+build/
+dist/
+release-artifacts/
 data/*
 !data/gui-offline-sample/
 !data/gui-offline-sample/**

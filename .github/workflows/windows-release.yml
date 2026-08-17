@@ -1,0 +1,303 @@
+name: Windows release
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUTF8: "1"
+  PYTHON_VERSION: "3.13.14"
+  QT_QPA_PLATFORM: offscreen
+
+jobs:
+  build:
+    name: Test and build Windows x64
+    runs-on: windows-2022
+    outputs:
+      artifact_version: ${{ steps.metadata.outputs.artifact_version }}
+      prerelease: ${{ steps.metadata.outputs.prerelease }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: x64
+          cache: pip
+          cache-dependency-path: requirements-release.txt
+
+      - name: Install pinned release dependencies
+        shell: pwsh
+        run: python -m pip install --requirement requirements-release.txt
+
+      - name: Run full regression tests
+        shell: pwsh
+        run: python -m unittest discover -s tests -q
+
+      - name: Resolve and validate artifact metadata
+        id: metadata
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            python scripts/release_metadata.py validate-tag `
+              --tag $env:GITHUB_REF_NAME `
+              --version-file VERSION `
+              --github-output $env:GITHUB_OUTPUT
+            if ($LASTEXITCODE -ne 0) {
+              throw "Release tag validation failed."
+            }
+          } else {
+            $shortSha = $env:GITHUB_SHA.Substring(0, 7).ToLowerInvariant()
+            "artifact_version=dev-$shortSha" | Add-Content `
+              -LiteralPath $env:GITHUB_OUTPUT `
+              -Encoding utf8
+            "prerelease=false" | Add-Content `
+              -LiteralPath $env:GITHUB_OUTPUT `
+              -Encoding utf8
+          }
+
+      - name: Build PyInstaller onedir application
+        shell: pwsh
+        run: .\scripts\build_windows_release.ps1 -Mode Build
+
+      - name: Verify packaged executable version and smoke test
+        shell: pwsh
+        run: |
+          $executable = Join-Path $env:GITHUB_WORKSPACE `
+            "build/windows-release/pyinstaller-dist/CodebeamerAutomationSuite/CodebeamerAutomationSuite.exe"
+          $bundledVersionFile = Join-Path $env:GITHUB_WORKSPACE `
+            "build/windows-release/pyinstaller-dist/CodebeamerAutomationSuite/_internal/VERSION"
+          $expectedVersion = (Get-Content -LiteralPath VERSION -Raw).Trim()
+
+          function Invoke-CheckedExecutable {
+            param(
+              [Parameter(Mandatory = $true)][string]$Argument,
+              [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+            )
+
+            $process = Start-Process `
+              -FilePath $executable `
+              -ArgumentList @($Argument) `
+              -PassThru
+            if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              throw "$Argument timed out after $TimeoutSeconds seconds."
+            }
+            if ($process.ExitCode -ne 0) {
+              throw "$Argument exited with code $($process.ExitCode)."
+            }
+          }
+
+          # A windowed PE may not expose stdout. Execute --version and corroborate
+          # the result with the VERSION resource bundled into the same onedir tree.
+          Invoke-CheckedExecutable -Argument "--version" -TimeoutSeconds 30
+          if (-not (Test-Path -LiteralPath $bundledVersionFile -PathType Leaf)) {
+            throw "Bundled VERSION resource is missing."
+          }
+          $bundledVersion = (Get-Content -LiteralPath $bundledVersionFile -Raw).Trim()
+          if ($bundledVersion -ne $expectedVersion) {
+            throw "Bundled version $bundledVersion does not match $expectedVersion."
+          }
+
+          Invoke-CheckedExecutable -Argument "--smoke-test" -TimeoutSeconds 90
+
+      - name: Create portable ZIP and checksum
+        shell: pwsh
+        env:
+          ARTIFACT_VERSION: ${{ steps.metadata.outputs.artifact_version }}
+        run: |
+          .\scripts\build_windows_release.ps1 `
+            -Mode Package `
+            -ArtifactVersion $env:ARTIFACT_VERSION
+
+      - name: Upload portable release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-release-${{ steps.metadata.outputs.artifact_version }}
+          path: |
+            release-artifacts/*.zip
+            release-artifacts/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: windows-2022
+    permissions:
+      artifact-metadata: write
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: x64
+
+      - name: Validate tag version and main ancestry
+        shell: pwsh
+        run: |
+          python scripts/release_metadata.py validate-tag `
+            --tag $env:GITHUB_REF_NAME `
+            --version-file VERSION
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release tag validation failed."
+          }
+
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to fetch origin/main."
+          }
+          $tagCommit = git rev-list -n 1 $env:GITHUB_REF_NAME
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($tagCommit)) {
+            throw "Unable to resolve the tagged commit."
+          }
+          git merge-base --is-ancestor $tagCommit origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw "The tagged commit is not contained in origin/main."
+          }
+
+      - name: Download built release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-release-${{ needs.build.outputs.artifact_version }}
+          path: release-assets
+
+      - name: Verify downloaded checksum
+        shell: pwsh
+        run: |
+          $checksumFile = Join-Path $env:GITHUB_WORKSPACE "release-assets/SHA256SUMS.txt"
+          $checksumLine = (Get-Content -LiteralPath $checksumFile -Raw).Trim()
+          if ($checksumLine -notmatch "^([0-9a-fA-F]{64})  (.+\.zip)$") {
+            throw "SHA256SUMS.txt has an invalid format."
+          }
+
+          $expectedHash = $Matches[1].ToLowerInvariant()
+          $zipName = $Matches[2]
+          if ($zipName -ne "Codebeamer-Automation-Suite-$env:GITHUB_REF_NAME-windows-x64.zip") {
+            throw "Checksum references an unexpected asset: $zipName"
+          }
+          $zipPath = Join-Path $env:GITHUB_WORKSPACE "release-assets/$zipName"
+          $actualHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) {
+            throw "Release ZIP checksum verification failed."
+          }
+
+      - name: Create or resume draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $title = "Codebeamer Automation Suite $tag"
+
+          $releaseResponse = & gh api `
+            --paginate `
+            --slurp `
+            "repos/$env:GITHUB_REPOSITORY/releases?per_page=100"
+          $releaseQueryExitCode = $LASTEXITCODE
+          if ($releaseQueryExitCode -ne 0) {
+            throw "Unable to list existing releases."
+          }
+
+          $releasePages = ($releaseResponse -join "`n") | ConvertFrom-Json
+          $matchingReleases = @(
+            foreach ($page in @($releasePages)) {
+              foreach ($release in @($page)) {
+                if ($release.tag_name -eq $tag) {
+                  $release
+                }
+              }
+            }
+          )
+          if ($matchingReleases.Count -gt 1) {
+            throw "Multiple releases unexpectedly use tag $tag."
+          }
+
+          $releaseExists = $matchingReleases.Count -eq 1
+          if ($releaseExists) {
+            $existingRelease = $matchingReleases[0]
+            if (-not $existingRelease.draft) {
+              throw "A published release already exists for $tag."
+            }
+            Write-Host "Resuming existing draft release for $tag."
+          }
+
+          if (-not $releaseExists) {
+            $createArguments = @(
+              "release", "create", $tag,
+              "--draft",
+              "--generate-notes",
+              "--title", $title,
+              "--verify-tag"
+            )
+            if ($env:PRERELEASE -eq "true") {
+              $createArguments += "--prerelease"
+            }
+            & gh @createArguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "Unable to create the draft release."
+            }
+          }
+
+      - name: Attest portable ZIP provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: release-assets/Codebeamer-Automation-Suite-${{ needs.build.outputs.artifact_version }}-windows-x64.zip
+
+      - name: Upload assets and publish draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $title = "Codebeamer Automation Suite $tag"
+          $zipPath = Join-Path $env:GITHUB_WORKSPACE `
+            "release-assets/Codebeamer-Automation-Suite-$tag-windows-x64.zip"
+          $checksumPath = Join-Path $env:GITHUB_WORKSPACE "release-assets/SHA256SUMS.txt"
+
+          & gh release upload $tag $zipPath $checksumPath --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to upload all release assets."
+          }
+
+          $editArguments = @(
+            "release", "edit", $tag,
+            "--draft=false",
+            "--title", $title
+          )
+          if ($env:PRERELEASE -eq "true") {
+            $editArguments += "--prerelease"
+          } else {
+            $editArguments += "--prerelease=false"
+          }
+          & gh @editArguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to publish the release."
+          }
