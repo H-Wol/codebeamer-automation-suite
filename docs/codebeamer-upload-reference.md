@@ -621,10 +621,11 @@ payload 생성 전에 아래를 검사합니다.
 - "최종 상태를 생성 payload에 직접 넣어도 되는지"는 아직 보장되지 않습니다.
 - 실서비스용으로는 transition API 또는 workflow 규칙 추가 조사가 필요합니다.
 
-### 3. table row 다건 조립 규칙 미확장
+### 3. table row 다건 조립
 
-현재 `TableField` 는 한 upload row에서 1개의 table row만 조립합니다.
-복수 table row가 필요한 입력 형식은 별도 설계가 필요합니다.
+선택적 `Upload Record Key` 열을 사용하면 같은 키의 연속된 원본 행을 한 upload row로 병합합니다.
+각 원본 행은 `TableFieldName.ColumnName` 열의 한 table row가 되며 원본 순서와 빈 셀 위치를 보존합니다.
+일반 필드는 그룹의 첫 행 값을 사용하며 다른 행의 값이 공백을 포함해 다르면 검증 오류로 차단합니다.
 
 ### 4. schema가 모호한 choice/reference field는 fallback 하지 않음
 
