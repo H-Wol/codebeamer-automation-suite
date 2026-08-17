@@ -1539,7 +1539,7 @@ class TrackerWorkspaceWriteIntegrationTest(unittest.TestCase):
         self.page.close()
         self._app.processEvents()
 
-    def test_field_update_status_transition_and_delete_refresh_visible_state(self) -> None:
+    def test_field_update_status_field_change_and_delete_refresh_visible_state(self) -> None:
         from PySide6.QtCore import Qt
 
         summary_row = self.page.editor_panel.rows[3]

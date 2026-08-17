@@ -176,7 +176,7 @@ payload cache, 업로드 실행 서비스를 조합하고 기존 payload 메서�
 - 간편·다중 조건 CbQL 검색, 페이지 독립 선택과 검색 결과 전체 ID 수집
 - 조회 요청의 화면 세션 캐시와 request token 기반 오래된 응답 차단
 - API·백그라운드 작업의 중첩 수를 추적하고 전체 입력을 차단하는 전역 spinner 오버레이
-- schema 기반 단건 생성, 선택 필드 부분 수정, version 충돌 확인, 단건 상태 전환과 삭제
+- schema 기반 단건 생성, 선택 필드 부분 수정, version 충돌 확인, Status 필드 변경과 삭제
 - Codebeamer Bulk fields API 기반 상태·일반 필드·TableField 청크 수정, atomic 롤백 구분과 값 비저장 재시도
 - 단건 쓰기와 배치 최종 결과의 제한된 로컬 실행 기록 및 필터 화면
 - 공통 HTTP 계층의 메타데이터 전용 API 모니터와 개발자 도구의 실시간 통계 탭

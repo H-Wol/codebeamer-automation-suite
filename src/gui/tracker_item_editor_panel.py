@@ -280,7 +280,7 @@ class TrackerItemEditorPanel(QWidget):
 
         status_row = QHBoxLayout()
         status_row.setSpacing(6)
-        status_title = QLabel("상태 전환")
+        status_title = QLabel("상태 필드 변경")
         status_title.setObjectName("tracker_detail_section_title")
         status_row.addWidget(status_title)
         self.current_status_label = QLabel("-")
@@ -292,7 +292,7 @@ class TrackerItemEditorPanel(QWidget):
         self.status_combo.setMinimumWidth(145)
         self.status_combo.currentIndexChanged.connect(self._update_action_state)
         status_row.addWidget(self.status_combo)
-        self.transition_button = QPushButton("상태 전환", self)
+        self.transition_button = QPushButton("상태 필드 변경", self)
         self.transition_button.setObjectName("primary_button")
         self.transition_button.clicked.connect(self._request_transition)
         status_row.addWidget(self.transition_button)
@@ -387,7 +387,7 @@ class TrackerItemEditorPanel(QWidget):
             tone = "info"
         else:
             self.editor_status.setText(
-                "테스트 모드에서는 입력 구조만 확인할 수 있으며 수정·상태 전환·삭제는 실행되지 않습니다."
+                "테스트 모드에서는 입력 구조만 확인할 수 있으며 수정·상태 필드 변경·삭제는 실행되지 않습니다."
             )
             tone = "warning"
         self.editor_status.setProperty("tone", tone)

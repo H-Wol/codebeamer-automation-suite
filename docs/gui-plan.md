@@ -45,7 +45,7 @@ GUI는 최상위 앱 셸에서 작업 영역을 전환하고, `배치 작업`에
   - 선택 tracker schema 기반 최상위 또는 선택 아이템 하위 단건 생성
   - 필수 필드 자동 포함, 선택 필드 명시적 포함과 생성 직후 트리·상세 전환
   - schema 기반 선택 필드 부분 수정과 version 충돌 확인
-  - 일반 필드 저장과 분리된 단건 상태 전환
+  - 일반 필드 저장과 분리된 Status 필드 변경
   - 아이템 ID 재입력이 필요한 삭제 확인
 - 실행 기록
   - 단건 생성·필드 수정·상태 전환·삭제의 성공·실패 결과 저장
@@ -160,8 +160,8 @@ GUI는 최상위 앱 셸에서 작업 영역을 전환하고, `배치 작업`에
 - Wiki 렌더링 여부는 `descriptionFormat`, field/column `type`과 `valueModel`로만 판단하며 문자열 패턴으로 추측하지 않습니다.
 - 필드 수정은 전체 item `PUT` 대신 `PUT /v3/items/{itemId}/fields`를 사용하며 저장 직전에 version을 다시 확인합니다.
 - 단건 생성은 `POST /v3/trackers/{trackerId}/items`를 사용하며 하위 생성에만 `parentItemId`를 전달합니다.
-- 상태는 생성 payload에 넣지 않고 서버 기본값으로 만든 뒤 기존 단건 상태 전환을 사용합니다.
-- 테스트 모드에서는 편집 widget을 확인할 수 있지만 생성, 저장, 상태 전환과 삭제를 실행할 수 없습니다.
+- 상태는 생성 payload에 넣지 않고 서버 기본값으로 만듭니다. 현재 작업공간은 workflow transition이 아닌 Status 필드 변경만 제공합니다.
+- 테스트 모드에서는 편집 widget을 확인할 수 있지만 생성, 저장, Status 필드 변경과 삭제를 실행할 수 없습니다.
 - 테스트 모드에서는 일괄 수정도 실행할 수 없습니다.
 
 ### 실행 기록
@@ -398,7 +398,7 @@ GUI는 최상위 앱 셸에서 작업 영역을 전환하고, `배치 작업`에
 - 유형이 불명확한 mixed member/reference field는 작업공간에서 아직 수정할 수 없습니다.
 - 통합 `실행 기록`은 최종 결과 요약만 보관하며, 배치 행별 실시간 로그와 원본 오류 응답은 `배치 작업`에서 확인합니다.
 - 현재 실행 환경에 사용 가능한 `keyring` backend가 없으면 OS 자격증명 저장 방식은 비활성화됩니다.
-- 배치 create 후 `Status` transition 후처리는 아직 구현하지 않았습니다. 작업공간의 단건 상태 전환은 지원합니다.
+- 배치 create 후 `Status` transition 후처리와 작업공간의 실제 workflow transition은 아직 구현하지 않았습니다. 현재 작업공간 동작은 Status 필드 부분 갱신입니다.
 - `TrackerItemChoiceField` 의 이름·summary query lookup은 대량 검증의 API 호출을 줄이기 위해 비활성화되어 있습니다.
 - offline snapshot 에 사용자 / 그룹 데이터가 없으면 관련 lookup 은 실패하도록 유지합니다. 작업공간 조회는 별도 `조회 데이터 Snapshot`이 있어야 활성화할 수 있습니다.
 - 결과 화면의 상세 상호작용은 아직 최소 구성입니다.
