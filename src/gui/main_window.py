@@ -5,6 +5,7 @@ from dataclasses import replace
 from PySide6.QtCore import QTimer
 
 from src.api_monitor import API_MONITOR
+from src.app_metadata import APPLICATION_TITLE
 from src.diagnostics import DIAGNOSTICS
 from src.diagnostics import DiagnosticLevel
 from src.diagnostics import DiagnosticService
@@ -96,7 +97,7 @@ class MainWindow(QMainWindow):
         self._busy_tokens: set[int] = set()
 
         self._build_application_shell(initial_settings)
-        self.setWindowTitle("Codebeamer Automation Suite")
+        self.setWindowTitle(APPLICATION_TITLE)
         self.setMinimumSize(860, 620)
         self.resize(*_window_size_from_settings(initial_settings))
         self._show_route(ROUTE_TRACKER_WORKSPACE)

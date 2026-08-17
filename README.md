@@ -58,6 +58,27 @@ CLI 보조 실행:
 py -3 cli_main.py
 ```
 
+## Windows Portable ZIP
+
+배포된 GitHub Release 자산은 Windows 10/11 x64용 Portable ZIP입니다. 정식 버전의
+`Codebeamer-Automation-Suite-vX.Y.Z-windows-x64.zip`을 받은 뒤 ZIP 전체를 새 폴더에 풀고
+`CodebeamerAutomationSuite.exe`를 실행합니다. PyInstaller `onedir` 패키지이므로 EXE와 `_internal`
+디렉터리를 분리하면 실행할 수 없습니다.
+
+- `.xlsx`는 패키지에 포함된 의존성으로 지원합니다.
+- `.xls` 처리는 Windows에 설치된 데스크톱 Microsoft Excel이 필요합니다.
+- 현재 EXE는 코드 서명하지 않아 Windows SmartScreen 경고가 표시될 수 있습니다.
+- Release의 `SHA256SUMS.txt`와 GitHub attestation을 확인한 파일만 실행합니다.
+- PR·수동 실행 artifact는 7일간 보관되는 검증용 결과이며 GitHub Release가 아닙니다.
+
+정식 태그는 `vX.Y.Z`, 릴리스 후보는 `vX.Y.Z-rc.N` 형식입니다. 태그 커밋이 `main` 이력에 포함되고
+태그의 기본 버전이 `VERSION`과 일치할 때만 Release가 게시됩니다. 따라서 아직 병합되지 않은 PR은
+배포에 포함되지 않습니다. 실제 `v0.1.0` 태그와 첫 Release는 파이프라인과 포함 기능을 `main`에 병합한
+뒤 별도 배포 작업에서 생성합니다.
+
+다운로드, 압축 해제, 체크섬·attestation 확인, 버전 변경과 태그 생성 절차 및 현재 검증 한계는
+[Windows Portable ZIP 배포 가이드](./docs/windows-release.md)에 정리했습니다.
+
 ## GUI 오프라인 예시 데이터
 
 GUI의 최상위 `설정 > 테스트 모드`에서 사용할 수 있는 샘플 세트는 `data/gui-offline-sample/` 에 있습니다.
@@ -276,6 +297,7 @@ py -3 cli_main.py
 - [Codebeamer 프로젝트 시작 패키지](./docs/codebeamer-project-start-kit.md)
 - [CLI 사용 가이드](./docs/cli-guide.md)
 - [GUI 사용 가이드](./docs/gui-plan.md)
+- [Windows Portable ZIP 배포 가이드](./docs/windows-release.md)
 - [Codebeamer API 모니터](./docs/api-monitor.md)
 - [변경 이력 성격의 v2 문서](./docs/v2-changes.md)
 - [트러블슈팅](./docs/troubleshooting.md)
