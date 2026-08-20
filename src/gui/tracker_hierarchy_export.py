@@ -22,6 +22,7 @@ from .tracker_baseline_compare import display_tracker_value
 from .tracker_baseline_compare import table_field_rows
 from .tracker_baseline_compare import tracker_item_fields
 from .tracker_hierarchy import TrackerHierarchyError
+from .tracker_hierarchy import TrackerHierarchySnapshot
 from .tracker_hierarchy import build_tracker_hierarchy
 from .tracker_query_models import TrackerItemSummary
 
@@ -222,6 +223,14 @@ def build_tracker_hierarchy_snapshot(
     except TrackerHierarchyError as exc:
         raise TrackerHierarchyExportError(str(exc)) from exc
 
+    return build_tracker_hierarchy_export_snapshot(hierarchy, tracker_schema)
+
+
+def build_tracker_hierarchy_export_snapshot(
+    hierarchy: TrackerHierarchySnapshot,
+    tracker_schema: dict[str, Any],
+) -> TrackerHierarchyExportSnapshot:
+    """이미 조회한 계층에 schema 필드를 결합해 Excel snapshot을 만든다."""
     fields = list(hierarchy_export_fields_from_schema(tracker_schema))
     field_indexes = {field.field_key: index for index, field in enumerate(fields)}
     nodes: list[TrackerHierarchyExportNode] = []
@@ -251,7 +260,7 @@ def build_tracker_hierarchy_snapshot(
             )
         )
     return TrackerHierarchyExportSnapshot(
-        tracker_id=normalized_tracker_id,
+        tracker_id=hierarchy.tracker_id,
         nodes=tuple(nodes),
         fields=tuple(fields),
     )
@@ -264,6 +273,8 @@ def create_tracker_hierarchy_workbook(
     project_name: str = "",
     selected_field_keys: tuple[str, ...] | list[str] = (),
     generated_at: datetime | None = None,
+    baseline_id: int | None = None,
+    baseline_name: str = "",
 ) -> tuple[Workbook, TrackerHierarchyExportSummary]:
     field_by_key = {field.field_key: field for field in snapshot.fields}
     selected_fields = tuple(
@@ -300,8 +311,14 @@ def create_tracker_hierarchy_workbook(
         generated_at=generated,
         data_row_count=data_row_count,
         long_values=long_values,
+        baseline_id=baseline_id,
+        baseline_name=baseline_name,
     )
-    workbook.properties.title = "Codebeamer 트래커 계층 내보내기"
+    workbook.properties.title = (
+        "Codebeamer Baseline 트래커 계층 내보내기"
+        if baseline_id is not None
+        else "Codebeamer 트래커 계층 내보내기"
+    )
     workbook.properties.subject = str(tracker_name or snapshot.tracker_id)
     workbook.properties.creator = "Codebeamer Automation Suite"
     return workbook, TrackerHierarchyExportSummary(
@@ -320,6 +337,8 @@ def export_tracker_hierarchy_xlsx(
     tracker_name: str,
     project_name: str = "",
     selected_field_keys: tuple[str, ...] | list[str] = (),
+    baseline_id: int | None = None,
+    baseline_name: str = "",
 ) -> TrackerHierarchyExportSummary:
     path = Path(output_path).expanduser()
     if path.suffix.casefold() != ".xlsx":
@@ -330,6 +349,8 @@ def export_tracker_hierarchy_xlsx(
         tracker_name=tracker_name,
         project_name=project_name,
         selected_field_keys=selected_field_keys,
+        baseline_id=baseline_id,
+        baseline_name=baseline_name,
     )
     temporary_path: Path | None = None
     try:
@@ -507,12 +528,26 @@ def _populate_info_sheet(
     generated_at: datetime,
     data_row_count: int,
     long_values: _LongValueCollector,
+    baseline_id: int | None,
+    baseline_name: str,
 ) -> None:
-    rows = (
+    rows = [
         ("항목", "값"),
         ("프로젝트", project_name or "-"),
         ("트래커", tracker_name or f"ID {snapshot.tracker_id}"),
         ("트래커 ID", snapshot.tracker_id),
+    ]
+    if baseline_id is not None:
+        rows.extend(
+            (
+                ("조회 기준", "Baseline"),
+                ("Baseline", baseline_name or f"Baseline #{baseline_id}"),
+                ("Baseline ID", baseline_id),
+            )
+        )
+    else:
+        rows.append(("조회 기준", "현재 상태"))
+    rows.extend((
         ("생성 시각", generated_at.isoformat(timespec="seconds")),
         ("아이템 수", len(snapshot.nodes)),
         ("데이터 행 수", data_row_count),
@@ -520,7 +555,7 @@ def _populate_info_sheet(
         ("선택 필드", "\n".join(field.label for field in selected_fields) or "고정 열만"),
         ("긴 값 수", len(long_values.records)),
         ("긴 값 분할 행 수", long_values.part_count),
-    )
+    ))
     for row_index, (label, value) in enumerate(rows, start=1):
         _set_safe_value(sheet.cell(row_index, 1), label, context="내보내기 정보")
         _set_safe_value(sheet.cell(row_index, 2), value, context=f"내보내기 정보 {label}")
@@ -796,6 +831,7 @@ __all__ = [
     "TrackerHierarchyExportNode",
     "TrackerHierarchyExportSnapshot",
     "TrackerHierarchyExportSummary",
+    "build_tracker_hierarchy_export_snapshot",
     "build_tracker_hierarchy_snapshot",
     "create_tracker_hierarchy_workbook",
     "export_tracker_hierarchy_xlsx",

@@ -85,6 +85,7 @@ from .tracker_baseline_export import baseline_export_fields
 from .tracker_baseline_export import export_baseline_comparison_xlsx
 from .tracker_baseline_export_dialog import BaselineExportFieldDialog
 from .tracker_hierarchy_export import TrackerHierarchyExportError
+from .tracker_hierarchy_export import build_tracker_hierarchy_export_snapshot
 from .tracker_hierarchy_export import export_tracker_hierarchy_xlsx
 from .tracker_hierarchy_export import hierarchy_export_fields_from_schema
 from .tracker_hierarchy_export_dialog import TrackerHierarchyExportFieldDialog
@@ -1334,7 +1335,14 @@ class TrackerWorkspacePage(QWidget):
             available
             and self._current_tracker is not None
             and not self._hierarchy_export_in_progress
-            and not historical
+            and (
+                not historical
+                or (
+                    self._current_tracker.tracker_id,
+                    self._selected_hierarchy_baseline_id(),
+                )
+                in self._baseline_hierarchy_cache
+            )
         )
         self.baseline_reload_button.setEnabled(
             available and self._current_tracker is not None
@@ -1921,6 +1929,7 @@ class TrackerWorkspacePage(QWidget):
             self._baseline_hierarchy_cache[key] = snapshot
             self.reload_roots_button.setEnabled(True)
             self.reload_roots_button.setText("Baseline 계층 다시 불러오기")
+            self._set_available(True)
             self._render_baseline_hierarchy(snapshot)
             self._set_workspace_status(
                 f"Baseline #{key[1]}의 계층 {len(snapshot.nodes):,}개 아이템을 불러왔습니다."
@@ -1998,12 +2007,20 @@ class TrackerWorkspacePage(QWidget):
         if tracker is None:
             self._set_workspace_status("트래커를 먼저 선택하세요.", tone="warning")
             return
-        if self._selected_hierarchy_baseline_id() is not None:
-            self._set_workspace_status(
-                "Baseline 계층의 Excel 내보내기는 아직 지원하지 않습니다.",
-                tone="warning",
+        baseline_id = self._selected_hierarchy_baseline_id()
+        baseline_snapshot = None
+        baseline_name = ""
+        if baseline_id is not None:
+            baseline_snapshot = self._baseline_hierarchy_cache.get(
+                (tracker.tracker_id, baseline_id)
             )
-            return
+            if baseline_snapshot is None:
+                self._set_workspace_status(
+                    "Baseline 계층을 먼저 조회한 뒤 Excel로 내보내세요.",
+                    tone="warning",
+                )
+                return
+            baseline_name = self.hierarchy_source_combo.currentText().strip()
         tracker_id = tracker.tracker_id
         settings = self.settings_provider()
         self.hierarchy_export_button.setEnabled(False)
@@ -2011,7 +2028,11 @@ class TrackerWorkspacePage(QWidget):
 
         def loaded(schema: dict[str, Any]) -> None:
             current = self._current_tracker
-            if current is None or current.tracker_id != tracker_id:
+            if (
+                current is None
+                or current.tracker_id != tracker_id
+                or self._selected_hierarchy_baseline_id() != baseline_id
+            ):
                 return
             self.hierarchy_export_button.setEnabled(True)
             fields = hierarchy_export_fields_from_schema(schema)
@@ -2019,10 +2040,15 @@ class TrackerWorkspacePage(QWidget):
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 self.tree_status_label.setText("계층 Excel 내보내기를 취소했습니다.")
                 return
+            default_name = (
+                f"tracker_hierarchy_{tracker_id}_baseline_{baseline_id}.xlsx"
+                if baseline_id is not None
+                else f"tracker_hierarchy_{tracker_id}.xlsx"
+            )
             output_path, _selected_filter = QFileDialog.getSaveFileName(
                 self,
                 "트래커 계층 Excel 저장",
-                f"tracker_hierarchy_{tracker_id}.xlsx",
+                default_name,
                 "Excel 통합 문서 (*.xlsx)",
             )
             if not output_path:
@@ -2032,6 +2058,10 @@ class TrackerWorkspacePage(QWidget):
                 tracker,
                 selected_field_keys=dialog.selected_field_keys(),
                 output_path=output_path,
+                tracker_schema=schema,
+                baseline_id=baseline_id,
+                baseline_name=baseline_name,
+                baseline_snapshot=baseline_snapshot,
             )
 
         def failed(exc: Exception) -> None:
@@ -2055,6 +2085,10 @@ class TrackerWorkspacePage(QWidget):
         *,
         selected_field_keys: tuple[str, ...],
         output_path: str,
+        tracker_schema: dict[str, Any] | None = None,
+        baseline_id: int | None = None,
+        baseline_name: str = "",
+        baseline_snapshot: TrackerHierarchySnapshot | None = None,
     ) -> None:
         if self._hierarchy_export_in_progress:
             return
@@ -2065,20 +2099,32 @@ class TrackerWorkspacePage(QWidget):
         settings = self.settings_provider()
 
         def export():
-            snapshot = self.service.load_tracker_hierarchy_export_snapshot(
-                settings,
-                tracker_id,
-                tracker_name=tracker.name,
-                project_id=project_id,
-                project_name=project_name,
-                page_size=HIERARCHY_FETCH_PAGE_SIZE,
-            )
+            if baseline_id is not None:
+                if baseline_snapshot is None or tracker_schema is None:
+                    raise TrackerHierarchyExportError(
+                        "Baseline 계층 조회 결과 또는 필드 정보가 없습니다."
+                    )
+                snapshot = build_tracker_hierarchy_export_snapshot(
+                    baseline_snapshot,
+                    tracker_schema,
+                )
+            else:
+                snapshot = self.service.load_tracker_hierarchy_export_snapshot(
+                    settings,
+                    tracker_id,
+                    tracker_name=tracker.name,
+                    project_id=project_id,
+                    project_name=project_name,
+                    page_size=HIERARCHY_FETCH_PAGE_SIZE,
+                )
             return export_tracker_hierarchy_xlsx(
                 snapshot,
                 output_path,
                 tracker_name=f"{tracker.name} (ID {tracker_id})",
                 project_name=project_name,
                 selected_field_keys=selected_field_keys,
+                baseline_id=baseline_id,
+                baseline_name=baseline_name,
             )
 
         def failed(exc: Exception) -> None:
@@ -2098,7 +2144,10 @@ class TrackerWorkspacePage(QWidget):
                     project_name=project_name,
                     tracker_id=tracker_id,
                     tracker_name=tracker.name,
-                    details={"selectedFieldCount": len(selected_field_keys)},
+                    details={
+                        "selectedFieldCount": len(selected_field_keys),
+                        "baselineId": baseline_id,
+                    },
                 )
             )
 
@@ -2123,6 +2172,7 @@ class TrackerWorkspacePage(QWidget):
                         "dataRowCount": summary.data_row_count,
                         "longValueCount": summary.long_value_count,
                         "longValuePartCount": summary.long_value_part_count,
+                        "baselineId": baseline_id,
                     },
                 )
             )
@@ -2136,11 +2186,20 @@ class TrackerWorkspacePage(QWidget):
                     f"Excel 내보내기 완료 · 아이템 {summary.item_count:,}개 · "
                     f"데이터 행 {summary.data_row_count:,}개{long_value_status}"
                 )
-                self._set_workspace_status("트래커 전체 계층 Excel 파일을 저장했습니다.")
+                source_label = (
+                    "Baseline 계층"
+                    if baseline_id is not None
+                    else "트래커 전체 계층"
+                )
+                self._set_workspace_status(f"{source_label} Excel 파일을 저장했습니다.")
 
         self._hierarchy_export_in_progress = True
         self._set_available(True)
-        self.tree_status_label.setText("트래커 전체 계층 Excel 파일을 생성하는 중입니다.")
+        self.tree_status_label.setText(
+            "Baseline 계층 Excel 파일을 생성하는 중입니다."
+            if baseline_id is not None
+            else "트래커 전체 계층 Excel 파일을 생성하는 중입니다."
+        )
         self._submit("hierarchy_export", export, completed, failed)
 
     def _render_baseline_roots(self, items: tuple[TrackerItemSummary, ...]) -> None:
