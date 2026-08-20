@@ -9,11 +9,13 @@ from unittest.mock import patch
 from openpyxl import load_workbook
 
 from src.gui.tracker_hierarchy_export import TrackerHierarchyExportError
+from src.gui.tracker_hierarchy_export import build_tracker_hierarchy_export_snapshot
 from src.gui.tracker_hierarchy_export import build_tracker_hierarchy_snapshot
 from src.gui.tracker_hierarchy_export import create_tracker_hierarchy_workbook
 from src.gui.tracker_hierarchy_export import export_tracker_hierarchy_xlsx
 from src.gui.tracker_hierarchy_export import hierarchy_export_fields_from_schema
 from src.gui.tracker_query_models import TrackerItemSummary
+from src.gui.tracker_hierarchy import build_tracker_hierarchy
 
 
 SCHEMA = {
@@ -145,6 +147,31 @@ class TrackerHierarchyExportTest(unittest.TestCase):
             [(node.item.item_id, node.parent_id, node.depth) for node in self.snapshot.nodes],
             [(1, None, 0), (2, 1, 1), (3, 1, 1), (4, 3, 2)],
         )
+
+    def test_existing_baseline_hierarchy_can_be_exported_without_rebuilding_it(self) -> None:
+        items = tuple(node.item for node in self.snapshot.nodes)
+        hierarchy = build_tracker_hierarchy(items, tracker_id=20)
+
+        snapshot = build_tracker_hierarchy_export_snapshot(hierarchy, SCHEMA)
+        workbook, summary = create_tracker_hierarchy_workbook(
+            snapshot,
+            tracker_name="Requirements (ID 20)",
+            project_name="Vehicle",
+            selected_field_keys=("status",),
+            baseline_id=701,
+            baseline_name="Release 1",
+            generated_at=datetime(2026, 8, 20, 12, 0, 0),
+        )
+
+        info_values = {
+            workbook["내보내기 정보"].cell(row, 1).value:
+            workbook["내보내기 정보"].cell(row, 2).value
+            for row in range(1, workbook["내보내기 정보"].max_row + 1)
+        }
+        self.assertEqual(info_values["조회 기준"], "Baseline")
+        self.assertEqual(info_values["Baseline"], "Release 1")
+        self.assertEqual(info_values["Baseline ID"], 701)
+        self.assertEqual(summary.item_count, 4)
 
     def test_snapshot_rejects_missing_hierarchy_metadata_without_per_item_fallback(self) -> None:
         root = _item(1, "Root")

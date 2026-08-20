@@ -332,6 +332,7 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self._app.processEvents()
 
         self.assertEqual(self.page.item_tree.topLevelItemCount(), 1)
+        self.assertTrue(self.page.hierarchy_export_button.isEnabled())
         root = self.page.item_tree.topLevelItem(0)
         self.assertEqual(root.text(0), "9001001")
         self.assertEqual(root.text(1), "Vehicle requirements baseline")
@@ -434,10 +435,78 @@ class TrackerWorkspacePageTest(unittest.TestCase):
             tracker_name="Offline Requirements (ID 24680001)",
             project_name="Offline Vehicle Project",
             selected_field_keys=("status", "custom:101"),
+            baseline_id=None,
+            baseline_name="",
         )
         self.assertFalse(self.page._hierarchy_export_in_progress)
         self.assertTrue(self.page.hierarchy_export_button.isEnabled())
         self.assertIn("아이템 5개", self.page.tree_status_label.text())
+
+    def test_baseline_hierarchy_export_reuses_loaded_snapshot(self) -> None:
+        self.page.activate()
+        baseline_id = 24681001
+        self.page.hierarchy_source_combo.setCurrentIndex(
+            self.page.hierarchy_source_combo.findData(baseline_id)
+        )
+        self.page.reload_roots_button.click()
+        self._app.processEvents()
+        loaded_snapshot = self.page._baseline_hierarchy_cache[
+            (24680001, baseline_id)
+        ]
+        export_snapshot = object()
+        summary = SimpleNamespace(
+            item_count=3,
+            selected_field_count=1,
+            data_row_count=3,
+            long_value_count=0,
+            long_value_part_count=0,
+        )
+
+        with (
+            patch(
+                "src.gui.tracker_workspace.TrackerHierarchyExportFieldDialog"
+            ) as dialog_cls,
+            patch(
+                "src.gui.tracker_workspace.QFileDialog.getSaveFileName",
+                return_value=("baseline-hierarchy.xlsx", "Excel 통합 문서 (*.xlsx)"),
+            ) as file_dialog,
+            patch(
+                "src.gui.tracker_workspace.build_tracker_hierarchy_export_snapshot",
+                return_value=export_snapshot,
+            ) as build_mock,
+            patch.object(
+                self.service,
+                "load_tracker_hierarchy_export_snapshot",
+            ) as current_snapshot_mock,
+            patch(
+                "src.gui.tracker_workspace.export_tracker_hierarchy_xlsx",
+                return_value=summary,
+            ) as export_mock,
+        ):
+            dialog_cls.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            dialog_cls.return_value.selected_field_keys.return_value = ("status",)
+
+            self.page.hierarchy_export_button.click()
+
+        current_snapshot_mock.assert_not_called()
+        self.assertEqual(self.service.baseline_hierarchy_count, 1)
+        build_mock.assert_called_once()
+        self.assertIs(build_mock.call_args.args[0], loaded_snapshot)
+        file_dialog.assert_called_once()
+        self.assertEqual(
+            file_dialog.call_args.args[2],
+            "tracker_hierarchy_24680001_baseline_24681001.xlsx",
+        )
+        export_mock.assert_called_once_with(
+            export_snapshot,
+            "baseline-hierarchy.xlsx",
+            tracker_name="Offline Requirements (ID 24680001)",
+            project_name="Offline Vehicle Project",
+            selected_field_keys=("status",),
+            baseline_id=baseline_id,
+            baseline_name=self.page.hierarchy_source_combo.currentText(),
+        )
+        self.assertIn("아이템 3개", self.page.tree_status_label.text())
 
     def test_baseline_compare_uses_separate_workspace_and_does_not_eagerly_fetch_details(self) -> None:
         self.page.activate()

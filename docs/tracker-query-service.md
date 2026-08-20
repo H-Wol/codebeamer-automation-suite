@@ -135,6 +135,7 @@ Qt widget은 서버 원본 dict를 직접 탐색하지 않고 위 모델만 사�
 - 계층 Excel의 TrackerItemChoiceField는 참조 ID나 tracker 정보 없이 각 참조 아이템의 `name`만 줄 단위로 표시합니다.
 - 기본 계층 탭에서 Baseline을 선택하면 사용자가 계층 조회 버튼을 누른 경우에만 해당 시점의 전체 `items` 페이지를 수집합니다. root는 parent가 없는 item에서 도출하고, children의 명시 순서와 ordinal/ID fallback으로 트리를 구성합니다. 이 과정에서 현재 시점 root/children API나 아이템별 상세 API를 사용하지 않습니다.
 - Baseline 트리의 상세는 동일한 `baselineId`를 유지하며 읽기 전용으로 표시합니다. 관계 충돌, 순환, 누락 참조 또는 tracker 외부 참조가 있으면 현재 계층으로 대체하지 않고 조회를 중단합니다.
+- Baseline 단일 계층 Excel은 먼저 조회해 캐시한 `TrackerHierarchySnapshot`과 tracker schema를 기존 계층 workbook 생성기에 전달합니다. 필드 선택과 TableField 행 구조, TrackerItemChoiceField 이름 표시 규칙을 그대로 유지하며 내보내기 때문에 전체 query나 아이템별 상세를 다시 호출하지 않습니다. 내보내기 정보 시트에는 Baseline 이름과 ID를 기록합니다.
 - tracker 검색은 선택 tracker ID로 `TrackerQuery`를 만들며 빈 검색 조건은 화면에서 차단합니다.
 - ID 바로 열기는 `resolve_item_context()` 후 `load_ancestor_path()`를 호출해 선택 컨텍스트와 경로를 함께 전환합니다.
 - 설정·선택이 바뀐 뒤 늦게 끝난 요청이 화면을 덮지 않도록 작업 종류별 request token과 현재 tracker/item을 비교합니다.
