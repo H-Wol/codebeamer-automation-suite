@@ -37,7 +37,7 @@ class ActivityResult(str, Enum):
 ACTIVITY_OPERATION_LABELS = {
     ActivityOperation.TRACKER_CREATE: "단건 생성",
     ActivityOperation.TRACKER_UPDATE: "필드 수정",
-    ActivityOperation.STATUS_TRANSITION: "상태 전환",
+    ActivityOperation.STATUS_TRANSITION: "상태 필드 변경",
     ActivityOperation.TRACKER_DELETE: "아이템 삭제",
     ActivityOperation.BULK_UPDATE: "일괄 수정",
     ActivityOperation.BATCH_UPLOAD: "배치 작업",

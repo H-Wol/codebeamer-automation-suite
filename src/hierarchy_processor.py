@@ -5,6 +5,9 @@ from typing import Any
 import pandas as pd
 
 
+UPLOAD_RECORD_KEY_COLUMN = "Upload Record Key"
+
+
 class HierarchyProcessor:
     """raw DataFrame를 계층 업로드용 DataFrame으로 후처리하는 전용 processor다."""
 
@@ -85,37 +88,94 @@ class HierarchyProcessor:
     ) -> pd.DataFrame:
         work = raw_df.copy().reset_index(drop=True)
 
+        record_key_mode = UPLOAD_RECORD_KEY_COLUMN in work.columns
         group_ids = []
-        current_group = 0
-        for _, row in work.iterrows():
-            if not self.is_blank(row[self.summary_col]):
-                current_group += 1
-            group_ids.append(current_group)
+        if record_key_mode:
+            key_to_group: dict[str, int] = {}
+            closed_keys: set[str] = set()
+            previous_key: str | None = None
+            for index, raw_key in enumerate(work[UPLOAD_RECORD_KEY_COLUMN].tolist()):
+                key = str(self.normalize_scalar(raw_key) or "").strip()
+                if not key:
+                    raise ValueError(
+                        f"{UPLOAD_RECORD_KEY_COLUMN} 값이 비어 있습니다. Excel 행={index + self.header_row + 1}"
+                    )
+                if previous_key is not None and key != previous_key:
+                    closed_keys.add(previous_key)
+                if key in closed_keys:
+                    raise ValueError(
+                        f"{UPLOAD_RECORD_KEY_COLUMN} '{key}' 행은 연속해서 배치해야 합니다."
+                    )
+                if key not in key_to_group:
+                    key_to_group[key] = len(key_to_group) + 1
+                group_ids.append(key_to_group[key])
+                previous_key = key
+        else:
+            current_group = 0
+            for _, row in work.iterrows():
+                if not self.is_blank(row[self.summary_col]):
+                    current_group += 1
+                group_ids.append(current_group)
 
         work["_group"] = group_ids
         work = work[work["_group"] > 0].copy()
 
-        keep_cols = [column for column in work.columns if column not in [self.summary_col, "_group"] + list_cols]
+        keep_cols = [
+            column
+            for column in work.columns
+            if column not in [self.summary_col, "_group", UPLOAD_RECORD_KEY_COLUMN] + list_cols
+        ]
         merged_rows = []
 
         for _, group_df in work.groupby("_group", sort=True):
+            record_key = None
+            if record_key_mode:
+                record_key = str(group_df[UPLOAD_RECORD_KEY_COLUMN].iloc[0]).strip()
+                scalar_columns = [self.summary_col, *keep_cols]
+                for column in scalar_columns:
+                    if column in {"_summary_indent", "_excel_row"}:
+                        continue
+                    normalized_values = [
+                        self.normalize_scalar(value)
+                        for value in group_df[column].tolist()
+                    ]
+                    if any(value != normalized_values[0] for value in normalized_values[1:]):
+                        raise ValueError(
+                            f"{UPLOAD_RECORD_KEY_COLUMN} '{record_key}'의 일반 필드 '{column}' 값이 행마다 다릅니다."
+                        )
             row_out = {
-                self.summary_col: self.keep_value(group_df[self.summary_col].tolist(), mode="first"),
+                self.summary_col: (
+                    self.normalize_scalar(group_df[self.summary_col].iloc[0])
+                    if record_key_mode
+                    else self.keep_value(group_df[self.summary_col].tolist(), mode="first")
+                ),
                 "_summary_indent": self.keep_value(group_df["_summary_indent"].tolist(), mode="first"),
                 "_start_excel_row": self.keep_value(group_df["_excel_row"].tolist(), mode="first"),
                 "_end_excel_row": self.keep_value(group_df["_excel_row"].tolist(), mode="last"),
             }
+            if record_key is not None:
+                row_out["_upload_record_key"] = record_key
 
             for column in list_cols:
-                row_out[column] = self.collect_values(
-                    group_df[column].tolist(),
-                    single_to_scalar=single_to_scalar,
-                )
+                if "." in str(column):
+                    row_out[column] = [
+                        self.normalize_scalar(value)
+                        for value in group_df[column].tolist()
+                    ]
+                else:
+                    row_out[column] = self.collect_values(
+                        group_df[column].tolist(),
+                        single_to_scalar=single_to_scalar,
+                    )
 
             for column in keep_cols:
                 if column in {"_summary_indent", "_excel_row"}:
                     continue
-                row_out[column] = self.keep_value(group_df[column].tolist(), mode=keep_mode)
+                row_out[column] = (
+                    self.normalize_scalar(group_df[column].iloc[0])
+                    if record_key_mode
+                    else self.keep_value(group_df[column].tolist(), mode=keep_mode)
+                )
 
             merged_rows.append(row_out)
 
@@ -158,3 +218,6 @@ class HierarchyProcessor:
         del list_cols
         work["upload_name"] = work[self.summary_col].apply(self.normalize_scalar)
         return self._normalize_dataframe_values(work)
+
+
+__all__ = ["HierarchyProcessor", "UPLOAD_RECORD_KEY_COLUMN"]

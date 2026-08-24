@@ -48,6 +48,10 @@ from .tracker_item_editor import TrackerItemFieldChange
 from .tracker_item_editor import TrackerItemWriteError
 from .tracker_item_editor_dialog import TrackerItemEditorDialog
 from .tracker_item_detail_dialog import TrackerItemDetailDialog
+from .tracker_item_detail_session import TrackerItemDetailSession
+from .tracker_item_context_service import TrackerItemContextService
+from .tracker_comment_models import ItemCommentsSnapshot
+from .tracker_comment_service import TrackerCommentService
 from .tracker_item_editor_panel import ConfirmItemDeleteDialog
 from .tracker_item_editor_panel import TrackerItemEditorPanel
 from .tracker_item_create_dialog import TrackerItemCreateDialog
@@ -85,6 +89,7 @@ from .tracker_baseline_export import baseline_export_fields
 from .tracker_baseline_export import export_baseline_comparison_xlsx
 from .tracker_baseline_export_dialog import BaselineExportFieldDialog
 from .tracker_hierarchy_export import TrackerHierarchyExportError
+from .tracker_hierarchy_export import build_tracker_hierarchy_export_snapshot
 from .tracker_hierarchy_export import export_tracker_hierarchy_xlsx
 from .tracker_hierarchy_export import hierarchy_export_fields_from_schema
 from .tracker_hierarchy_export_dialog import TrackerHierarchyExportFieldDialog
@@ -492,6 +497,8 @@ class TrackerWorkspacePage(QWidget):
         settings_provider: Callable[[], GuiSettings],
         service: TrackerQueryService | None = None,
         content_service: TrackerContentService | None = None,
+        context_service: TrackerItemContextService | None = None,
+        comment_service: TrackerCommentService | None = None,
         editor_service: TrackerItemEditorService | None = None,
         open_settings: Callable[[], None] | None = None,
         delete_confirmer: Callable[[TrackerItemDetail], bool] | None = None,
@@ -521,6 +528,8 @@ class TrackerWorkspacePage(QWidget):
         self.settings_provider = settings_provider
         self.service = service or TrackerQueryService()
         self.content_service = content_service or TrackerContentService()
+        self.context_service = context_service or TrackerItemContextService()
+        self.comment_service = comment_service or TrackerCommentService()
         self.editor_service = editor_service or TrackerItemEditorService(
             query_service=self.service
         )
@@ -1236,6 +1245,8 @@ class TrackerWorkspacePage(QWidget):
             if callable(clear_cache):
                 clear_cache()
             self.content_service.clear_cache()
+            self.context_service.clear_cache()
+            self.comment_service.clear_cache()
         if settings_changed:
             self._settings_fingerprint = fingerprint
             self._clear_context_state()
@@ -1334,7 +1345,14 @@ class TrackerWorkspacePage(QWidget):
             available
             and self._current_tracker is not None
             and not self._hierarchy_export_in_progress
-            and not historical
+            and (
+                not historical
+                or (
+                    self._current_tracker.tracker_id,
+                    self._selected_hierarchy_baseline_id(),
+                )
+                in self._baseline_hierarchy_cache
+            )
         )
         self.baseline_reload_button.setEnabled(
             available and self._current_tracker is not None
@@ -1921,6 +1939,7 @@ class TrackerWorkspacePage(QWidget):
             self._baseline_hierarchy_cache[key] = snapshot
             self.reload_roots_button.setEnabled(True)
             self.reload_roots_button.setText("Baseline 계층 다시 불러오기")
+            self._set_available(True)
             self._render_baseline_hierarchy(snapshot)
             self._set_workspace_status(
                 f"Baseline #{key[1]}의 계층 {len(snapshot.nodes):,}개 아이템을 불러왔습니다."
@@ -1998,12 +2017,20 @@ class TrackerWorkspacePage(QWidget):
         if tracker is None:
             self._set_workspace_status("트래커를 먼저 선택하세요.", tone="warning")
             return
-        if self._selected_hierarchy_baseline_id() is not None:
-            self._set_workspace_status(
-                "Baseline 계층의 Excel 내보내기는 아직 지원하지 않습니다.",
-                tone="warning",
+        baseline_id = self._selected_hierarchy_baseline_id()
+        baseline_snapshot = None
+        baseline_name = ""
+        if baseline_id is not None:
+            baseline_snapshot = self._baseline_hierarchy_cache.get(
+                (tracker.tracker_id, baseline_id)
             )
-            return
+            if baseline_snapshot is None:
+                self._set_workspace_status(
+                    "Baseline 계층을 먼저 조회한 뒤 Excel로 내보내세요.",
+                    tone="warning",
+                )
+                return
+            baseline_name = self.hierarchy_source_combo.currentText().strip()
         tracker_id = tracker.tracker_id
         settings = self.settings_provider()
         self.hierarchy_export_button.setEnabled(False)
@@ -2011,7 +2038,11 @@ class TrackerWorkspacePage(QWidget):
 
         def loaded(schema: dict[str, Any]) -> None:
             current = self._current_tracker
-            if current is None or current.tracker_id != tracker_id:
+            if (
+                current is None
+                or current.tracker_id != tracker_id
+                or self._selected_hierarchy_baseline_id() != baseline_id
+            ):
                 return
             self.hierarchy_export_button.setEnabled(True)
             fields = hierarchy_export_fields_from_schema(schema)
@@ -2019,10 +2050,15 @@ class TrackerWorkspacePage(QWidget):
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 self.tree_status_label.setText("계층 Excel 내보내기를 취소했습니다.")
                 return
+            default_name = (
+                f"tracker_hierarchy_{tracker_id}_baseline_{baseline_id}.xlsx"
+                if baseline_id is not None
+                else f"tracker_hierarchy_{tracker_id}.xlsx"
+            )
             output_path, _selected_filter = QFileDialog.getSaveFileName(
                 self,
                 "트래커 계층 Excel 저장",
-                f"tracker_hierarchy_{tracker_id}.xlsx",
+                default_name,
                 "Excel 통합 문서 (*.xlsx)",
             )
             if not output_path:
@@ -2032,6 +2068,10 @@ class TrackerWorkspacePage(QWidget):
                 tracker,
                 selected_field_keys=dialog.selected_field_keys(),
                 output_path=output_path,
+                tracker_schema=schema,
+                baseline_id=baseline_id,
+                baseline_name=baseline_name,
+                baseline_snapshot=baseline_snapshot,
             )
 
         def failed(exc: Exception) -> None:
@@ -2055,6 +2095,10 @@ class TrackerWorkspacePage(QWidget):
         *,
         selected_field_keys: tuple[str, ...],
         output_path: str,
+        tracker_schema: dict[str, Any] | None = None,
+        baseline_id: int | None = None,
+        baseline_name: str = "",
+        baseline_snapshot: TrackerHierarchySnapshot | None = None,
     ) -> None:
         if self._hierarchy_export_in_progress:
             return
@@ -2065,20 +2109,32 @@ class TrackerWorkspacePage(QWidget):
         settings = self.settings_provider()
 
         def export():
-            snapshot = self.service.load_tracker_hierarchy_export_snapshot(
-                settings,
-                tracker_id,
-                tracker_name=tracker.name,
-                project_id=project_id,
-                project_name=project_name,
-                page_size=HIERARCHY_FETCH_PAGE_SIZE,
-            )
+            if baseline_id is not None:
+                if baseline_snapshot is None or tracker_schema is None:
+                    raise TrackerHierarchyExportError(
+                        "Baseline 계층 조회 결과 또는 필드 정보가 없습니다."
+                    )
+                snapshot = build_tracker_hierarchy_export_snapshot(
+                    baseline_snapshot,
+                    tracker_schema,
+                )
+            else:
+                snapshot = self.service.load_tracker_hierarchy_export_snapshot(
+                    settings,
+                    tracker_id,
+                    tracker_name=tracker.name,
+                    project_id=project_id,
+                    project_name=project_name,
+                    page_size=HIERARCHY_FETCH_PAGE_SIZE,
+                )
             return export_tracker_hierarchy_xlsx(
                 snapshot,
                 output_path,
                 tracker_name=f"{tracker.name} (ID {tracker_id})",
                 project_name=project_name,
                 selected_field_keys=selected_field_keys,
+                baseline_id=baseline_id,
+                baseline_name=baseline_name,
             )
 
         def failed(exc: Exception) -> None:
@@ -2098,7 +2154,10 @@ class TrackerWorkspacePage(QWidget):
                     project_name=project_name,
                     tracker_id=tracker_id,
                     tracker_name=tracker.name,
-                    details={"selectedFieldCount": len(selected_field_keys)},
+                    details={
+                        "selectedFieldCount": len(selected_field_keys),
+                        "baselineId": baseline_id,
+                    },
                 )
             )
 
@@ -2123,6 +2182,7 @@ class TrackerWorkspacePage(QWidget):
                         "dataRowCount": summary.data_row_count,
                         "longValueCount": summary.long_value_count,
                         "longValuePartCount": summary.long_value_part_count,
+                        "baselineId": baseline_id,
                     },
                 )
             )
@@ -2136,11 +2196,20 @@ class TrackerWorkspacePage(QWidget):
                     f"Excel 내보내기 완료 · 아이템 {summary.item_count:,}개 · "
                     f"데이터 행 {summary.data_row_count:,}개{long_value_status}"
                 )
-                self._set_workspace_status("트래커 전체 계층 Excel 파일을 저장했습니다.")
+                source_label = (
+                    "Baseline 계층"
+                    if baseline_id is not None
+                    else "트래커 전체 계층"
+                )
+                self._set_workspace_status(f"{source_label} Excel 파일을 저장했습니다.")
 
         self._hierarchy_export_in_progress = True
         self._set_available(True)
-        self.tree_status_label.setText("트래커 전체 계층 Excel 파일을 생성하는 중입니다.")
+        self.tree_status_label.setText(
+            "Baseline 계층 Excel 파일을 생성하는 중입니다."
+            if baseline_id is not None
+            else "트래커 전체 계층 Excel 파일을 생성하는 중입니다."
+        )
         self._submit("hierarchy_export", export, completed, failed)
 
     def _render_baseline_roots(self, items: tuple[TrackerItemSummary, ...]) -> None:
@@ -2527,6 +2596,14 @@ class TrackerWorkspacePage(QWidget):
     def _reload_current_detail(self) -> None:
         if self._selected_item_id is not None:
             self.content_service.clear_item_cache(
+                self.settings_provider(),
+                self._selected_item_id,
+            )
+            self.context_service.clear_item_cache(
+                self.settings_provider(),
+                self._selected_item_id,
+            )
+            self.comment_service.clear_item_cache(
                 self.settings_provider(),
                 self._selected_item_id,
             )
@@ -4160,7 +4237,387 @@ class TrackerWorkspacePage(QWidget):
             baseline_id=self._detail_baseline_id,
             parent=self,
         )
+        session = TrackerItemDetailSession(detail.item_id, detail.version)
+        dialog.comments_requested.connect(
+            lambda force=False: self._load_detail_dialog_comments(
+                dialog,
+                session,
+                force=force,
+            )
+        )
+        dialog.comment_attachment_save_requested.connect(self._save_attachment)
+        dialog.set_navigation_state(can_go_back=False, can_go_forward=False)
+        dialog.context_tab_requested.connect(
+            lambda kind, force=False: self._load_detail_dialog_context(
+                dialog, session, kind, force=force
+            )
+        )
+        dialog.related_item_requested.connect(
+            lambda item_id: self._navigate_detail_dialog(dialog, session, item_id)
+        )
+        dialog.navigate_back_requested.connect(
+            lambda: self._navigate_detail_dialog_history(dialog, session, back=True)
+        )
+        dialog.navigate_forward_requested.connect(
+            lambda: self._navigate_detail_dialog_history(dialog, session, back=False)
+        )
+        dialog.finished.connect(lambda _result: session.invalidate())
         dialog.exec()
+
+    def _load_detail_dialog_context(
+        self,
+        dialog: TrackerItemDetailDialog,
+        session: TrackerItemDetailSession,
+        kind: str,
+        *,
+        force: bool = False,
+    ) -> None:
+        if dialog.baseline_id is not None or kind not in {"relations", "history"}:
+            return
+        detail = dialog.detail
+        generation = session.generation
+        dialog.set_context_loading(kind)
+        settings = self.settings_provider()
+
+        def current() -> bool:
+            return (
+                dialog.isVisible()
+                and session.generation == generation
+                and session.current.item_id == detail.item_id
+            )
+
+        def loaded(result) -> None:
+            if not current():
+                return
+            if kind == "relations":
+                dialog.set_relations(result)
+            else:
+                dialog.set_history(result)
+
+        def failed(exc: Exception) -> None:
+            if current():
+                dialog.set_context_error(kind, str(exc))
+
+        if kind == "relations":
+            operation = lambda: self.context_service.load_relations(
+                settings,
+                detail.item_id,
+                detail.version,
+                force=force,
+            )
+        else:
+            operation = lambda: self.context_service.load_history(
+                settings,
+                detail.item_id,
+                detail.version,
+                force=force,
+            )
+        self._submit(f"detail_dialog_{kind}", operation, loaded, failed)
+
+    def _navigate_detail_dialog(
+        self,
+        dialog: TrackerItemDetailDialog,
+        session: TrackerItemDetailSession,
+        item_id: int,
+    ) -> None:
+        target_item_id = int(item_id)
+        if target_item_id == session.current.item_id:
+            return
+
+        def commit(detail: TrackerItemDetail) -> None:
+            session.navigate(detail.item_id, detail.version)
+
+        self._load_detail_dialog_item(
+            dialog,
+            session,
+            target_item_id,
+            commit,
+        )
+
+    def _navigate_detail_dialog_history(
+        self,
+        dialog: TrackerItemDetailDialog,
+        session: TrackerItemDetailSession,
+        *,
+        back: bool,
+    ) -> None:
+        target = session.peek_back() if back else session.peek_forward()
+        if target is None:
+            return
+
+        def commit(_detail: TrackerItemDetail) -> None:
+            if back:
+                session.back()
+            else:
+                session.forward()
+
+        self._load_detail_dialog_item(
+            dialog,
+            session,
+            target.item_id,
+            commit,
+        )
+
+    def _load_detail_dialog_item(
+        self,
+        dialog: TrackerItemDetailDialog,
+        session: TrackerItemDetailSession,
+        item_id: int,
+        commit: Callable[[TrackerItemDetail], None],
+    ) -> None:
+        source_generation = session.generation
+        source_item_id = session.current.item_id
+        settings = self.settings_provider()
+        dialog.set_navigation_state(
+            can_go_back=False,
+            can_go_forward=False,
+        )
+
+        def is_pending() -> bool:
+            return (
+                dialog.isVisible()
+                and session.generation == source_generation
+                and session.current.item_id == source_item_id
+                and dialog.detail.item_id == source_item_id
+            )
+
+        def loaded(detail: TrackerItemDetail) -> None:
+            if not is_pending():
+                return
+            commit(detail)
+            generation = session.generation
+            description_html = (
+                codebeamer_wiki_to_html(detail.description)
+                if is_explicit_wiki_type(detail.description_format)
+                else "<p>" + escape(detail.description).replace("\n", "<br>") + "</p>"
+            )
+            dialog.replace_detail(detail, description_html=description_html)
+            dialog.set_navigation_state(
+                can_go_back=session.can_go_back,
+                can_go_forward=session.can_go_forward,
+            )
+            self._hydrate_detail_dialog(dialog, session, detail, generation)
+
+        def failed(exc: Exception) -> None:
+            if not is_pending():
+                return
+            dialog.set_navigation_state(
+                can_go_back=session.can_go_back,
+                can_go_forward=session.can_go_forward,
+            )
+            self._show_error(exc, prefix="관련 아이템 상세 조회 실패")
+
+        self._submit(
+            "detail_dialog_item",
+            lambda: self.service.load_detail(settings, item_id),
+            loaded,
+            failed,
+        )
+
+    def _hydrate_detail_dialog(
+        self,
+        dialog: TrackerItemDetailDialog,
+        session: TrackerItemDetailSession,
+        detail: TrackerItemDetail,
+        generation: int,
+    ) -> None:
+        settings = self.settings_provider()
+
+        def current() -> bool:
+            return dialog.isVisible() and session.generation == generation and dialog.detail.item_id == detail.item_id
+
+        if is_explicit_wiki_type(detail.description_format):
+            self._submit(
+                "detail_dialog_wiki",
+                lambda: self.content_service.render_wiki(settings, self._wiki_context(detail, None), detail.description),
+                lambda result: dialog.set_description_html(result.html) if current() else None,
+                lambda _exc: None,
+            )
+
+        def attachments_loaded(attachments: tuple[AttachmentSummary, ...]) -> None:
+            if not current():
+                return
+            images = tuple(value for value in attachments if self._is_attachment_image(value) and (value.size is None or value.size <= MAX_INLINE_IMAGE_BYTES))
+            if not images:
+                dialog.set_images(attachments, ())
+                return
+
+            def resources_loaded(resources: tuple[AttachmentResource, ...]) -> None:
+                if current():
+                    dialog.set_images(attachments, resources)
+
+            self._submit(
+                "detail_dialog_images",
+                lambda: tuple(
+                    self.content_service.download_attachment(settings, image, max_bytes=MAX_INLINE_IMAGE_BYTES)
+                    for image in images[: max(1, MAX_ITEM_INLINE_IMAGE_BYTES // MAX_INLINE_IMAGE_BYTES)]
+                ),
+                resources_loaded,
+                lambda _exc: dialog.set_images(attachments, ()) if current() else None,
+            )
+
+        self._submit(
+            "detail_dialog_attachments",
+            lambda: self.content_service.load_attachments(settings, detail.item_id, raw_payload=detail.raw_payload),
+            attachments_loaded,
+            lambda _exc: None,
+        )
+
+    def _load_detail_dialog_comments(
+        self,
+        dialog: TrackerItemDetailDialog,
+        session: TrackerItemDetailSession,
+        *,
+        force: bool = False,
+    ) -> None:
+        if dialog.baseline_id is not None:
+            return
+        detail = dialog.detail
+        item_id = detail.item_id
+        version = detail.version
+        generation = session.generation
+        settings = self.settings_provider()
+        dialog.set_comments_loading()
+
+        def current() -> bool:
+            return (
+                dialog.isVisible()
+                and session.generation == generation
+                and session.current.item_id == item_id
+                and dialog.detail.item_id == item_id
+                and dialog.detail.version == version
+            )
+
+        def loaded(snapshot: ItemCommentsSnapshot) -> None:
+            if not current():
+                return
+            dialog.set_comments(snapshot)
+            self._hydrate_detail_dialog_comments(
+                dialog,
+                session,
+                detail,
+                snapshot,
+                generation,
+            )
+
+        self._submit(
+            "detail_dialog_comments",
+            lambda: self.comment_service.load_comments(settings, item_id, version, force=force),
+            loaded,
+            lambda exc: dialog.set_comments_error(str(exc)) if current() else None,
+        )
+
+    def _hydrate_detail_dialog_comments(
+        self,
+        dialog: TrackerItemDetailDialog,
+        session: TrackerItemDetailSession,
+        detail: TrackerItemDetail,
+        snapshot: ItemCommentsSnapshot,
+        generation: int,
+    ) -> None:
+        settings = self.settings_provider()
+        item_id = detail.item_id
+        version = detail.version
+        loaded_bytes = {"value": 0}
+        reserved = {"value": 0}
+
+        def current() -> bool:
+            return (
+                dialog.isVisible()
+                and session.generation == generation
+                and session.current.item_id == item_id
+                and dialog.detail.item_id == item_id
+                and dialog.detail.version == version
+            )
+
+        def apply_resource(comment_id: str, resource: AttachmentResource) -> None:
+            reserved["value"] = max(0, reserved["value"] - MAX_INLINE_IMAGE_BYTES)
+            if not current() or loaded_bytes["value"] + len(resource.data) > MAX_ITEM_INLINE_IMAGE_BYTES:
+                return
+            if dialog.add_comment_resource(comment_id, resource):
+                loaded_bytes["value"] += len(resource.data)
+
+        def reserve() -> bool:
+            if loaded_bytes["value"] + reserved["value"] + MAX_INLINE_IMAGE_BYTES > MAX_ITEM_INLINE_IMAGE_BYTES:
+                return False
+            reserved["value"] += MAX_INLINE_IMAGE_BYTES
+            return True
+
+        for comment in snapshot.comments:
+            if is_explicit_wiki_type(comment.format_name):
+                def rendered(result: WikiRenderResult, *, selected=comment) -> None:
+                    if not current():
+                        return
+                    dialog.set_comment_html(selected.comment_id, result.html)
+                    for reference in result.resources:
+                        if not reserve():
+                            break
+
+                        def inline_loaded(resource: AttachmentResource, *, comment_id=selected.comment_id) -> None:
+                            apply_resource(comment_id, resource)
+
+                        def inline_failed(_exc: Exception) -> None:
+                            reserved["value"] = max(0, reserved["value"] - MAX_INLINE_IMAGE_BYTES)
+
+                        self._submit(
+                            f"comment_inline:{selected.comment_id}:{reference.resource_key}",
+                            lambda value=reference: self.content_service.download_resource(
+                                settings,
+                                resource_key=value.resource_key,
+                                source_url=value.source_url,
+                            ),
+                            inline_loaded,
+                            inline_failed,
+                        )
+
+                self._submit(
+                    f"comment_wiki:{comment.comment_id}",
+                    lambda selected=comment: self.content_service.render_wiki(
+                        settings,
+                        self._wiki_context(detail, None),
+                        selected.body,
+                    ),
+                    rendered,
+                    lambda _exc: None,
+                )
+
+            for attachment in comment.attachments:
+                if not self._is_attachment_image(attachment):
+                    continue
+                if attachment.size is not None and attachment.size > MAX_INLINE_IMAGE_BYTES:
+                    continue
+                if not reserve():
+                    break
+                resource_key = f"comment-{comment.comment_id}-attachment-{attachment.attachment_id}"
+
+                def attachment_loaded(
+                    resource: AttachmentResource,
+                    *,
+                    comment_id=comment.comment_id,
+                    alias=resource_key,
+                ) -> None:
+                    normalized_mime = str(resource.mime_type or "").split(";", 1)[0].strip().casefold()
+                    if normalized_mime not in ATTACHMENT_IMAGE_MIME_TYPES:
+                        reserved["value"] = max(0, reserved["value"] - MAX_INLINE_IMAGE_BYTES)
+                        return
+                    apply_resource(
+                        comment_id,
+                        AttachmentResource(alias, resource.mime_type, resource.data),
+                    )
+
+                def attachment_failed(_exc: Exception) -> None:
+                    reserved["value"] = max(0, reserved["value"] - MAX_INLINE_IMAGE_BYTES)
+
+                self._submit(
+                    f"comment_attachment:{comment.comment_id}:{attachment.attachment_id}",
+                    lambda selected=attachment: self.content_service.download_attachment(
+                        settings,
+                        selected,
+                        max_bytes=MAX_INLINE_IMAGE_BYTES,
+                    ),
+                    attachment_loaded,
+                    attachment_failed,
+                )
 
     def _save_attachment(self, attachment: AttachmentSummary) -> None:
         output_path, _selected_filter = QFileDialog.getSaveFileName(
@@ -4585,7 +5042,7 @@ class TrackerWorkspacePage(QWidget):
     ) -> None:
         if self._is_historical_read_only():
             self._set_workspace_status(
-                "Baseline 상세의 상태를 전환할 수 없습니다.",
+                "Baseline 상세의 상태 필드를 변경할 수 없습니다.",
                 tone="warning",
             )
             return
@@ -4601,7 +5058,7 @@ class TrackerWorkspacePage(QWidget):
         target_name = target_option.name if target_option is not None else str(option_id)
         self.editor_panel.set_busy(True)
         self.editor_panel.editor_status.setText(
-            f"#{item_id} 상태를 '{target_name}'(으)로 전환하는 중입니다."
+            f"#{item_id} 상태 필드를 '{target_name}'(으)로 변경하는 중입니다."
         )
 
         def loaded(updated_detail: TrackerItemDetail) -> None:
@@ -4610,7 +5067,7 @@ class TrackerWorkspacePage(QWidget):
                 ActivityResult.SUCCESS,
                 message=(
                     f"#{item_id} 상태를 "
-                    f"'{updated_detail.summary.status or target_name}'(으)로 전환했습니다."
+                    f"'{updated_detail.summary.status or target_name}'(으)로 변경했습니다."
                 ),
                 detail=updated_detail,
                 details={
@@ -4623,14 +5080,14 @@ class TrackerWorkspacePage(QWidget):
             self._refresh_visible_item(updated_detail)
             self._render_detail(updated_detail)
             self._set_workspace_status(
-                f"#{item_id} 상태를 '{updated_detail.summary.status or target_name}'(으)로 전환했습니다."
+                f"#{item_id} 상태 필드를 '{updated_detail.summary.status or target_name}'(으)로 변경했습니다."
             )
 
         def failed(exc: Exception) -> None:
             self._record_item_activity(
                 ActivityOperation.STATUS_TRANSITION,
                 ActivityResult.FAILED,
-                message=f"#{item_id} 상태 전환에 실패했습니다.",
+                message=f"#{item_id} 상태 필드 변경에 실패했습니다.",
                 detail=detail,
                 details={
                     "from_status": detail.summary.status,
@@ -4639,12 +5096,12 @@ class TrackerWorkspacePage(QWidget):
                 },
             )
             self.editor_panel.set_busy(False)
-            self.editor_panel.set_error(str(exc) or "상태 전환에 실패했습니다.")
-            self._show_error(exc, prefix="상태 전환 실패")
+            self.editor_panel.set_error(str(exc) or "상태 필드 변경에 실패했습니다.")
+            self._show_error(exc, prefix="상태 필드 변경 실패")
 
         self._submit(
             "item_write",
-            lambda: self.editor_service.transition_status(
+            lambda: self.editor_service.change_status_field(
                 settings,
                 item_id=item_id,
                 expected_version=detail.version,

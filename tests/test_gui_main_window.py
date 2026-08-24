@@ -8,6 +8,7 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from src.api_monitor import API_MONITOR
+from src.app_metadata import APPLICATION_TITLE
 from src.gui.main_window import _estimate_upload_remaining_seconds
 from src.gui.main_window import _format_clock_text
 from src.gui.main_window import _format_upload_eta_text
@@ -166,7 +167,7 @@ class GuiMainWindowSmokeTest(unittest.TestCase):
             self._app.processEvents()
 
             self.assertIs(type(window), MainWindow)
-            self.assertEqual(window.windowTitle(), "Codebeamer Automation Suite")
+            self.assertEqual(window.windowTitle(), APPLICATION_TITLE)
             self.assertTrue(window.isVisible())
             self.assertEqual(window.route_stack.count(), len(APP_ROUTE_LABELS))
             self.assertGreaterEqual(window.application_header.height(), 56)

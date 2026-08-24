@@ -25,8 +25,10 @@
 - Baseline 전체 query만으로 재구성한 단일 시점 계층과 읽기 전용 상세
 
 쓰기, 상태 전환, 관계·댓글·첨부·이력은 이 서비스의 범위가 아닙니다. Wiki 렌더링, 첨부 목록과
-인증 바이너리 다운로드는 별도 `TrackerContentService`가 담당합니다.
-단건 생성, 선택 필드 수정, 상태 전환과 삭제는 [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)의
+인증 바이너리 다운로드는 별도 `TrackerContentService`가 담당합니다. 현재 아이템의 관계·참조와 변경 이력은
+`TrackerItemContextService`가 담당하며 상세 창에서 각 탭을 처음 열 때만 조회합니다. 현재 아이템 댓글 목록은
+`TrackerCommentService`가 정규화하고 본문·첨부 리소스는 content service를 재사용합니다.
+단건 생성, 선택 필드 수정, Status 필드 변경과 삭제는 [트래커 아이템 단건 생성·수정·Status 필드 변경·삭제](./tracker-item-editor.md)의
 별도 서비스 계약을 사용합니다.
 
 ## 온라인 API 경계
@@ -41,9 +43,23 @@
 | Baseline 전체 비교 | `GET /v3/items/query?baselineId={baselineId}` | `TrackerQueryService.compare_tracker_at_sources()` |
 | Baseline 단일 계층 | `GET /v3/items/query?baselineId={baselineId}` | `TrackerQueryService.load_baseline_hierarchy_snapshot()` |
 | 상세 | `GET /v3/items/{itemId}` | `CodebeamerClient.get_item()` |
+| 관계·참조 | `GET /v3/items/{itemId}/relations` | `TrackerItemContextService.load_relations()` |
+| 변경 이력 | `GET /v3/items/{itemId}/history` | `TrackerItemContextService.load_history()` |
+| 댓글 | `GET /v3/items/{itemId}/comments` | `TrackerCommentService.load_comments()` |
 | schema | `GET /v3/trackers/{trackerId}/schema` | `CodebeamerClient.get_tracker_schema()` |
 | Wiki HTML | `POST /v3/projects/{projectId}/wiki2html` | `TrackerContentService.render_wiki()` |
 | 첨부 목록 | 서버 Swagger 확인 필요 | `TrackerContentService.load_attachments()` |
+
+관계 응답은 하위·상위 참조와 들어오는·나가는 association 네 그룹을 그대로 보존합니다. 관계 ID는 서버
+버전에 따라 숫자 또는 문자열일 수 있으므로 문자열 식별자로 유지하고, `itemRevision.id`가 양의 정수로
+확인된 항목만 상세 이동을 허용합니다. 목록을 표시하기 위한 관계별 추가 상세 요청은 하지 않습니다.
+관계·이력 캐시는 연결 설정, item ID와 version으로 구분하며 설정 변경과 명시적 상세 새로고침 때
+무효화합니다. Baseline 상세에서는 현재 상태 endpoint를 호출하지 않습니다.
+
+댓글은 상세 창의 댓글 탭을 처음 열 때만 현재 item ID와 version 기준으로 조회합니다. `replyTo`가 확인된
+댓글은 부모 아래에 시간순으로 묶고, Wiki 형식 본문은 기존 HTML 정제와 로컬 fallback을 사용합니다.
+이미지 첨부만 기존 10MB/개·50MB/아이템 한도 안에서 자동으로 받고 다른 첨부는 사용자가 저장을 선택할
+때만 받습니다. Baseline에서는 현재 댓글 endpoint를 호출하지 않습니다.
 
 PTC 문서의 목록 응답은 `page`, `pageSize`, `total`을 포함하지만, 서버 버전과 endpoint에 따라
 요청한 페이지가 실제로 적용되지 않고 전체 결과가 반환될 수 있습니다. 계층 조회는 최대 500개씩 요청하고
@@ -135,6 +151,7 @@ Qt widget은 서버 원본 dict를 직접 탐색하지 않고 위 모델만 사�
 - 계층 Excel의 TrackerItemChoiceField는 참조 ID나 tracker 정보 없이 각 참조 아이템의 `name`만 줄 단위로 표시합니다.
 - 기본 계층 탭에서 Baseline을 선택하면 사용자가 계층 조회 버튼을 누른 경우에만 해당 시점의 전체 `items` 페이지를 수집합니다. root는 parent가 없는 item에서 도출하고, children의 명시 순서와 ordinal/ID fallback으로 트리를 구성합니다. 이 과정에서 현재 시점 root/children API나 아이템별 상세 API를 사용하지 않습니다.
 - Baseline 트리의 상세는 동일한 `baselineId`를 유지하며 읽기 전용으로 표시합니다. 관계 충돌, 순환, 누락 참조 또는 tracker 외부 참조가 있으면 현재 계층으로 대체하지 않고 조회를 중단합니다.
+- Baseline 단일 계층 Excel은 먼저 조회해 캐시한 `TrackerHierarchySnapshot`과 tracker schema를 기존 계층 workbook 생성기에 전달합니다. 필드 선택과 TableField 행 구조, TrackerItemChoiceField 이름 표시 규칙을 그대로 유지하며 내보내기 때문에 전체 query나 아이템별 상세를 다시 호출하지 않습니다. 내보내기 정보 시트에는 Baseline 이름과 ID를 기록합니다.
 - tracker 검색은 선택 tracker ID로 `TrackerQuery`를 만들며 빈 검색 조건은 화면에서 차단합니다.
 - ID 바로 열기는 `resolve_item_context()` 후 `load_ancestor_path()`를 호출해 선택 컨텍스트와 경로를 함께 전환합니다.
 - 설정·선택이 바뀐 뒤 늦게 끝난 요청이 화면을 덮지 않도록 작업 종류별 request token과 현재 tracker/item을 비교합니다.

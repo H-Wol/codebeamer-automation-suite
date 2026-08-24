@@ -50,7 +50,7 @@
 - [트래커 조회 서비스 계약](./tracker-query-service.md)
   tracker 범위 검색, 계층·상세·ID 경로 모델, pagination 차이와 익명 조회 fixture 계약을 정리합니다.
 - [트래커 아이템 단건 생성·수정·상태 전환·삭제](./tracker-item-editor.md)
-  schema 기반 단건 생성과 부분 수정, version 충돌 확인, 상태 전환과 삭제 안전장치를 정리합니다.
+  schema 기반 단건 생성과 부분 수정, version 충돌 확인, Status 필드 변경과 삭제 안전장치를 정리합니다.
 - [통합 실행 기록](./activity-history.md)
   단건 쓰기와 배치 결과의 로컬 저장 범위, 필터, 보안 경계와 현재 제한을 정리합니다.
 - [Codebeamer API 모니터](./api-monitor.md)
@@ -103,7 +103,7 @@
 - `src/gui/tracker_workspace.py`
   프로젝트·트래커 선택, 지연 로딩 확장형 트리, tracker 검색, ID 직접 접근과 상세 표시를 담당합니다.
 - `src/gui/tracker_item_editor.py`, `src/gui/tracker_item_editor_panel.py`
-  선택 필드 부분 수정, 상태 전환, 삭제 계약과 schema 기반 입력 UI를 담당합니다.
+  선택 필드 부분 수정, Status 필드 변경, 삭제 계약과 schema 기반 입력 UI를 담당합니다.
 - `src/gui/page_batch_settings.py`
   전역 설정과 분리된 배치 작업 mode 및 Excel 해석 기준을 담당합니다.
 - `cli_main.py`

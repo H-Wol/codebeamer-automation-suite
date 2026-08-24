@@ -153,6 +153,20 @@ class CodebeamerClientTrackerQueryTest(unittest.TestCase):
             [("/v3/items/1001", {"baselineId": 7})],
         )
 
+    def test_item_context_uses_current_item_read_endpoints(self) -> None:
+        client = RecordingCodebeamerClient()
+
+        client.get_item_relations(1001)
+        client.get_item_history(1001)
+
+        self.assertEqual(
+            client.get_calls,
+            [
+                ("/v3/items/1001/relations", None),
+                ("/v3/items/1001/history", None),
+            ],
+        )
+
     def test_wiki_render_uses_project_context_without_baseline_parameter(self) -> None:
         client = RecordingCodebeamerClient()
         client.response = {"html": "<p>완료</p>"}
@@ -213,6 +227,25 @@ class CodebeamerClientTrackerQueryTest(unittest.TestCase):
 
         self.assertEqual([item["id"] for item in result], [28, 29])
         self.assertEqual(len(client.get_calls), 2)
+
+    def test_comments_use_v3_path_and_collect_all_pages(self) -> None:
+        client = PagedBaselineClient(
+            {
+                1: {"page": 1, "pageSize": 1, "total": 2, "comments": [{"id": 1, "comment": "one"}]},
+                2: {"page": 2, "pageSize": 1, "total": 2, "comments": [{"id": "2", "comment": "two"}]},
+            }
+        )
+
+        result = client.get_item_comments(1001)
+
+        self.assertEqual([item["id"] for item in result], [1, "2"])
+        self.assertEqual(
+            client.get_calls,
+            [
+                ("/v3/items/1001/comments", {"page": 1, "pageSize": 500}),
+                ("/v3/items/1001/comments", {"page": 2, "pageSize": 500}),
+            ],
+        )
 
 
 if __name__ == "__main__":
