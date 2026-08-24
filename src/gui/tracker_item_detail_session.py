@@ -34,6 +34,16 @@ class TrackerItemDetailSession:
     def generation(self) -> int:
         return self._generation
 
+    def peek_back(self) -> DetailLocation | None:
+        if not self.can_go_back:
+            return None
+        return self._entries[self._index - 1]
+
+    def peek_forward(self) -> DetailLocation | None:
+        if not self.can_go_forward:
+            return None
+        return self._entries[self._index + 1]
+
     def navigate(self, item_id: int, version: int | None = None) -> DetailLocation:
         target = DetailLocation(int(item_id), version)
         if target.item_id == self.current.item_id:

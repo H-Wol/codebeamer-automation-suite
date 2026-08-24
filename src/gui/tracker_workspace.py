@@ -4237,11 +4237,15 @@ class TrackerWorkspacePage(QWidget):
             baseline_id=self._detail_baseline_id,
             parent=self,
         )
+        session = TrackerItemDetailSession(detail.item_id, detail.version)
         dialog.comments_requested.connect(
-            lambda force=False: self._load_detail_dialog_comments(dialog, force=force)
+            lambda force=False: self._load_detail_dialog_comments(
+                dialog,
+                session,
+                force=force,
+            )
         )
         dialog.comment_attachment_save_requested.connect(self._save_attachment)
-        session = TrackerItemDetailSession(detail.item_id, detail.version)
         dialog.set_navigation_state(can_go_back=False, can_go_forward=False)
         dialog.context_tab_requested.connect(
             lambda kind, force=False: self._load_detail_dialog_context(
@@ -4316,8 +4320,19 @@ class TrackerWorkspacePage(QWidget):
         session: TrackerItemDetailSession,
         item_id: int,
     ) -> None:
-        session.navigate(int(item_id))
-        self._load_detail_dialog_item(dialog, session)
+        target_item_id = int(item_id)
+        if target_item_id == session.current.item_id:
+            return
+
+        def commit(detail: TrackerItemDetail) -> None:
+            session.navigate(detail.item_id, detail.version)
+
+        self._load_detail_dialog_item(
+            dialog,
+            session,
+            target_item_id,
+            commit,
+        )
 
     def _navigate_detail_dialog_history(
         self,
@@ -4326,29 +4341,51 @@ class TrackerWorkspacePage(QWidget):
         *,
         back: bool,
     ) -> None:
-        target = session.back() if back else session.forward()
-        if target is not None:
-            self._load_detail_dialog_item(dialog, session)
+        target = session.peek_back() if back else session.peek_forward()
+        if target is None:
+            return
+
+        def commit(_detail: TrackerItemDetail) -> None:
+            if back:
+                session.back()
+            else:
+                session.forward()
+
+        self._load_detail_dialog_item(
+            dialog,
+            session,
+            target.item_id,
+            commit,
+        )
 
     def _load_detail_dialog_item(
         self,
         dialog: TrackerItemDetailDialog,
         session: TrackerItemDetailSession,
+        item_id: int,
+        commit: Callable[[TrackerItemDetail], None],
     ) -> None:
-        generation = session.generation
-        item_id = session.current.item_id
+        source_generation = session.generation
+        source_item_id = session.current.item_id
         settings = self.settings_provider()
         dialog.set_navigation_state(
-            can_go_back=session.can_go_back,
-            can_go_forward=session.can_go_forward,
+            can_go_back=False,
+            can_go_forward=False,
         )
 
-        def is_current() -> bool:
-            return dialog.isVisible() and session.generation == generation and session.current.item_id == item_id
+        def is_pending() -> bool:
+            return (
+                dialog.isVisible()
+                and session.generation == source_generation
+                and session.current.item_id == source_item_id
+                and dialog.detail.item_id == source_item_id
+            )
 
         def loaded(detail: TrackerItemDetail) -> None:
-            if not is_current():
+            if not is_pending():
                 return
+            commit(detail)
+            generation = session.generation
             description_html = (
                 codebeamer_wiki_to_html(detail.description)
                 if is_explicit_wiki_type(detail.description_format)
@@ -4361,11 +4398,20 @@ class TrackerWorkspacePage(QWidget):
             )
             self._hydrate_detail_dialog(dialog, session, detail, generation)
 
+        def failed(exc: Exception) -> None:
+            if not is_pending():
+                return
+            dialog.set_navigation_state(
+                can_go_back=session.can_go_back,
+                can_go_forward=session.can_go_forward,
+            )
+            self._show_error(exc, prefix="관련 아이템 상세 조회 실패")
+
         self._submit(
             "detail_dialog_item",
             lambda: self.service.load_detail(settings, item_id),
             loaded,
-            lambda exc: dialog.set_context_error("relations", f"관련 아이템을 열지 못했습니다: {exc}") if is_current() else None,
+            failed,
         )
 
     def _hydrate_detail_dialog(
@@ -4420,6 +4466,7 @@ class TrackerWorkspacePage(QWidget):
     def _load_detail_dialog_comments(
         self,
         dialog: TrackerItemDetailDialog,
+        session: TrackerItemDetailSession,
         *,
         force: bool = False,
     ) -> None:
@@ -4428,17 +4475,30 @@ class TrackerWorkspacePage(QWidget):
         detail = dialog.detail
         item_id = detail.item_id
         version = detail.version
+        generation = session.generation
         settings = self.settings_provider()
         dialog.set_comments_loading()
 
         def current() -> bool:
-            return dialog.isVisible() and dialog.detail.item_id == item_id and dialog.detail.version == version
+            return (
+                dialog.isVisible()
+                and session.generation == generation
+                and session.current.item_id == item_id
+                and dialog.detail.item_id == item_id
+                and dialog.detail.version == version
+            )
 
         def loaded(snapshot: ItemCommentsSnapshot) -> None:
             if not current():
                 return
             dialog.set_comments(snapshot)
-            self._hydrate_detail_dialog_comments(dialog, detail, snapshot)
+            self._hydrate_detail_dialog_comments(
+                dialog,
+                session,
+                detail,
+                snapshot,
+                generation,
+            )
 
         self._submit(
             "detail_dialog_comments",
@@ -4450,8 +4510,10 @@ class TrackerWorkspacePage(QWidget):
     def _hydrate_detail_dialog_comments(
         self,
         dialog: TrackerItemDetailDialog,
+        session: TrackerItemDetailSession,
         detail: TrackerItemDetail,
         snapshot: ItemCommentsSnapshot,
+        generation: int,
     ) -> None:
         settings = self.settings_provider()
         item_id = detail.item_id
@@ -4460,7 +4522,13 @@ class TrackerWorkspacePage(QWidget):
         reserved = {"value": 0}
 
         def current() -> bool:
-            return dialog.isVisible() and dialog.detail.item_id == item_id and dialog.detail.version == version
+            return (
+                dialog.isVisible()
+                and session.generation == generation
+                and session.current.item_id == item_id
+                and dialog.detail.item_id == item_id
+                and dialog.detail.version == version
+            )
 
         def apply_resource(comment_id: str, resource: AttachmentResource) -> None:
             reserved["value"] = max(0, reserved["value"] - MAX_INLINE_IMAGE_BYTES)

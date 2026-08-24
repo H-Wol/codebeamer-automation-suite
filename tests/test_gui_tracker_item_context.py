@@ -126,6 +126,16 @@ class TrackerItemContextServiceTest(unittest.TestCase):
 
 
 class TrackerItemDetailSessionTest(unittest.TestCase):
+    def test_peek_does_not_change_current_location_or_generation(self) -> None:
+        session = TrackerItemDetailSession(1)
+        session.navigate(2)
+        generation = session.generation
+
+        self.assertEqual(session.peek_back().item_id, 1)
+        self.assertIsNone(session.peek_forward())
+        self.assertEqual(session.current.item_id, 2)
+        self.assertEqual(session.generation, generation)
+
     def test_back_forward_and_branching_history(self) -> None:
         session = TrackerItemDetailSession(1)
         session.navigate(2)

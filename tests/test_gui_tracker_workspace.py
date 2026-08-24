@@ -21,7 +21,11 @@ from src.gui.tracker_baseline_compare import compare_tracker_items
 from src.gui.tracker_content_models import AttachmentResource
 from src.gui.tracker_content_models import WikiRenderResult
 from src.gui.tracker_content_models import WikiResourceReference
+from src.gui.tracker_comment_models import ItemCommentsSnapshot
 from src.gui.tracker_item_create_dialog import TrackerItemCreateRequest
+from src.gui.tracker_item_context_models import ItemRelationsSnapshot
+from src.gui.tracker_item_detail_dialog import TrackerItemDetailDialog
+from src.gui.tracker_item_detail_session import TrackerItemDetailSession
 from src.gui.tracker_item_editor import TrackerItemEditorService
 from src.gui.tracker_item_editor import TrackerItemFieldChange
 from src.gui.tracker_query_models import TrackerItemDetail
@@ -33,6 +37,23 @@ from src.gui.tracker_workspace import TrackerWorkspacePage
 
 
 SAMPLE_DIR = Path(__file__).resolve().parent.parent / "data" / "gui-offline-sample"
+
+
+def _detail(item_id: int, name: str, *, version: int = 1) -> TrackerItemDetail:
+    return TrackerItemDetail.from_raw(
+        {
+            "id": item_id,
+            "name": name,
+            "description": f"{name} description",
+            "descriptionFormat": "PlainText",
+            "version": version,
+            "tracker": {
+                "id": 24680001,
+                "name": "Offline Requirements",
+                "project": {"id": 246800, "name": "Offline Project"},
+            },
+        }
+    )
 
 
 class _SignalStub:
@@ -1283,6 +1304,184 @@ class TrackerWorkspacePageTest(unittest.TestCase):
         self.assertEqual(detail_kwargs["attachments"], self.page._attachments)
         self.assertEqual(len(detail_kwargs["image_resources"]), 1)
         detail_dialog.return_value.exec.assert_called_once()
+
+    def test_related_detail_failure_keeps_dialog_session_and_context_usable(self) -> None:
+        detail = _detail(1205, "Current", version=3)
+        dialog = TrackerItemDetailDialog(detail, description_html="<p>Current</p>")
+        dialog.show()
+        session = TrackerItemDetailSession(1204, 2)
+        session.navigate(detail.item_id, detail.version)
+        dialog.set_navigation_state(
+            can_go_back=session.can_go_back,
+            can_go_forward=session.can_go_forward,
+        )
+        tasks: list[_DeferredTask] = []
+        alerts = []
+        self.page.synchronous = False
+        self.page.task_factory = lambda operation: tasks.append(
+            _DeferredTask(operation)
+        ) or tasks[-1]
+        self.page.error_notifier = lambda title, message: alerts.append((title, message))
+
+        self.page._navigate_detail_dialog(dialog, session, 1206)
+
+        self.assertEqual(session.current.item_id, 1205)
+        self.assertEqual(dialog.detail.item_id, 1205)
+        self.assertFalse(dialog.back_button.isEnabled())
+        tasks[0].emit_failure(ValueError("not found"))
+
+        self.assertEqual(session.current.item_id, 1205)
+        self.assertEqual(dialog.detail.item_id, 1205)
+        self.assertTrue(dialog.back_button.isEnabled())
+        self.assertFalse(dialog.forward_button.isEnabled())
+        self.assertEqual(
+            alerts,
+            [
+                (
+                    "관련 아이템 상세 조회 실패",
+                    "관련 아이템 상세 조회 실패: not found",
+                )
+            ],
+        )
+        self.assertIn("탭을 열면", dialog.relations_status.text())
+
+        self.page.synchronous = True
+        self.page.context_service.load_relations = lambda *_args, **_kwargs: (
+            ItemRelationsSnapshot.from_raw(
+                {
+                    "downstreamReferences": [
+                        {"itemRevision": {"id": 1207, "name": "Related"}}
+                    ]
+                }
+            )
+        )
+        self.page._load_detail_dialog_context(dialog, session, "relations")
+        self.assertEqual(dialog.relations_table.rowCount(), 1)
+        dialog.close()
+
+    def test_history_navigation_failure_does_not_commit_peeked_target(self) -> None:
+        detail = _detail(1205, "Current", version=3)
+        dialog = TrackerItemDetailDialog(detail, description_html="<p>Current</p>")
+        dialog.show()
+        session = TrackerItemDetailSession(1204, 2)
+        session.navigate(detail.item_id, detail.version)
+        dialog.set_navigation_state(
+            can_go_back=session.can_go_back,
+            can_go_forward=session.can_go_forward,
+        )
+        tasks: list[_DeferredTask] = []
+        self.page.synchronous = False
+        self.page.task_factory = lambda operation: tasks.append(
+            _DeferredTask(operation)
+        ) or tasks[-1]
+
+        self.page._navigate_detail_dialog_history(dialog, session, back=True)
+        tasks[0].emit_failure(ValueError("not found"))
+
+        self.assertEqual(session.current.item_id, 1205)
+        self.assertEqual(dialog.detail.item_id, 1205)
+        self.assertTrue(session.can_go_back)
+        self.assertFalse(session.can_go_forward)
+        dialog.close()
+
+    def test_related_detail_success_commits_session_after_loading(self) -> None:
+        current = _detail(1205, "Current", version=3)
+        target = _detail(1206, "Target", version=4)
+        dialog = TrackerItemDetailDialog(current, description_html="<p>Current</p>")
+        dialog.show()
+        session = TrackerItemDetailSession(current.item_id, current.version)
+        self.page.service.load_detail = lambda *_args, **_kwargs: target
+
+        with patch.object(self.page, "_hydrate_detail_dialog") as hydrate:
+            self.page._navigate_detail_dialog(dialog, session, target.item_id)
+
+        self.assertEqual(session.current.item_id, target.item_id)
+        self.assertEqual(dialog.detail.item_id, target.item_id)
+        self.assertTrue(session.can_go_back)
+        self.assertTrue(dialog.back_button.isEnabled())
+        hydrate.assert_called_once()
+        dialog.close()
+
+    def test_comment_response_from_previous_generation_is_discarded_after_aba_navigation(self) -> None:
+        current = _detail(1205, "Current", version=3)
+        other = _detail(1206, "Other", version=1)
+        dialog = TrackerItemDetailDialog(current, description_html="<p>Current</p>")
+        dialog.show()
+        session = TrackerItemDetailSession(current.item_id, current.version)
+        snapshot = ItemCommentsSnapshot.from_raw([{"id": 1, "comment": "old"}])
+        tasks: list[_DeferredTask] = []
+        self.page.synchronous = False
+        self.page.task_factory = lambda operation: tasks.append(
+            _DeferredTask(operation)
+        ) or tasks[-1]
+        self.page.comment_service.load_comments = lambda *_args, **_kwargs: snapshot
+
+        self.page._load_detail_dialog_comments(dialog, session)
+        session.navigate(other.item_id, other.version)
+        dialog.replace_detail(other, description_html="<p>Other</p>")
+        session.back()
+        dialog.replace_detail(current, description_html="<p>Current</p>")
+        tasks[0].finish()
+
+        self.assertEqual(dialog.comment_views, {})
+        self.assertEqual(dialog._comments_state, "idle")
+
+        self.page._load_detail_dialog_comments(dialog, session)
+        tasks[1].finish()
+        self.assertEqual(set(dialog.comment_views), {"1"})
+        dialog.close()
+
+    def test_comment_image_from_previous_generation_is_discarded(self) -> None:
+        current = _detail(1205, "Current", version=3)
+        other = _detail(1206, "Other", version=1)
+        dialog = TrackerItemDetailDialog(current, description_html="<p>Current</p>")
+        dialog.show()
+        session = TrackerItemDetailSession(current.item_id, current.version)
+        snapshot = ItemCommentsSnapshot.from_raw(
+            [
+                {
+                    "id": 1,
+                    "comment": "image",
+                    "attachments": [
+                        {
+                            "id": 28,
+                            "name": "evidence.png",
+                            "mimeType": "image/png",
+                        }
+                    ],
+                }
+            ]
+        )
+        tasks: list[_DeferredTask] = []
+        self.page.synchronous = False
+        self.page.task_factory = lambda operation: tasks.append(
+            _DeferredTask(operation)
+        ) or tasks[-1]
+        self.page.comment_service.load_comments = lambda *_args, **_kwargs: snapshot
+        self.page.content_service.download_attachment = (
+            lambda *_args, **_kwargs: AttachmentResource(
+                "attachment-28",
+                "image/png",
+                base64.b64decode(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+                ),
+            )
+        )
+
+        self.page._load_detail_dialog_comments(dialog, session)
+        tasks[0].finish()
+        self.assertEqual(len(tasks), 2)
+
+        session.navigate(other.item_id, other.version)
+        dialog.replace_detail(other, description_html="<p>Other</p>")
+        session.back()
+        dialog.replace_detail(current, description_html="<p>Current</p>")
+        with patch.object(dialog, "add_comment_resource", wraps=dialog.add_comment_resource) as add_resource:
+            tasks[1].finish()
+
+        add_resource.assert_not_called()
+        self.assertEqual(dialog.comment_views, {})
+        dialog.close()
 
     def test_baseline_detail_does_not_mix_current_attachment_metadata(self) -> None:
         detail = TrackerItemDetail.from_raw(
